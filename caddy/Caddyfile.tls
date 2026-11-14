@@ -1,0 +1,20 @@
+:{$CONTENT_PORT} {
+	root * {$CONTENT_ROOT}
+	encode gzip
+	try_files {path} /index.html
+	file_server
+	log {
+		output stdout
+	}
+}
+
+:{$CONTENT_TLS_PORT} {
+	tls {$TLS_CERT_PATH} {$TLS_KEY_PATH}
+	root * {$CONTENT_ROOT}
+	encode gzip
+	try_files {path} /index.html
+	file_server
+	log {
+		output stdout
+	}
+}

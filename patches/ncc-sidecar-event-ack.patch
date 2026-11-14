@@ -1,0 +1,72 @@
+--- a/src/publisher.js
++++ b/src/publisher.js
+@@ -20,44 +20,46 @@
+ function publishToRelay(relayUrl, events, secretKey) {
+   return new Promise((resolve, reject) => {
+     const ws = new WebSocket(relayUrl);
+-    const timeout = setTimeout(() => {
++    const signedEvents = events.map(event => event.sig ? event : finalizeEvent(event, secretKey));
++    const pendingIds = new Set(signedEvents.map(event => event.id));
++    let settled = false;
++    let timeout;
++
++    const finish = (callback, value) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timeout);
+       ws.close();
+-      reject(new Error('Publish timeout'));
++      callback(value);
++    };
++
++    timeout = setTimeout(() => {
++      finish(reject, new Error(`Publish timed out waiting for ${pendingIds.size} relay acknowledgement(s)`));
+     }, 10000);
+ 
+     ws.on('open', () => {
+-      for (const event of events) {
+-        // Finalize if needed (signed)
+-        const signed = event.sig ? event : finalizeEvent(event, secretKey);
+-        ws.send(JSON.stringify(['EVENT', signed]));
+-      }
++      for (const event of signedEvents) ws.send(JSON.stringify(['EVENT', event]));
+     });
+ 
+     ws.on('message', (data) => {
+       try {
+         const msg = JSON.parse(data.toString());
+-        if (msg[0] === 'OK') {
+-          // One OK is enough to consider it a success for this relay in many cases
+-          clearTimeout(timeout);
+-          clearTimeout(finishTimeout);
+-          ws.close();
+-          resolve();
++        if (msg[0] !== 'OK' || !pendingIds.has(msg[1])) return;
++        if (msg[2] !== true) {
++          finish(reject, new Error(`Relay rejected ${msg[1]}: ${msg[3] || 'no reason supplied'}`));
++          return;
+         }
++        pendingIds.delete(msg[1]);
++        if (pendingIds.size === 0) finish(resolve);
+       } catch (_err) {
+         console.warn("[Publisher] Malformed relay message:", _err);
+       }
+     });
+ 
+-    // Fallback: wait a bit for OKs then close
+-    const finishTimeout = setTimeout(() => {
+-      clearTimeout(timeout);
+-      ws.close();
+-      resolve();
+-    }, 1000);
++    ws.on('close', () => {
++      if (!settled) finish(reject, new Error(`Relay closed with ${pendingIds.size} event acknowledgement(s) pending`));
++    });
+ 
+-    ws.on('error', (err) => {
+-      clearTimeout(timeout);
+-      reject(err);
+-    });
++    ws.on('error', (err) => finish(reject, err));
+   });
+ }

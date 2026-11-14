@@ -1,0 +1,10 @@
+{
+  "name": "NCC Server Test",
+  "short_name": "NCC Test",
+  "description": "Check host reachability and verify a public NCC locator.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090e17",
+  "theme_color": "#090e17",
+  "icons": []
+}
