@@ -68,9 +68,10 @@ The installer pins sidecar source commit
 `186c3ad50966a2319c354ace12e0a5a2267b75d9` and applies a small compatibility
 patch so it waits for matching positive relay acknowledgements for every event
 in a publish batch. It fails closed if the pinned publisher source has changed.
-M0 remains open pending external endpoint reachability. NCC Browser has
-resolved both the host-published fixture and an actual locator emitted by the
-VM sidecar; see
+M0 toolchain and external reachability checks passed. NCC Browser has resolved
+both the host-published fixture and an actual locator emitted by the VM sidecar;
+independent external checks also returned HTTP 200 from both forwarded ports.
+The current public locator resolves to `https://1.43.63.94:8443/`; see
 [`docs/schema-verification.md`](docs/schema-verification.md).
 
 M1 port-change republishing passed when Caddy and the sidecar profile were
@@ -82,10 +83,10 @@ republishing has not passed.
 M3 adds an optional pinned HTTPS listener that shares the sidecar-generated
 self-signed certificate with Caddy. Local TLS, matching-pin acceptance,
 mismatched-pin rejection, certificate rotation, service recovery, and the VM
-smoke check passed. A VM interface-address-change probe republished the old
-configured endpoint, so automatic IP-change republishing is not verified. The
-72-hour soak remains. Sidecar signing keys remain in its SQLite database with
-restrictive file permissions because this pinned release has no systemd
-credential input. See
+smoke check passed. HTTPS is externally reachable through the router forward.
+A VM interface-address-change probe republished the old configured endpoint,
+so automatic IP-change republishing is not verified. The 72-hour soak remains.
+Sidecar signing keys remain in its SQLite database with restrictive file
+permissions because this pinned release has no systemd credential input. See
 [`docs/schema-verification.md`](docs/schema-verification.md) for the test result.
 

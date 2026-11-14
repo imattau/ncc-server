@@ -45,7 +45,8 @@ those checks for the public record.
 
 ## Debian 12 and relay checks
 
-Status: **PARTIAL — real Debian and relay checks passed; M0 remains open.**
+Status: **PASS — the Debian toolchain, relay contract, browser resolution, and
+external endpoint reachability have been verified.**
 
 - Fresh Debian 12 VM install completed using the sidecar installer and this
   project's Caddy and sidecar drop-ins. Both units were active and the local
@@ -94,6 +95,16 @@ Status: **PARTIAL — real Debian and relay checks passed; M0 remains open.**
   HTTPS endpoint. The page's relay lookup verified the same event. Its service
   was then set inactive so the VM does not continuously republish a private
   libvirt address; the already-published record expires after one hour.
+- The VM was moved from libvirt NAT onto the host's wired LAN bridge and now
+  receives `192.168.86.249` by DHCP. After router forwarding was configured,
+  independent Check-Host nodes returned HTTP 200 for both
+  `http://1.43.63.94:8080/` and `https://1.43.63.94:8443/` from three locations
+  each ([HTTP report](https://check-host.net/check-report/57de4e99ke4e),
+  [HTTPS report](https://check-host.net/check-report/57de5805k6c5)).
+- The VM sidecar web record is active again and automatically published fresh
+  event `9bb7f6f387f42383ee9829443c02f373443aa457d4f101d6d6a9c63ad2b04d23`,
+  verified on Primal, with endpoint `https://1.43.63.94:8443/`. The service
+  refreshes every 30 minutes with a one-hour locator TTL.
 
 ## Remaining acceptance checks
 
@@ -102,12 +113,17 @@ Status: **PARTIAL — real Debian and relay checks passed; M0 remains open.**
   CGNAT-range address (`100.64.12.4`, likely CGNAT, exit 2). The live no-argument
   check reported public egress `1.43.63.94` and host route source
   `192.168.86.67`, confirming NAT on this host. The router's actual WAN address
-  was unavailable, so this does not establish whether inbound forwarding works.
-- The VM was behind libvirt NAT with no inbound router forwarding. External
-  reachability of `http://1.43.63.94:8080` was therefore not tested; configure
-  real router forwarding and firewall rules before relying on this locator.
+  was not read directly, but independent external checks to `1.43.63.94`
+  confirmed the configured inbound forwards work.
+- External reachability is now verified on HTTP 8080 and HTTPS 8443 from three
+  independent nodes. The VM LAN address is `192.168.86.249`; keep a DHCP
+  reservation for VM MAC `52:54:00:f5:e8:dc` so the router forwards remain stable.
 - `ncc-browser` resolution passed against both the host-published VM fixture
   and a locator emitted by the current VM sidecar.
+- The public locator was verified from Primal and both forwarded endpoints
+  returned HTTP 200 externally. Re-running NCC Browser against the public IP
+  remains a client-side confirmation; previous NCC Browser checks used the VM's
+  private HTTPS address with the same pinned certificate.
 - Port-change republish passed with a profile update: Caddy and the sidecar web
   profile were changed from port 8443 to 8444. Without a manual republish call,
   the sidecar published a new locator on its manager cycle. `scripts/verify-locator.sh`
@@ -147,8 +163,8 @@ Status: **PARTIAL — real Debian and relay checks passed; M0 remains open.**
   `make enable-tls SERVICE_RECORD_ID=2` reloaded Caddy with the new files, the
   sidecar republished the changed `k`, and a fresh NCC Browser session rendered
   the HTTPS service using the rotated pin.
-- External TLS reachability still depends on operator firewall and router
-  forwarding for port 8443. The 72-hour soak remains unrun, and the simulated
+- External HTTPS reachability on port 8443 passed after router forwarding. The
+  72-hour soak remains unrun, and the simulated
   IP-change criterion has not passed. The DB-backed sidecar key storage also
   lacks the planned `systemd-creds` integration, so M3's long-duration and
   at-rest key criteria are not fully closed.
@@ -161,11 +177,11 @@ Status: **PARTIAL — real Debian and relay checks passed; M0 remains open.**
   verify the resulting relay event before claiming automatic IP-change support.
 
 The port-change test was cleaned up after verification: Caddy and the sidecar
-profile were restored to port 8443, a fresh 8443 locator was republished and
-verified on Primal, and the sidecar web record was returned to inactive. Caddy
-HTTPS returned HTTP 200 after restoration.
+profile were restored to port 8443 and a fresh 8443 locator was republished and
+verified on Primal. The record was later reactivated after its public endpoint
+was confirmed reachable through the router forwards.
 
-M0 remains open until the advertised endpoint is reachable from outside the
-host's NAT. The sidecar publisher acknowledgement patch is an integration fix
-to the existing sidecar, not a separate NCC publisher.
+M0's external reachability criterion is now met. The sidecar publisher
+acknowledgement patch is an integration fix to the existing sidecar, not a
+separate NCC publisher.
 
