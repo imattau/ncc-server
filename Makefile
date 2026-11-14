@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install uninstall status logs verify check-nat smoke build-test-app deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls
+.PHONY: install uninstall status logs verify check-nat smoke build-test-app deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor
 
 install:
 	sudo ./scripts/install.sh
@@ -42,4 +42,8 @@ enable-tls:
 
 disable-tls:
 	sudo ./scripts/disable-tls.sh
+
+enable-tor:
+	@test -n "$(SERVICE_RECORD_ID)" || (echo 'Usage: sudo make enable-tor SERVICE_RECORD_ID=<numeric-sidecar-service-id> [TOR_TARGET_PORT=8080]' >&2; exit 2)
+	sudo ./scripts/enable-tor.sh "$(SERVICE_RECORD_ID)" "$(or $(TOR_TARGET_PORT),8080)"
 

@@ -1,0 +1,8 @@
+--- a/src/tor-control.js
++++ b/src/tor-control.js
+@@ -84,1 +84,4 @@
+-    console.log('[TorControl] Sending:', command);
++    const logCommand = command
++      .replace(/^AUTHENTICATE .*/, "AUTHENTICATE [REDACTED]")
++      .replace(/^(ADD_ONION )[^ ]+/, "$1[REDACTED_KEY]");
++    console.log('[TorControl] Sending:', logCommand);

@@ -93,6 +93,15 @@ if ! grep -q 'Publish timed out waiting for .*relay acknowledgement' "$PUBLISHER
   patch -p1 -d /opt/ncc-sidecar < "$PROJECT_DIR/patches/ncc-sidecar-event-ack.patch"
 fi
 
+TOR_CONTROL=/opt/ncc-sidecar/src/tor-control.js
+[[ -f "$TOR_CONTROL" ]] || die "sidecar Tor control module not found at $TOR_CONTROL"
+if ! grep -q 'AUTHENTICATE \[REDACTED\]' "$TOR_CONTROL" \
+  || ! grep -q 'REDACTED_KEY' "$TOR_CONTROL"; then
+  patch --dry-run -p1 -d /opt/ncc-sidecar < "$PROJECT_DIR/patches/ncc-sidecar-tor-auth-log.patch" \
+    || die 'pinned sidecar Tor control module differs from the reviewed source; refusing to patch'
+  patch -p1 -d /opt/ncc-sidecar < "$PROJECT_DIR/patches/ncc-sidecar-tor-auth-log.patch"
+fi
+
 install -d -o root -g root -m 0755 /etc/systemd/system/ncc-sidecar.service.d
 install -o root -g root -m 0644 "$PROJECT_DIR/systemd/ncc-sidecar.conf" \
   /etc/systemd/system/ncc-sidecar.service.d/ncc-server.conf

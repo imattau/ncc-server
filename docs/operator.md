@@ -137,6 +137,43 @@ After rotating the sidecar certificate, run `make enable-tls` again for the
 same record ID to reload Caddy, then force a locator publish and verify the new
 `k` before relying on the endpoint.
 
+## Enable an onion endpoint
+
+Tor is optional. It does not need inbound router forwarding: the VM makes
+outbound Tor connections, and clients reach the service through the Tor
+network. Keep TCP 9050 (SOCKS) and 9051 (control) bound to loopback; do not
+forward either port from the router. Continue forwarding 8080 and 8443 for the
+public clearnet endpoints.
+
+After the `web` service and its HTTP listener on 8080 are working, enable Tor
+for its numeric sidecar record ID:
+
+```sh
+sudo make enable-tor SERVICE_RECORD_ID=2 TOR_TARGET_PORT=8080
+```
+
+The command installs Debian's Tor package, configures a password-authenticated
+control port on `127.0.0.1:9051`, writes the generated control password only to
+the sidecar's local database, enables the Tor protocol on the selected service,
+maps onion port 80 to the selected local HTTP port, and asks the sidecar to
+republish. It leaves the public HTTPS endpoint on 8443 intact. The project
+installer applies a small pinned-source patch so the sidecar does not write
+the Tor control password or onion private key into its journal.
+
+Check `systemctl status tor@default ncc-sidecar`, then verify the service
+record's Tor status and onion address in the sidecar. The published Kind 30058
+locator should retain the HTTPS endpoint and add an `http://<address>.onion/`
+endpoint. A successful Tor bootstrap and relay publish confirm setup, but a
+real client check is the final test:
+
+```sh
+curl --socks5-hostname 127.0.0.1:9050 -I http://<address>.onion/
+```
+
+This request can take a few minutes while Tor bootstraps and publishes the
+onion descriptor. Confirm the response is HTTP 200 and the address resolves
+from a separate Tor client where possible. Do not test by exposing port 9051.
+
 ## Operate
 
 ```sh

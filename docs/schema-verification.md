@@ -185,3 +185,27 @@ M0's external reachability criterion is now met. The sidecar publisher
 acknowledgement patch is an integration fix to the existing sidecar, not a
 separate NCC publisher.
 
+## Optional Tor endpoint
+
+Status: **PASS — Tor bootstrap, control authentication, onion publication, and
+an independent client request were verified in the Debian 12 VM.**
+
+- Installed Debian's Tor package and configured password-authenticated control
+  access on `127.0.0.1:9051`. The SOCKS listener remains on loopback at 9050;
+  neither port needs router forwarding.
+- Ran the project's `scripts/enable-tor.sh` against the VM's active web record;
+  it configured the service and completed a forced republish.
+- Enabled Tor for web service record 2 and mapped onion port 80 to Caddy's local
+  HTTP listener on port 8080. The existing public HTTPS endpoint on 8443 remains
+  published.
+- Tor completed bootstrap. A separate temporary Tor client in the VM reported
+  `IsTor: true`, then fetched the onion page and received HTTP 200.
+- A fresh, signed Kind 30058 `web-locator` event was verified on Primal and
+  Ditto (event ID
+  `c138c3c2ac6bb3457c911d7b5abbcbcda5eedc00cdd44b2a58447fe95851a10c`). It
+  contains both `https://1.43.63.94:8443/` and
+  `http://4isjqofrz3jmhd3fjee7aegiyxvx7glrmqhlydwxzqdefwv3xerya5ad.onion:80`.
+- The pinned sidecar logged Tor control passwords and onion private keys in
+  command traces. The installer now applies a redaction patch for both values;
+  the VM's old onion key was rotated after applying the fix.
+

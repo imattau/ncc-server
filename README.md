@@ -26,8 +26,8 @@ on localhost. Initial service provisioning is completed in that UI.
    installs the sidecar at its pinned source revision, and enables both services.
 3. Complete sidecar setup at `http://127.0.0.1:3000` using an SSH tunnel if the
    host is remote. Add one public `custom` service with ID `web`, port `8080`,
-   IPv4 enabled, and a public locator. Configure the relay list and disable
-   Tor unless it is intentionally being used.
+   IPv4 enabled, and a public locator. Configure the relay list and leave Tor
+   disabled unless it is intentionally being used.
 4. Put site files in `/srv/ncc-server/public`. The MKStack test page is installed
    on a fresh host. Forward TCP 8080 through the router and firewall. To refresh
    the installed test app after editing it, run `make build-test-app` followed
@@ -89,4 +89,11 @@ so automatic IP-change republishing is not verified. The 72-hour soak remains.
 Sidecar signing keys remain in its SQLite database with restrictive file
 permissions because this pinned release has no systemd credential input. See
 [`docs/schema-verification.md`](docs/schema-verification.md) for the test result.
+
+Tor can be enabled separately with
+`sudo make enable-tor SERVICE_RECORD_ID=<numeric-id> TOR_TARGET_PORT=8080`.
+Onion service traffic needs no inbound router port forward. The Debian 12 VM
+test reached the onion page through an independent Tor client and verified its
+signed locator on Primal and Ditto. See the
+[operator guide](docs/operator.md#enable-an-onion-endpoint) for setup details.
 
