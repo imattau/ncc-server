@@ -106,6 +106,14 @@ content (src/adapters/article.js + media.js + content-crawl.js)
                     so ui/'s NIP-07-signed-in ranking can match them against
                     a user's own interests (see ui/README.md
                     "Personalization")
+  resolveMedia also captures the NIP-68/71 `content-warning` tag's value
+                    (or a generic "sensitive content" label if the tag has
+                    no reason text) as `contentWarning`, stored verbatim and
+                    exposed on `/search` results. This backend makes no
+                    safety judgment of its own -- it only exposes what the
+                    publisher tagged; ui/'s safe-search toggle is what
+                    actually filters/labels on it (see ui/README.md
+                    "Safe search")
 
 NIP-50 (src/nip11.js + adapters/nip50.js)   -- live search, not a crawl adapter
   Nip11Prober    -- fetches each relay's NIP-11 document (wss:// -> https://,

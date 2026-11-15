@@ -44,6 +44,11 @@ export interface SearchResult {
   // for client-side ranking against a logged-in user's interests (see
   // lib/ranking.ts) -- this backend computes no ranking itself.
   hashtags?: string[] | null;
+  // image/video only -- the NIP-68/71 `content-warning` tag's value (or a
+  // generic label if present with no reason text), null if absent. Used by
+  // useSafeSearch to filter/label; this backend makes no safety judgment
+  // itself, it only exposes what the publisher tagged.
+  contentWarning?: string | null;
   // 'index' = resolved/verified by the backend crawler (or, for
   // article/image/video, simply discovered -- there's nothing to verify);
   // 'live' = a just-found NIP-50 relay hit, not yet even discovered by the

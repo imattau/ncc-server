@@ -79,6 +79,19 @@ export function MediaGridCard({
         </span>
       )}
 
+      {/* Only reachable with safe search off, which is the only way this
+          card renders at all here -- see SearchPage.tsx's `results` filter.
+          Labels what the publisher tagged; this app makes no judgment of
+          its own, see src/adapters/media.js. */}
+      {result.contentWarning && (
+        <span
+          title={result.contentWarning}
+          className="absolute top-1.5 right-1.5 rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white"
+        >
+          {result.contentWarning}
+        </span>
+      )}
+
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pt-6 pb-1.5">
         <p className="truncate text-xs font-medium text-white">{title}</p>
         <p className="truncate text-[10px] text-white/75">{identity}</p>

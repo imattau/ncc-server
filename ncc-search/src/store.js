@@ -70,6 +70,12 @@ export function openStore(dbPath) {
       -- ui/src/lib/ranking.ts). NCC-02/nsite have no hashtag concept, so
       -- this stays null for those kinds.
       hashtags TEXT,
+      -- image/video only: the NIP-68/71 content-warning tag's value (or a
+      -- generic label if the tag has no reason text), null if absent. The
+      -- backend makes no safety decision itself -- it just exposes this for
+      -- ui/'s safe-search toggle (see ui/src/hooks/useSafeSearch.ts) to
+      -- filter or label on.
+      content_warning TEXT,
       PRIMARY KEY (pubkey, item_id)
     );
 
@@ -89,13 +95,13 @@ export function openStore(dbPath) {
       anchored, used_fallback, attestation_count, is_revoked, ttl_seconds,
       last_resolved_at, last_reachable_at, last_status, last_error,
       title, description, body, media_url, media_type, thumbnail_url,
-      blurhash, thumbhash, hashtags
+      blurhash, thumbhash, hashtags, content_warning
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
       @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
-      @blurhash, @thumbhash, @hashtags
+      @blurhash, @thumbhash, @hashtags, @contentWarning
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -121,7 +127,8 @@ export function openStore(dbPath) {
       thumbnail_url = COALESCE(excluded.thumbnail_url, services.thumbnail_url),
       blurhash = COALESCE(excluded.blurhash, services.blurhash),
       thumbhash = COALESCE(excluded.thumbhash, services.thumbhash),
-      hashtags = COALESCE(excluded.hashtags, services.hashtags)
+      hashtags = COALESCE(excluded.hashtags, services.hashtags),
+      content_warning = COALESCE(excluded.content_warning, services.content_warning)
   `);
 
   // Partial updates (e.g. attaching a NIP-05 handle without re-fetching
@@ -166,6 +173,7 @@ export function openStore(dbPath) {
       blurhash: null,
       thumbhash: null,
       hashtags: null,
+      contentWarning: null,
       ...row,
     });
   }
@@ -284,6 +292,7 @@ export function openStore(dbPath) {
       thumbhash: resolved.thumbhash ?? null,
       hashtags:
         resolved.hashtags && resolved.hashtags.length ? JSON.stringify(resolved.hashtags) : null,
+      contentWarning: resolved.contentWarning ?? null,
     });
   }
 
@@ -322,6 +331,7 @@ export function openStore(dbPath) {
                 s.media_url AS "mediaUrl", s.media_type AS "mediaType",
                 s.thumbnail_url AS "thumbnailUrl",
                 s.blurhash, s.thumbhash, s.hashtags,
+                s.content_warning AS "contentWarning",
                 snippet(services_fts, 5, '[', ']', '…', 12) AS snippet
          FROM services_fts f
          JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id

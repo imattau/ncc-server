@@ -226,6 +226,20 @@ export function ResultRow({
             <StatusDot status={status} />
           </>
         )}
+        {/* Only reachable with safe search off -- see SearchPage.tsx's
+            `results` filter. Labels what the publisher tagged; this app
+            makes no judgment of its own, see src/adapters/media.js. */}
+        {result.contentWarning && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <span
+              title={result.contentWarning}
+              className="rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900/40 dark:text-amber-300"
+            >
+              {result.contentWarning}
+            </span>
+          </>
+        )}
       </div>
 
       {body && (

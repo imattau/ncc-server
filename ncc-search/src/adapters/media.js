@@ -95,6 +95,12 @@ export function resolveMedia(event) {
   const title = event.tags.find((t) => t[0] === 'title')?.[1] || null;
   const altTexts = imetaTags.map((m) => m.alt).filter(Boolean);
   const body = [event.content, ...altTexts].filter(Boolean).join(' ').trim().slice(0, 20_000);
+  // NIP-68/71 `["content-warning", "<reason>"]`. The reason is optional --
+  // presence of the tag at all is what matters for safe search (see ui/'s
+  // useSafeSearch), so an empty/missing reason still flags the result,
+  // just with a generic label instead of the publisher's own wording.
+  const contentWarningTag = event.tags.find((t) => t[0] === 'content-warning');
+  const contentWarning = contentWarningTag ? contentWarningTag[1] || 'sensitive content' : null;
 
   return {
     pubkey: event.pubkey,
@@ -117,6 +123,7 @@ export function resolveMedia(event) {
     endpoint: null,
     duration: primary.duration ? Number(primary.duration) : null,
     hashtags: extractHashtags(event),
+    contentWarning,
   };
 }
 
@@ -136,4 +143,5 @@ export function resolveMedia(event) {
  * @property {null} endpoint
  * @property {number|null} duration
  * @property {string[]} hashtags - from `t` tags, lowercased; [] if none
+ * @property {string|null} contentWarning - from the `content-warning` tag; null if absent
  */

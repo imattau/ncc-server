@@ -46,6 +46,7 @@ export function LoginButton({
         type="button"
         onClick={onSignOut}
         title={`Signed in as ${npub} -- click to sign out`}
+        aria-label={`Signed in as ${npub}. Click to sign out`}
         className="shrink-0 whitespace-nowrap text-xs text-muted-foreground hover:text-foreground"
       >
         {npub.slice(0, 12)}… · sign out

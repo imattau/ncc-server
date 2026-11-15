@@ -100,6 +100,49 @@ and out with a mocked `window.nostr` and confirming both places update
 together on every transition, not just after a reload happens to
 resynchronize them from `localStorage`.
 
+## Safe search
+
+[`useSafeSearch`](src/hooks/useSafeSearch.ts) is a client-side display
+preference, on by default (same convention every real search engine uses —
+absence of a stored choice means "on", not "off"), persisted in
+`localStorage`. It filters out any result carrying a NIP-68/71
+`content-warning` tag — see `contentWarning` on `SearchResult`
+(`src/lib/api.ts`) and the backend's `resolveMedia` (`../README.md`). This
+app makes no safety judgment of its own: it only trusts what the publisher
+tagged, same as the backend. `SearchPage.tsx` shows a "N hidden by safe
+search" note (clickable to toggle) whenever results are actually being
+hidden, so turning it on never looks like those results simply don't exist.
+With it off, flagged results show instead with a visible label (the tag's
+own text, e.g. "nsfw") on `ResultRow`/`MediaGridCard` rather than silently
+blending in.
+
+## Appearance (light/dark mode)
+
+[`useTheme`](src/hooks/useTheme.ts) toggles Tailwind's class-based dark
+variant (`@custom-variant dark (&:is(.dark *));` in `src/index.css`) by
+adding/removing a `dark` class on `<html>`. Found live that this variant was
+already fully defined in CSS but nothing in the app ever activated it or
+looked at the OS theme — the app was permanently light-mode regardless of
+system preference until this hook existed. Defaults to the OS preference
+(`prefers-color-scheme`), explicit choice persisted in `localStorage` and
+then takes precedence over any later OS-level change; uses `useLayoutEffect`
+rather than `useEffect` specifically to apply the theme class before first
+paint, avoiding a flash of the wrong theme on load for anyone whose stored
+or system preference is dark.
+
+## Accessibility
+
+Caught live, not from a checklist: `SearchBar`'s pill used `border-border`
+(`hsl(214.3 31.8% 91.4%)`), which is barely distinguishable from a white
+page background — well under WCAG 1.4.11's 3:1 minimum for UI component
+boundaries. Switched to `border-muted-foreground` (full opacity, ~4.85:1
+against white), with `focus-within:border-foreground` added as a visible
+focus state, since the `<input>` itself sets `outline-none` with nothing
+else to replace it (WCAG 2.4.7). Also added an explicit `aria-label` to
+`LoginButton`'s signed-in state (previously only a `title`, which isn't
+reliably exposed to screen readers) — `IdentityMark`'s decorative avatar
+letter already had `aria-hidden="true"`.
+
 ## Running it
 
 ```bash
@@ -126,7 +169,8 @@ Done: the search page itself (landing view, results list, loading/error/
 empty states, URL-synced query via `?q=`, filter tabs with live counts,
 snippet match highlighting, `sanitizeHref`-gated result links/media src —
 see `src/lib/sanitize.ts`), profile display names via Nostrify, and
-client-side image/video rendering + reachability probing (see above).
+client-side image/video rendering + reachability probing (see above), safe
+search (see above), and light/dark mode (see above).
 
 Three CSP gaps worth knowing if `index.html`'s policy is ever rewritten from
 scratch — each was caught live by something going silently blank with no

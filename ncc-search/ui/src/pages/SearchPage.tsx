@@ -4,12 +4,16 @@ import { SearchBar } from '@/components/SearchBar';
 import { ResultRow } from '@/components/ResultRow';
 import { MediaGridCard } from '@/components/MediaGridCard';
 import { LoginButton } from '@/components/LoginButton';
+import { SafeSearchToggle } from '@/components/SafeSearchToggle';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useQueryState } from '@/hooks/useQueryState';
 import { useSearch } from '@/hooks/useSearch';
 import { useNip07Login } from '@/hooks/useNip07Login';
 import { useFollows } from '@/hooks/useFollows';
 import { useInterests } from '@/hooks/useInterests';
+import { useSafeSearch } from '@/hooks/useSafeSearch';
+import { useTheme } from '@/hooks/useTheme';
 import type { SearchResult } from '@/lib/api';
 import { rankResults, isFollowed, type PersonalizationContext } from '@/lib/ranking';
 import { cn } from '@/lib/utils';
@@ -47,6 +51,8 @@ export function SearchPage() {
   const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined);
   const hasQuery = query.trim().length > 0;
   const [filter, setFilter] = useState<KindFilter>('all');
+  const safeSearch = useSafeSearch();
+  const theme = useTheme();
 
   // A filter chosen for one query shouldn't silently carry over and hide
   // everything for the next one.
@@ -64,9 +70,22 @@ export function SearchPage() {
   // literal is rebuilt every render, which would otherwise re-rank on every
   // keystroke/unrelated state change instead of only when the data that
   // actually matters (results, follows, interests) changes.
-  const results = useMemo(
+  const ranked = useMemo(
     () => rankResults(result.data?.results ?? [], personalization),
     [result.data, personalization?.follows, personalization?.interests],
+  );
+
+  // Safe search hides anything the publisher tagged NIP-68/71
+  // `content-warning` on -- see lib/api.ts's `contentWarning` field and
+  // src/adapters/media.js server-side. This is a display preference, not a
+  // safety guarantee: it trusts the publisher's own tag, nothing more.
+  const hiddenCount = useMemo(
+    () => (safeSearch.enabled ? ranked.filter((r) => r.contentWarning).length : 0),
+    [ranked, safeSearch.enabled],
+  );
+  const results = useMemo(
+    () => (safeSearch.enabled ? ranked.filter((r) => !r.contentWarning) : ranked),
+    [ranked, safeSearch.enabled],
   );
   const counts = useMemo(
     () => ({
@@ -91,7 +110,9 @@ export function SearchPage() {
   if (!hasQuery) {
     return (
       <div className="relative flex min-h-dvh flex-col items-center px-4 pt-[18vh]">
-        <div className="absolute top-4 right-4 sm:top-6 sm:right-8">
+        <div className="absolute top-4 right-4 flex items-center gap-3 sm:top-6 sm:right-8">
+          <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
+          <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
           <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
         </div>
         <h1 className="mb-8">
@@ -120,7 +141,9 @@ export function SearchPage() {
           {WORDMARK}
         </button>
         <SearchBar defaultValue={query} onSubmit={handleSubmit} size="compact" className="max-w-xl" />
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-3">
+          <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
+          <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
           <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
         </div>
       </header>
@@ -161,6 +184,18 @@ export function SearchPage() {
 
                 <p className="mb-3 text-sm text-muted-foreground">
                   {filtered.length} of {results.length} result{results.length === 1 ? '' : 's'}
+                  {hiddenCount > 0 && (
+                    <>
+                      {' · '}
+                      <button
+                        type="button"
+                        onClick={safeSearch.toggle}
+                        className="underline-offset-2 hover:underline"
+                      >
+                        {hiddenCount} hidden by safe search
+                      </button>
+                    </>
+                  )}
                 </p>
 
                 {filtered.length === 0 ? (

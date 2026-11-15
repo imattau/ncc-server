@@ -96,6 +96,39 @@ test('resolveMedia leaves blurhash/thumbhash null when absent, rather than guess
   assert.equal(resolved.thumbhash, null);
 });
 
+test('resolveMedia captures the content-warning tag\'s reason text', () => {
+  const event = {
+    id: 'e-cw-1',
+    pubkey: 'g'.repeat(64),
+    kind: KIND_PICTURE,
+    content: '',
+    tags: [['title', 'Flagged'], ['imeta', 'url https://cdn.example.com/x.jpg'], ['content-warning', 'nsfw']],
+  };
+  assert.equal(resolveMedia(event).contentWarning, 'nsfw');
+});
+
+test('resolveMedia falls back to a generic label when content-warning has no reason', () => {
+  const event = {
+    id: 'e-cw-2',
+    pubkey: 'g'.repeat(64),
+    kind: KIND_PICTURE,
+    content: '',
+    tags: [['title', 'Flagged, no reason'], ['imeta', 'url https://cdn.example.com/y.jpg'], ['content-warning']],
+  };
+  assert.equal(resolveMedia(event).contentWarning, 'sensitive content');
+});
+
+test('resolveMedia leaves contentWarning null when the tag is absent', () => {
+  const event = {
+    id: 'e-cw-3',
+    pubkey: 'g'.repeat(64),
+    kind: KIND_PICTURE,
+    content: '',
+    tags: [['title', 'Clean'], ['imeta', 'url https://cdn.example.com/z.jpg']],
+  };
+  assert.equal(resolveMedia(event).contentWarning, null);
+});
+
 test('resolveMedia returns null when there is no usable imeta url', () => {
   const event = { id: 'e3', pubkey: 'd'.repeat(64), kind: KIND_PICTURE, content: '', tags: [['title', 'Nothing']] };
   assert.equal(resolveMedia(event), null);
