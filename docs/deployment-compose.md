@@ -166,9 +166,10 @@ cd /opt/ncc-server
 sudo make bundle-health
 ~~~
 
-The nsite checks are skipped unless you pass SITE_NPUB. Npanel and Ditto Web
-share port 8443; the health check sends their NCC routing headers. ncc-search
-uses port 8447 for its UI and API.
+The nsite checks are skipped unless you pass SITE_NPUB. The test app uses port
+8443, the relay uses port 8444, Npanel uses port 8445, Ditto Web uses port
+8446, and ncc-search uses port 8447 for its UI and API. The health check probes
+each service on its own port.
 
 If you already host an nsite, include its npub to check its HTTPS route and
 root-relative JavaScript asset:
