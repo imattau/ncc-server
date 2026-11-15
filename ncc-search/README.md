@@ -256,6 +256,25 @@ server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
   resized WebP as a plain broken-image icon). See `ui/README.md`'s "What's
   implemented vs. not" for the full detail on each.
 
+## Storage: unbounded by default, with an opt-in disk-space limit
+
+`store.js` only ever upserts rows — a revoked service gets `is_revoked = 1`
+set, but nothing ever deletes a row on its own, so the SQLite file grows for
+as long as the crawler keeps discovering new `(pubkey, item_id)` pairs,
+bounded only by actual free disk space. Set `NCC_SEARCH_DB_MAX_BYTES` (see
+`.env.example`) to opt into a ceiling: `pruneToFit()` evicts the
+least-recently-resolved rows (LRU on `last_resolved_at`, the same timestamp
+every upsert/re-crawl already keeps current — no separate access-tracking
+column needed) on the same tick interval as everything else
+(`NCC_SEARCH_TICK_MS`) until the file is back under the limit.
+
+Enabling a limit also switches the database to `auto_vacuum = INCREMENTAL`
+(with a one-time `VACUUM` to apply it to an existing file) — without that,
+deleting rows only grows SQLite's internal free-page list, and the file on
+disk never actually shrinks, which would make "disk space limit" a lie.
+That one-time `VACUUM` is paid only when a limit is actually configured, not
+on every startup for everyone else.
+
 ## Running it
 
 ```bash

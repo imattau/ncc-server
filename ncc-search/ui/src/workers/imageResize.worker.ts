@@ -26,6 +26,9 @@ export interface ResizeResult {
   id: string;
   success: boolean;
   blob?: Blob;
+  /** `blob.size` in bytes, surfaced separately so useResizedImage's cache
+   *  can track total memory use without importing the Blob itself. */
+  byteSize?: number;
 }
 
 const DEFAULT_MAX_WIDTH = 720;
@@ -53,7 +56,7 @@ self.onmessage = async (event: MessageEvent<ResizeRequest>) => {
     bitmap.close();
 
     const resizedBlob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.82 });
-    const result: ResizeResult = { id, success: true, blob: resizedBlob };
+    const result: ResizeResult = { id, success: true, blob: resizedBlob, byteSize: resizedBlob.size };
     (self as unknown as Worker).postMessage(result);
   } catch {
     const result: ResizeResult = { id, success: false };

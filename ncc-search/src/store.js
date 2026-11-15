@@ -12,6 +12,7 @@
 // One table serves every adapter so search results are unified across
 // content types; `kind` discriminates what produced a row.
 
+import { statSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { nip19 } from 'nostr-tools';
 
@@ -22,9 +23,26 @@ export const KIND_ARTICLE = 'article';
 export const KIND_IMAGE = 'image';
 export const KIND_VIDEO = 'video';
 
-export function openStore(dbPath) {
+/**
+ * @param {string} dbPath
+ * @param {{ maxBytes?: number }} [opts] - `maxBytes`: a disk-space ceiling
+ *   enforced by {@link pruneToFit}; 0/omitted means unbounded (unchanged
+ *   default behaviour).
+ */
+export function openStore(dbPath, opts = {}) {
+  const maxBytes = opts.maxBytes || 0;
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+
+  // `auto_vacuum` only takes effect after a VACUUM rewrites the file, so
+  // this one-time cost is paid only when a size limit is actually
+  // configured -- not on every startup for everyone else. Without it,
+  // pruneToFit()'s deletes would free internal SQLite pages without ever
+  // shrinking the file on disk, making a "disk space limit" a lie.
+  if (maxBytes > 0 && db.pragma('auto_vacuum', { simple: true }) !== 2) {
+    db.pragma('auto_vacuum = INCREMENTAL');
+    db.exec('VACUUM');
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS services (
@@ -355,6 +373,44 @@ export function openStore(dbPath) {
       .all(cutoff);
   }
 
+  const deleteServiceStmt = db.prepare(`DELETE FROM services WHERE pubkey = ? AND item_id = ?`);
+  const lruBatchStmt = db.prepare(
+    `SELECT pubkey, item_id AS "itemId" FROM services ORDER BY last_resolved_at ASC LIMIT ?`,
+  );
+  const deleteBatchTxn = db.transaction((rows) => {
+    for (const { pubkey, itemId } of rows) {
+      deleteFtsStmt.run(pubkey, itemId);
+      deleteServiceStmt.run(pubkey, itemId);
+    }
+  });
+  const PRUNE_BATCH = 100;
+
+  /**
+   * Evicts the least-recently-resolved rows (LRU on `last_resolved_at` --
+   * the same timestamp every upsert/re-crawl already keeps current, so
+   * there's no separate access-tracking column to maintain) until the
+   * database file is back under `maxBytes`, or there's nothing left to
+   * prune. Call periodically (see src/index.js); a no-op when `maxBytes` is
+   * 0/omitted, the default, which leaves growth unbounded exactly as
+   * before this existed.
+   * @param {number} maxBytes
+   */
+  function pruneToFit(maxBytes) {
+    if (!maxBytes) return { prunedRows: 0 };
+    let prunedRows = 0;
+    while (statSync(dbPath).size > maxBytes) {
+      const rows = lruBatchStmt.all(PRUNE_BATCH);
+      if (rows.length === 0) break; // index is already as small as its rows allow
+      deleteBatchTxn(rows);
+      prunedRows += rows.length;
+      // Without this, the deletes above just grow SQLite's internal free
+      // list -- the file on disk never actually shrinks, and this function
+      // loops forever re-measuring a size that never drops.
+      db.pragma('incremental_vacuum');
+    }
+    return { prunedRows };
+  }
+
   return {
     db,
     upsertService,
@@ -364,6 +420,7 @@ export function openStore(dbPath) {
     search,
     getService,
     listStale,
+    pruneToFit,
   };
 }
 

@@ -12,7 +12,22 @@ import { createServer } from './server.js';
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
-const store = openStore(config.dbPath);
+const store = openStore(config.dbPath, { maxBytes: config.dbMaxBytes });
+
+// Enforced on the same cadence as everything else's periodic work
+// (config.tickIntervalMs), not its own separate timer -- pruneToFit() is
+// already a single statSync() plus a no-op loop condition when the index
+// is under the limit (the common case), so there's nothing to gain from
+// checking less often, and one fewer interval to reason about.
+let pruneTimer = null;
+if (config.dbMaxBytes > 0) {
+  pruneTimer = setInterval(() => {
+    const { prunedRows } = store.pruneToFit(config.dbMaxBytes);
+    if (prunedRows > 0) {
+      console.log(`ncc-search pruned ${prunedRows} least-recently-resolved row(s) to stay under ${config.dbMaxBytes} bytes`);
+    }
+  }, config.tickIntervalMs);
+}
 // One pool, shared by every adapter, so they reuse the same relay
 // connections instead of each opening its own.
 //
@@ -48,6 +63,11 @@ app
     console.log(`ncc-search nsite adapter: ${config.enableNsite ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search article/media adapter: ${config.enableContent ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search NIP-50 live search: ${config.enableNip50 ? 'enabled' : 'disabled'}`);
+    console.log(
+      config.dbMaxBytes > 0
+        ? `ncc-search index size limit: ${config.dbMaxBytes} bytes (LRU-pruned)`
+        : 'ncc-search index size limit: none (unbounded)',
+    );
   })
   .catch((err) => {
     console.error('ncc-search failed to start:', err);
@@ -58,6 +78,7 @@ function shutdown() {
   nccCrawler.stop();
   nsiteCrawler?.stop();
   contentCrawler?.stop();
+  if (pruneTimer) clearInterval(pruneTimer);
   pool.close(config.relays);
   app.close().finally(() => process.exit(0));
 }

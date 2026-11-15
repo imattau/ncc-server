@@ -57,6 +57,36 @@ actually reads like a search engine result.
       the plain `<img src={mediaUrl}>` this project started with — the
       optimization is additive, never a requirement to view a result.
 
+## Resized-image cache: LRU, memory-bounded
+
+[`useResizedImage`](src/hooks/useResizedImage.ts) caches resized images by
+URL at module scope so switching filter tabs or re-rendering never
+re-fetches/re-resizes one this page already processed — but each cached
+entry is a live decoded image held via a `blob:` object URL for as long as
+it stays cached, so left unbounded this could grow for the whole lifetime
+of a long scrolling/searching session. Capped by total bytes (the resize
+worker reports each blob's real size, not a row count, since image sizes
+vary a lot — see `imageResize.worker.ts`'s `ResizeResult.byteSize`), default
+150MB, configurable via `VITE_NCC_SEARCH_IMAGE_CACHE_MAX_BYTES` (see
+`.env.example`) — an operator/build-time setting, same convention as
+`VITE_NCC_SEARCH_API_BASE`, since this app has no settings surface for an
+end user to turn a dial on themselves.
+
+Eviction is LRU or nothing: the least-recently-*read* entry is dropped
+first (tracked by a `Map`'s insertion order, re-touched on every cache
+hit — a plain, dependency-free LRU), but only among entries nothing is
+currently displaying. Revoking a `blobUrl` still mounted in an `<img>`
+would break that image with no retry path, since nothing re-triggers the
+resize fetch on eviction alone — only the URL changing does. So the budget
+can be temporarily exceeded while everything currently on screen genuinely
+needs to stay in memory; that's the correct tradeoff over breaking a
+visible image to satisfy a byte count.
+
+This is purely an in-memory bound, not a literal disk cache — the browser's
+own HTTP cache (`cache: 'force-cache'` on the worker's `fetch`, for the
+*original* un-resized bytes) is a separate layer with its own disk-backed
+eviction policy that this app doesn't control and has no setting for.
+
 ## Personalization (NIP-07 sign-in)
 
 Signing in identifies which pubkey's follows/interests should re-rank
@@ -170,7 +200,8 @@ empty states, URL-synced query via `?q=`, filter tabs with live counts,
 snippet match highlighting, `sanitizeHref`-gated result links/media src —
 see `src/lib/sanitize.ts`), profile display names via Nostrify, and
 client-side image/video rendering + reachability probing (see above), safe
-search (see above), and light/dark mode (see above).
+search (see above), light/dark mode (see above), and a memory-bounded LRU
+cache for resized images (see above).
 
 Three CSP gaps worth knowing if `index.html`'s policy is ever rewritten from
 scratch — each was caught live by something going silently blank with no

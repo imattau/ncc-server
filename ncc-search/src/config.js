@@ -15,6 +15,12 @@ export const config = {
     'wss://relay.damus.io',
   ]),
   dbPath: process.env.NCC_SEARCH_DB_PATH || './data/ncc-search.db',
+  // A disk-space ceiling for the index (store.js's `pruneToFit`), in bytes.
+  // 0/unset (the default) means unbounded, unchanged from before this
+  // existed -- the operator opts in by setting a byte count, e.g.
+  // `500000000` for ~500MB. Enforced on a timer in index.js by evicting the
+  // least-recently-resolved rows (LRU) first.
+  dbMaxBytes: Number(process.env.NCC_SEARCH_DB_MAX_BYTES || 0),
   httpHost: process.env.NCC_SEARCH_HTTP_HOST || '127.0.0.1',
   httpPort: Number(process.env.NCC_SEARCH_HTTP_PORT || 7780),
   torSocks: process.env.NCC_SEARCH_TOR_SOCKS || 'socks5h://127.0.0.1:9050',
