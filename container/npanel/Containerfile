@@ -1,0 +1,16 @@
+FROM debian:bookworm-slim
+ARG NPANEL_UID=994
+ARG NPANEL_GID=994
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget fonts-dejavu-core fonts-noto-color-emoji \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --gid "$NPANEL_GID" npanel \
+  && useradd --uid "$NPANEL_UID" --gid "$NPANEL_GID" --home-dir /app --shell /usr/sbin/nologin npanel \
+  && mkdir -p /data \
+  && chown npanel:npanel /data
+COPY npanel /usr/local/bin/npanel
+COPY entrypoint /usr/local/bin/npanel-entrypoint
+COPY healthcheck /usr/local/bin/healthcheck
+RUN chmod 0755 /usr/local/bin/npanel /usr/local/bin/npanel-entrypoint /usr/local/bin/healthcheck
+USER ${NPANEL_UID}:${NPANEL_GID}
+EXPOSE 3000 3001
+ENTRYPOINT ["/usr/local/bin/npanel-entrypoint"]

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+install -d -o debian-tor -g debian-tor -m 0750 /run/tor
+exec tor \
+  --defaults-torrc /usr/share/tor/tor-service-defaults-torrc \
+  -f /etc/tor/torrc \
+  --RunAsDaemon 0 \
+  --Log 'notice stdout'

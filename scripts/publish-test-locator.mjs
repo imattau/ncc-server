@@ -27,6 +27,11 @@ if (endpointKey && !/^[A-Za-z0-9_-]{43}$/.test(endpointKey)) {
   throw new Error('NCC_TEST_K must be a 43-character base64url SPKI fingerprint.');
 }
 
+const identifier = process.env.NCC_TEST_D?.trim() || 'web-locator';
+if (!/^[A-Za-z0-9._:-]{1,128}$/.test(identifier)) {
+  throw new Error('NCC_TEST_D must be a short Nostr replaceable-event identifier.');
+}
+
 const ttl = Number(process.env.NCC_TEST_TTL ?? 3600);
 if (!Number.isInteger(ttl) || ttl < 60 || ttl > 86400) {
   throw new Error('NCC_TEST_TTL must be an integer between 60 and 86400 seconds.');
@@ -39,7 +44,7 @@ const event = finalizeEvent({
   kind: 30058,
   created_at: createdAt,
   tags: [
-    ['d', 'web-locator'],
+    ['d', identifier],
     ['expiration', String(createdAt + ttl)],
   ],
   content: JSON.stringify({
@@ -91,7 +96,7 @@ for (const [index, outcome] of outcomes.entries()) {
 }
 if (successes.length === 0) throw new Error('The test locator was not acknowledged by any relay.');
 
-console.log(`Published fresh test locator for ${identity.npub}`);
+console.log(`Published fresh test locator (${identifier}) for ${identity.npub}`);
 console.log(`Endpoint: ${endpoint.toString()}`);
 if (endpointKey) console.log(`TLS SPKI pin: ${endpointKey}`);
 console.log(`Event: ${event.id}`);

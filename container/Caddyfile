@@ -1,0 +1,58 @@
+{
+	admin 127.0.0.1:2019
+	auto_https disable_redirects
+}
+
+:{$CONTENT_PORT} {
+	@npanel host {$DASHBOARD_HOST}
+	@ditto host {$DITTO_WEB_HOST}
+	handle @npanel {
+		reverse_proxy 127.0.0.1:3200 {
+			header_up Host {$DASHBOARD_HOST}
+		}
+	}
+	handle @ditto {
+		reverse_proxy 127.0.0.1:3210
+	}
+	handle {
+		root * {$CONTENT_ROOT}
+		encode gzip
+		try_files {path} /index.html
+		file_server
+	}
+	log {
+		output stdout
+	}
+}
+
+:{$CONTENT_TLS_PORT} {
+	tls {$WEB_CERT} {$WEB_KEY}
+	@ditto host {$DITTO_WEB_HOST}
+	handle @ditto {
+		reverse_proxy 127.0.0.1:3210
+	}
+	handle /nsite/* {
+		reverse_proxy 127.0.0.1:3200 {
+			header_up Host {$DASHBOARD_HOST}
+		}
+	}
+	handle {
+		root * {$CONTENT_ROOT}
+		encode gzip
+		try_files {path} /index.html
+		file_server
+	}
+	log {
+		output stdout
+	}
+}
+
+:{$RELAY_TLS_PORT} {
+	tls {$RELAY_CERT} {$RELAY_KEY}
+	reverse_proxy 127.0.0.1:13131 {
+		header_up X-Real-IP {remote_host}
+	}
+	log {
+		output stdout
+	}
+}

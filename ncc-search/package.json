@@ -1,0 +1,26 @@
+{
+  "name": "ncc-search",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Separate NCC-native search process: discovers NCC-02/NCC-05 relay records, resolves them per the anchored resolution contract, fetches the sites they point to, and serves full-text search over the result.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test test/**/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.5.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.6.2",
+    "ncc-02-js": "^0.5.0",
+    "ncc-05-js": "^1.2.0",
+    "nostr-tools": "^2.19.4",
+    "socks-proxy-agent": "^8.0.5"
+  },
+  "devDependencies": {
+    "ncc-06-js": "^0.6.0"
+  }
+}

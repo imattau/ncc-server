@@ -1,0 +1,10 @@
+FROM debian:bookworm-slim
+ARG TOR_UID=102
+ARG TOR_GID=109
+RUN apt-get update && apt-get install -y --no-install-recommends tor \
+  && groupmod --gid "$TOR_GID" debian-tor \
+  && usermod --uid "$TOR_UID" --gid "$TOR_GID" debian-tor \
+  && rm -rf /var/lib/apt/lists/*
+COPY container/tor/entrypoint /usr/local/bin/tor-entrypoint
+RUN chmod 0755 /usr/local/bin/tor-entrypoint
+ENTRYPOINT ["/usr/local/bin/tor-entrypoint"]

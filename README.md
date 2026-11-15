@@ -106,3 +106,35 @@ alongside `web-locator`. Local WSS, NIP-11, certificate pinning, and restart
 checks passed, and external WSS reachability passed after forwarding TCP 8444.
 See [`docs/ditto-relay.md`](docs/ditto-relay.md).
 
+An experimental Docker Compose bundle now runs on the Debian 12 test VM. It
+includes the NCC sidecar, Npanel, Tor, Caddy, Ditto Relay, and OpenSearch while
+reusing the VM's existing persistent data. Its rollback-protected switch passed
+health checks; HTTP app and dashboard routing, HTTPS nsite assets, relay NIP-11,
+local WSS `REQ`/`EOSE`, and the onion test page through Tor all passed. External
+WSS reachability was verified with the prior native stack but has not yet been
+rechecked against this container deployment. NCC Browser has now resolved the
+Ditto service and loaded its home screen through the pinned HTTPS endpoint.
+The shared HTTP listener proxies the unique dashboard hostname to Npanel and
+serves the static test app for IP and onion hosts; Caddy proxies `/nsite/*` on
+HTTPS to Npanel and keeps the test app on other HTTPS paths. The existing
+router forwards remain on 8080, 8443, and 8444. See
+[`docs/alternative-podman.md`](docs/alternative-podman.md) for separate Podman
+notes and Npanel's domain and persistent-data requirements.
+
+The bundle also builds and serves the `imattau/ditto` fork at its NCC test
+commit `29709b8b53d68109dfc14af7f3a44563d177e880`. Caddy routes the dedicated
+`DITTO_WEB_HOST` on HTTP and HTTPS to the isolated static web container. The
+sidecar publishes a public `ditto` service locator over the existing pinned
+HTTPS certificate. The image applies a small React Router basename compatibility
+edit so the app accepts NCC Browser's internal service path; see
+[`docs/ditto-web.md`](docs/ditto-web.md) for build, deployment, and verification
+steps. The fork's native WebSocket pinning path requires an Android or iOS
+build; serving the web app from this bundle does not exercise native-only code.
+
+A separate Npanel 0.7.2 VM test includes a forked NCC path route. Nostr Navigator
+resolved a short-lived
+`nsite-test` locator over HTTPS, accepted its self-signed certificate using the
+published SPKI pin, and loaded the nsite plus its root-relative JavaScript asset.
+The route is Caddy TLS on port 8443 proxying `/nsite/*` to Npanel on loopback
+port 3200; Npanel itself is not configured to terminate TLS.
+

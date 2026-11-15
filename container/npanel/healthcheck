@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+wget -q -O /dev/null --header "host: ${DASHBOARD_HOST}" http://127.0.0.1:3000/api/instance
+wget -q -O /dev/null "http://127.0.0.1:3001/tls-check?domain=${DASHBOARD_HOST}"

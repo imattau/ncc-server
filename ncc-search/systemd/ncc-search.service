@@ -1,0 +1,39 @@
+# Install as /etc/systemd/system/ncc-search.service.
+# Mirrors the hardening pattern used for ncc-sidecar (see
+# systemd/ncc-sidecar.conf in the repo root): this is a plain unit, not a
+# drop-in, because ncc-search has no installer-generated base unit to extend.
+
+[Unit]
+Description=NCC-native search indexer (ncc-search)
+Wants=network-online.target
+After=network-online.target tor.service
+
+[Service]
+Type=simple
+User=ncc-search
+Group=ncc-search
+WorkingDirectory=/opt/ncc-search
+EnvironmentFile=/etc/ncc-search/ncc-search.env
+ExecStart=/usr/bin/node /opt/ncc-search/src/index.js
+Restart=on-failure
+RestartSec=5
+
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ncc-search
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# Node's V8 runtime needs executable memory for JIT; do not enable
+# MemoryDenyWriteExecute for this service (same caveat as ncc-sidecar).
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

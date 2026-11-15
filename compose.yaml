@@ -1,0 +1,221 @@
+version: "3.8"
+
+services:
+  tor:
+    build:
+      context: .
+      dockerfile: container/tor/Containerfile
+      args:
+        TOR_UID: "${TOR_UID}"
+        TOR_GID: "${TOR_GID}"
+    image: ncc-bundle-tor:debian12
+    network_mode: host
+    read_only: true
+    restart: unless-stopped
+    tmpfs:
+      - /run/tor
+    volumes:
+      - "${TOR_DATA_DIR}:/var/lib/tor"
+      - "${TOR_CONFIG_FILE}:/etc/tor/torrc:ro"
+    logging: &bounded-logs
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  sidecar:
+    build:
+      context: .
+      dockerfile: container/sidecar/Containerfile
+      args:
+        SIDECAR_REPO: "${SIDECAR_REPO}"
+        SIDECAR_REV: "${SIDECAR_REV}"
+        SIDECAR_UID: "${SIDECAR_UID}"
+        SIDECAR_GID: "${SIDECAR_GID}"
+    image: ncc-bundle-sidecar:${SIDECAR_REV}
+    network_mode: host
+    user: "${SIDECAR_UID}:${SIDECAR_GID}"
+    environment:
+      NODE_ENV: production
+      NCC_SIDECAR_DB_PATH: /data/sidecar.db
+      NCC_SIDECAR_ALLOW_REMOTE: "false"
+      ADMIN_HOST: 127.0.0.1
+      ADMIN_PORT: "3000"
+    depends_on:
+      - tor
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      - "${SIDECAR_DATA_DIR}:/data"
+      - "${SIDECAR_CERT_DIR}:/app/certs"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *bounded-logs
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.0
+    environment:
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms1g -Xmx1g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:9200/_cluster/health | grep -qE '"status":"(green|yellow)"'
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    logging: *bounded-logs
+
+  relay:
+    build:
+      context: "${DITTO_SOURCE_DIR}"
+    image: ditto-relay:ncc-bundle
+    env_file:
+      - "${DITTO_ENV_FILE}"
+    environment:
+      PORT: "13131"
+      OPENSEARCH_NODE: http://opensearch:9200
+      OPENSEARCH_USERNAME: ""
+      OPENSEARCH_PASSWORD: ""
+    ports:
+      - "127.0.0.1:13131:13131"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *bounded-logs
+
+  npanel:
+    build:
+      context: ./container/npanel
+      dockerfile: Containerfile
+      args:
+        NPANEL_UID: "${NPANEL_UID}"
+        NPANEL_GID: "${NPANEL_GID}"
+    image: ncc-bundle-npanel:0.7.2
+    environment:
+      DASHBOARD_HOST: "${DASHBOARD_HOST}"
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:3200:3000"
+      - "127.0.0.1:3201:3001"
+    volumes:
+      - "${NPANEL_DATA_DIR}:/data"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *bounded-logs
+
+  ditto-web:
+    build:
+      context: ./container/ditto-web
+      dockerfile: Containerfile
+      args:
+        DITTO_REPO: "${DITTO_WEB_REPO}"
+        DITTO_REV: "${DITTO_WEB_REV}"
+    image: ncc-bundle-ditto-web:${DITTO_WEB_REV}
+    ports:
+      - "127.0.0.1:3210:8080"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *bounded-logs
+
+  caddy:
+    image: caddy:2.11.9-alpine
+    network_mode: host
+    group_add:
+      - "${CADDY_GID}"
+    environment:
+      DASHBOARD_HOST: "${DASHBOARD_HOST}"
+      DITTO_WEB_HOST: "${DITTO_WEB_HOST}"
+      CONTENT_PORT: "${CONTENT_PORT}"
+      CONTENT_TLS_PORT: "${CONTENT_TLS_PORT}"
+      RELAY_TLS_PORT: "${RELAY_TLS_PORT}"
+      CONTENT_ROOT: /srv/ncc-server/public
+      WEB_CERT: /opt/ncc-sidecar/certs/2/server.crt
+      WEB_KEY: /opt/ncc-sidecar/certs/2/server.key
+      RELAY_CERT: /opt/ncc-sidecar/certs/3/server.crt
+      RELAY_KEY: /opt/ncc-sidecar/certs/3/server.key
+    volumes:
+      - ./container/Caddyfile:/etc/caddy/Caddyfile:ro
+      - "${CONTENT_ROOT}:/srv/ncc-server/public:ro"
+      - "${SIDECAR_CERT_DIR}:/opt/ncc-sidecar/certs:ro"
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      sidecar:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+      npanel:
+        condition: service_healthy
+      ditto-web:
+        condition: service_healthy
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging: *bounded-logs
+
+volumes:
+  opensearch-data:
+    external:
+      name: "${OPENSEARCH_VOLUME}"
+  caddy-data:
+  caddy-config:

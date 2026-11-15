@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install uninstall status logs verify check-nat smoke build-test-app deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss
+.PHONY: install uninstall status logs verify check-nat smoke build-test-app deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
 
 install:
 	sudo ./scripts/install.sh
@@ -64,4 +64,32 @@ install-ditto-relay:
 test-ditto-wss:
 	@test -n "$(RELAY_URL)" || (echo 'Usage: make test-ditto-wss RELAY_URL=wss://<public-address>:8444/' >&2; exit 2)
 	NODE_TLS_REJECT_UNAUTHORIZED=0 node ./scripts/test-ditto-wss.mjs "$(RELAY_URL)"
+
+stage-npanel:
+	@test -n "$(NPANEL_BINARY)" || (echo 'Usage: make stage-npanel NPANEL_BINARY=/path/to/static-npanel-binary' >&2; exit 2)
+	./scripts/stage-npanel-binary.sh "$(NPANEL_BINARY)"
+
+bundle-config:
+	docker-compose -p ncc-bundle -f compose.yaml config
+
+bundle-build:
+	docker-compose -p ncc-bundle -f compose.yaml build
+
+bundle-configure-npanel:
+	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-npanel-host.mjs
+
+bundle-configure-ditto-web:
+	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-ditto-web.mjs
+
+bundle-up: bundle-configure-npanel bundle-config
+	docker-compose -p ncc-bundle -f compose.yaml up -d
+
+bundle-down:
+	docker-compose -p ncc-bundle -f compose.yaml down
+
+bundle-logs:
+	docker-compose -p ncc-bundle -f compose.yaml logs -f --tail=100
+
+bundle-health:
+	./scripts/check-container-stack.sh
 

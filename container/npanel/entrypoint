@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+: "${DASHBOARD_HOST:?DASHBOARD_HOST must be set}"
+case "$DASHBOARD_HOST" in
+  *[!A-Za-z0-9.-]*|'') echo 'DASHBOARD_HOST must be a hostname or IPv4 address.' >&2; exit 2 ;;
+esac
+
+cat > /tmp/npanel.toml <<EOF
+dashboard_host = "$DASHBOARD_HOST"
+data_dir = "/data"
+port = 3000
+bind_address = "0.0.0.0"
+tls_check_port = 3001
+log_level = "${LOG_LEVEL:-info}"
+EOF
+
+exec /usr/local/bin/npanel --config /tmp/npanel.toml

@@ -1,0 +1,26 @@
+ARG DITTO_REPO=https://gitlab.com/imattau/ditto.git
+ARG DITTO_REV=29709b8b53d68109dfc14af7f3a44563d177e880
+
+FROM node:24-bookworm-slim AS build
+ARG DITTO_REPO
+ARG DITTO_REV
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init \
+    && git remote add origin "${DITTO_REPO}" \
+    && git fetch --depth 1 origin "${DITTO_REV}" \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "${DITTO_REV}"
+COPY ncc-router-basename.mjs /tmp/ncc-router-basename.mjs
+RUN node /tmp/ncc-router-basename.mjs /src/src/AppRouter.tsx \
+    && rm /tmp/ncc-router-basename.mjs
+RUN npm ci --no-audit --no-fund \
+    && npm run build
+
+FROM nginx:1.29-alpine
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY --from=build /src/dist/ /srv/ditto/
+EXPOSE 8080
+USER 101:101
