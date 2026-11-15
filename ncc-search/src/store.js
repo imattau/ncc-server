@@ -263,7 +263,13 @@ export function openStore(dbPath, opts = {}) {
       lastError: fetched.error ?? null,
       title: fetched.title ?? existing?.title ?? resolved.title ?? null,
       description: fetched.description ?? existing?.description ?? resolved.description ?? null,
-      body: fetched.body ?? null,
+      // NsiteAdapter.fetchAndExtract() returns extractDocument()'s own
+      // field name, `text` (see test/nsite-adapter.test.js), not `body` --
+      // crawl.js's NCC-02/05 path renames the same field at its own call
+      // site (`fetched.body = doc.text`) before calling upsertService; this
+      // path never did, so a fetched nsite's page content was silently
+      // never indexed into FTS, searchable only by its title/description.
+      body: fetched.text ?? null,
       thumbnailUrl: fetched.image ?? null,
     });
   }

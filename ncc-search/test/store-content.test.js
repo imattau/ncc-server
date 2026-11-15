@@ -41,6 +41,38 @@ test('upsertContent indexes an article with no reachability claim', () => {
   }
 });
 
+test('upsertNsite indexes the fetched page body, not just title/description', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const resolved = {
+      pubkey: 'f'.repeat(64),
+      kind: 35128,
+      siteId: 'blog',
+      title: 'My nsite',
+      description: null,
+    };
+
+    // NsiteAdapter.fetchAndExtract() returns extractDocument()'s own field
+    // name, `text` -- see test/nsite-adapter.test.js -- not `body`. The
+    // regression this guards: that page content must still end up
+    // searchable, not just the title/description.
+    store.upsertNsite(resolved, {
+      status: 200,
+      title: 'My nsite',
+      text: 'This page is about leather wallets and bags.',
+    });
+
+    const row = store.getService(resolved.pubkey, 'blog');
+    assert.equal(row.body, 'This page is about leather wallets and bags.');
+
+    const results = store.search('wallets');
+    assert.equal(results.length, 1);
+    assert.equal(results[0].itemId, 'blog');
+  } finally {
+    cleanup();
+  }
+});
+
 test('upsertNsite stores an extracted og:image as the thumbnail, and a later fetch with none keeps it', () => {
   const { store, cleanup } = freshStore();
   try {
