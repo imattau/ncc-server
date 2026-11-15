@@ -12,10 +12,12 @@ import { useSearch } from '@/hooks/useSearch';
 import { useNip07Login } from '@/hooks/useNip07Login';
 import { useFollows } from '@/hooks/useFollows';
 import { useInterests } from '@/hooks/useInterests';
+import { useMuteList } from '@/hooks/useMuteList';
 import { useSafeSearch } from '@/hooks/useSafeSearch';
 import { useTheme } from '@/hooks/useTheme';
 import type { SearchResult } from '@/lib/api';
 import { rankResults, isFollowed, type PersonalizationContext } from '@/lib/ranking';
+import { isMuted } from '@/lib/muting';
 import { cn } from '@/lib/utils';
 
 // Requesting more than the default when a logged-in user's follows/
@@ -48,6 +50,7 @@ export function SearchPage() {
   const { pubkey, login, logout } = useNip07Login();
   const follows = useFollows(pubkey);
   const interests = useInterests(pubkey);
+  const muteList = useMuteList(pubkey);
   const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined);
   const hasQuery = query.trim().length > 0;
   const [filter, setFilter] = useState<KindFilter>('all');
@@ -82,17 +85,31 @@ export function SearchPage() {
     [allResults, personalization?.follows, personalization?.interests],
   );
 
+  // A signed-in user's own NIP-51 mute list hides a muted author/hashtag/
+  // word outright -- unlike the follow/interest boost above, there's no
+  // toggle to reveal these again here; muting is the user's own explicit
+  // call, made on their real social graph, not a per-publisher label like
+  // the content-warning safe search filters below.
+  const mutedCount = useMemo(
+    () => ranked.filter((r) => isMuted(r, muteList.data)).length,
+    [ranked, muteList.data],
+  );
+  const afterMute = useMemo(
+    () => ranked.filter((r) => !isMuted(r, muteList.data)),
+    [ranked, muteList.data],
+  );
+
   // Safe search hides anything the publisher tagged NIP-68/71
   // `content-warning` on -- see lib/api.ts's `contentWarning` field and
   // src/adapters/media.js server-side. This is a display preference, not a
   // safety guarantee: it trusts the publisher's own tag, nothing more.
   const hiddenCount = useMemo(
-    () => (safeSearch.enabled ? ranked.filter((r) => r.contentWarning).length : 0),
-    [ranked, safeSearch.enabled],
+    () => (safeSearch.enabled ? afterMute.filter((r) => r.contentWarning).length : 0),
+    [afterMute, safeSearch.enabled],
   );
   const results = useMemo(
-    () => (safeSearch.enabled ? ranked.filter((r) => !r.contentWarning) : ranked),
-    [ranked, safeSearch.enabled],
+    () => (safeSearch.enabled ? afterMute.filter((r) => !r.contentWarning) : afterMute),
+    [afterMute, safeSearch.enabled],
   );
   const counts = useMemo(
     () => ({
@@ -130,7 +147,8 @@ export function SearchPage() {
         <SearchBar defaultValue="" onSubmit={handleSubmit} size="hero" className="max-w-xl" autoFocus />
         <p className="mt-6 max-w-sm text-center text-xs text-muted-foreground">
           Searches NCC-02 service records and nsites discovered across configured Nostr relays.
-          {pubkey && ' Signed in: results are prioritized by who you follow and your interests.'}
+          {pubkey &&
+            ' Signed in: results are prioritized by who you follow and your interests, and anyone/anything on your mute list is hidden.'}
         </p>
       </div>
     );
@@ -191,6 +209,12 @@ export function SearchPage() {
 
                 <p className="mb-3 text-sm text-muted-foreground">
                   {filtered.length} of {results.length} result{results.length === 1 ? '' : 's'}
+                  {mutedCount > 0 && (
+                    <>
+                      {' · '}
+                      {mutedCount} muted
+                    </>
+                  )}
                   {hiddenCount > 0 && (
                     <>
                       {' · '}
