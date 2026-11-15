@@ -19,6 +19,7 @@ import { SERVICE_RECORD_KIND } from '../discovery.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from './nsite.js';
 import { KIND_ARTICLE_EVENT } from './article.js';
 import { MEDIA_KINDS, KIND_PICTURE } from './media.js';
+import { stripMarkdown } from './markdown.js';
 
 const SEARCHABLE_KINDS = [
   SERVICE_RECORD_KIND,
@@ -111,6 +112,16 @@ function toLiveHit(event) {
     event.tags.find((t) => t[0] === 'summary')?.[1] ??
     event.tags.find((t) => t[0] === 'description')?.[1] ??
     null;
+  // An article with neither tag falls back to its raw NIP-23 `content` --
+  // unlike a crawled article (resolveArticle() in article.js, via
+  // upsertContent), that fallback never went through stripMarkdown(), so a
+  // live-only hit could surface raw Markdown (headings, link syntax,
+  // un-stripped `nostr:` references) straight into a search result's
+  // snippet line. Same cleanup a properly indexed article already gets,
+  // not a second one -- and a no-op for every other kind, which never
+  // falls back to raw content here in the first place.
+  const fallbackDescription =
+    event.kind === KIND_ARTICLE_EVENT ? stripMarkdown(event.content) : event.content;
 
   let kind;
   let itemId;
@@ -142,7 +153,7 @@ function toLiveHit(event) {
     kind,
     itemId,
     title,
-    description: summaryOrDescription ?? event.content ?? null,
+    description: summaryOrDescription ?? fallbackDescription ?? null,
     eventId: event.id,
     source: 'live', // never conflate with a verified, crawled result -- see server.js
   };

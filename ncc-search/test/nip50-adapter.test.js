@@ -42,10 +42,17 @@ function stubContentCrawler() {
   };
 }
 
-function articleEvent({ id = 'e4', pubkey = 'd'.repeat(64), dTag = 'my-post', title = 'My Post', summary } = {}) {
+function articleEvent({
+  id = 'e4',
+  pubkey = 'd'.repeat(64),
+  dTag = 'my-post',
+  title = 'My Post',
+  summary,
+  content = 'the body',
+} = {}) {
   const tags = [['d', dTag], ['title', title]];
   if (summary) tags.push(['summary', summary]);
-  return { id, kind: KIND_ARTICLE_EVENT, pubkey, tags, content: 'the body', created_at: 0 };
+  return { id, kind: KIND_ARTICLE_EVENT, pubkey, tags, content, created_at: 0 };
 }
 
 function mediaEvent({ id = 'e5', pubkey = 'e'.repeat(64), kind = KIND_PICTURE, title = 'A photo' } = {}) {
@@ -139,6 +146,24 @@ test('search() routes a NIP-23 article to the content crawler and maps summary -
   assert.equal(hits[0].description, 'A short summary');
   assert.equal(contentCrawler.ingestedArticles.length, 1);
   assert.equal(contentCrawler.ingestedMedia.length, 0);
+});
+
+test('search() strips Markdown from a live article hit with no summary/description tag', async () => {
+  const event = articleEvent({
+    content: '# Heading\n\nSome **bold** text with a [link](nostr:naddr1qpuksar5wabc) inside.',
+  });
+  const contentCrawler = stubContentCrawler();
+  const adapter = new Nip50Adapter(fakePool([event]), fakeConfig(), { contentCrawler });
+  adapter.prober = { filterCapable: async (relays) => relays };
+
+  const hits = await adapter.search('post');
+
+  assert.equal(hits.length, 1);
+  // Same cleanup resolveArticle()/stripMarkdown.js already gives a
+  // properly crawled article's body -- a live-only hit falling back to
+  // raw NIP-23 `content` must not skip it and leak Markdown syntax (or an
+  // un-stripped `nostr:` reference buried inside a link) into the result.
+  assert.equal(hits[0].description, 'Heading Some bold text with a link inside.');
 });
 
 test('search() routes a NIP-68 picture to the content crawler, keyed by event id (not addressable)', async () => {
