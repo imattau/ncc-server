@@ -1,5 +1,8 @@
 # Operator guide
 
+> This guide covers the legacy native systemd installation. New deployments
+> should use the [Compose installation and deployment guide](deployment-compose.md).
+
 This guide targets a dedicated Debian 12 or Ubuntu Linux host. The installer
 replaces the packaged Caddy service's command and serves this site's Caddyfile;
 do not use it on a host where `caddy.service` already serves unrelated sites.
@@ -94,8 +97,8 @@ admin npub and configure:
 3. Service mode `public`. The sidecar defaults to `private`; private mode with
    no recipient does not publish a locator. Public mode explicitly opts out of
    locator encryption. The locator will expose the endpoint to relays.
-4. A publication relay set, for example `wss://relay.damus.io`,
-   `wss://nos.lol`, and `wss://relay.primal.net`.
+4. A publication relay set. The Compose defaults use the tested pair
+   `wss://relay.primal.net` and `wss://relay.ditto.pub`.
 5. NCC-05 TTL and refresh interval so the refresh interval is shorter than the
    locator TTL. The current sidecar defaults are 12 hours and 6 hours.
 

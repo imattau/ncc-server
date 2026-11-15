@@ -1,140 +1,203 @@
 # NCC-Server
 
-A Linux host stack for serving a static site and publishing its current locator on
-Nostr. Caddy serves the site; the existing NCC-06 sidecar maintains NCC-02/NCC-05
-records. This project contains no locator publisher.
+NCC-Server is a Linux host bundle for publishing Nostr Community Convention
+(NCC) service locators and serving the services they describe. The recommended
+deployment uses Docker Compose:
 
-v0.1 targets Debian 12/Ubuntu with Caddy's packaged `caddy.service` and the
-sidecar's installer-generated `ncc-sidecar.service`. The sidecar's admin UI stays
-on localhost. Initial service provisioning is completed in that UI.
+- **NCC-06 sidecar** manages service profiles and publishes signed NCC-02 and
+  NCC-05 records.
+- **Caddy** routes HTTP, pinned HTTPS, and WSS traffic.
+- **Ditto Relay** provides the bundled Nostr relay.
+- **Npanel** provides the admin dashboard and nsite hosting.
+- **Ditto Web** is the bundled web client.
+- **Tor** provides an optional onion endpoint for the web service.
 
-> **Public locator:** this setup deliberately opts out of NCC-05 locator
-> encryption so clients can resolve the site by npub without a signer. Relays
-> can read the published endpoint. Use it only for an intentionally public
-> endpoint whose metadata disclosure is acceptable.
+The older systemd installation remains available for existing hosts. Use the
+Compose deployment for new installs.
+
+## Before you start
+
+- A dedicated Debian 12 or Ubuntu server or VM with at least 4 GiB RAM.
+- A stable LAN address for the server. Reserve it in DHCP if router forwards
+  will target the VM.
+- A public IPv4 address and DNS records for the dashboard, Ditto Web, and relay.
+  Direct port forwarding will not work behind CGNAT without an external tunnel.
+- Router and host firewall access for TCP **8080**, **8443**, and **8444**.
+- A workstation with Git, SSH access to the server, Node.js 22 or newer, and
+  npm.
+
+Forward these public ports to the VM and allow them through the host firewall:
+
+| Port | Service |
+| --- | --- |
+| 8080/TCP | HTTP web content, dashboard, and Ditto Web routing |
+| 8443/TCP | Pinned HTTPS web content, nsites, and Ditto Web routing |
+| 8444/TCP | WSS Ditto Relay |
+
+Do not forward sidecar port 3000, Npanel ports 3200/3201, relay backend 13131,
+OpenSearch ports, or Tor SOCKS/control ports. Tor onion access needs no router
+forward.
 
 ## Quick start
 
-1. Ensure the host has network access to Debian package mirrors, the Caddy
-   package repository, and GitHub. The machine building the test page needs
-   Node.js 22+; the host does not need Node.js.
-2. From this checkout, run `make init-test-identity` once to create a reusable
-   host-only test keypair, then run `make build-test-app` to build the MKStack
-   test page into `public/`. Then run `sudo make install`. The installer installs Git,
-   Caddy, curl, certificates, and iproute2, then creates
-   `/etc/ncc-server/ncc-server.env` from the example if it does not exist,
-   installs the sidecar at its pinned source revision, and enables both services.
-3. Complete sidecar setup at `http://127.0.0.1:3000` using an SSH tunnel if the
-   host is remote. Add one public `custom` service with ID `web`, port `8080`,
-   IPv4 enabled, and a public locator. Configure the relay list and leave Tor
-   disabled unless it is intentionally being used.
-4. Put site files in `/srv/ncc-server/public`. The MKStack test page is installed
-   on a fresh host. Forward TCP 8080 through the router and firewall. To refresh
-   the installed test app after editing it, run `make build-test-app` followed
-   by `make deploy-test-app`.
-5. Open the host in a browser; the test page checks HTTP response and can query
-   relays to verify the service locator. Run `make verify NPUB=<npub> SERVICE=web`
-   to check the locator from the command line and open
-   `ncc://<npub>/web/` in `ncc-browser`.
+The setup has one VM terminal and one workstation terminal. Keep the VM
+checkout at a path the SSH account can read; /opt/ncc-server is used below.
 
-The exact sidecar UI labels and the resulting endpoint inventory must be checked
-against the pinned release during the M0 verification. See
-[`docs/schema-verification.md`](docs/schema-verification.md).
+### 1. Install the base bundle on the VM
+
+~~~sh
+sudo apt-get update
+sudo apt-get install -y git
+sudo git clone https://github.com/imattau/ncc-server.git /opt/ncc-server
+cd /opt/ncc-server
+sudo cp .env.example .env
+sudo chmod 600 .env
+sudo make install-compose-host
+~~~
+
+The installer prompts for four public values and saves them to .env:
+
+- **PUBLIC_ENDPOINT_HOST**: public IP or hostname for the web locator.
+- **DASHBOARD_HOST**: DNS hostname for Npanel.
+- **DITTO_WEB_HOST**: DNS hostname for Ditto Web.
+- **RELAY_PUBLIC_URL**: public relay URL, such as
+  wss://relay.example.net:8444/.
+
+Point those DNS names to your public IP before testing external clients. The
+installer configures Docker, storage, pinned images and source checkouts, and
+starts the base services. Caddy and the relay wait for identity and service
+provisioning.
+
+### 2. Create and install the operator identity
+
+On the workstation, use a separate checkout of this repository:
+
+~~~sh
+git clone https://github.com/imattau/ncc-server.git ~/ncc-server
+cd ~/ncc-server
+npm --prefix test-app ci
+NCC_SSH_TARGET=operator@192.168.1.50 \
+NCC_REMOTE_PROJECT_DIR=/opt/ncc-server \
+make first-run-identity
+~~~
+
+Replace operator@192.168.1.50 with your SSH account and VM address. The helper
+asks you to confirm before changing the VM. It generates an identity if one
+does not already exist, prints its public npub, and stores the keypair in
+.secrets/operator-identity.json on the workstation (Git-ignored, mode 0600).
+On a clean install, this first pass initializes the sidecar and sets the
+Ditto Relay key and Npanel admin. The service records are created in step 3
+and aligned on the second pass. Keep a secure offline backup of this file; it
+is the recovery source for the service keys.
+
+### 3. Create service records and start the complete stack
+
+Back on the VM:
+
+~~~sh
+cd /opt/ncc-server
+sudo make bundle-provision-services
+~~~
+
+This creates the web, relay, Npanel, and Ditto Web service records, generates
+the web and relay self-signed certificates, and configures the web onion
+service. Then return to the workstation and run the identity command again:
+
+~~~sh
+cd ~/ncc-server
+NCC_SSH_TARGET=operator@192.168.1.50 \
+NCC_REMOTE_PROJECT_DIR=/opt/ncc-server \
+make first-run-identity
+~~~
+
+This final pass republishes the locators with the shared identity and starts
+Caddy and the relay. It creates a protected backup before migrating existing
+identity data.
+
+### 4. Put a page at the web root
+
+For a first install, the included MKStack test app is the quickest way to get a
+working page for the web locator and the HTTP/HTTPS smoke check:
+
+~~~sh
+cd ~/ncc-server
+make build-test-app
+make bundle-deploy-test-app TARGET=operator@192.168.1.50
+~~~
+
+For a non-root SSH account, the deploy script uses sudo on the VM. The default
+content directory is /srv/ncc-server/public; override it with
+NCC_CONTENT_ROOT when needed.
+
+### 5. Verify setup
+
+On the VM, check container and endpoint health:
+
+~~~sh
+cd /opt/ncc-server
+sudo make bundle-health
+~~~
+
+On the workstation, verify that a fresh, signed web locator is visible on the
+configured relays:
+
+~~~sh
+cd ~/ncc-server
+make verify NPUB=npub1... SERVICE=web
+~~~
+
+Use the npub printed by the identity helper. Other service identifiers are
+relay, npanel, and ditto. Open them in NCC Browser with addresses such as
+ncc://<npub>/web/ or ncc://<npub>/relay/.
+
+To smoke-test the relay from the workstation:
+
+~~~sh
+make test-ditto-wss RELAY_URL=wss://relay.example.net:8444/
+~~~
+
+The command performs a WSS NIP-01 request/EOSE exchange. Testing with TLS
+verification disabled is intended only for this smoke test; clients should
+validate the relay's published certificate pin.
+
+## Public locator and key handling
+
+The Compose defaults publish public NCC-05 locators so clients can resolve the
+services without a signer. Relays can read the published endpoint metadata.
+Use these defaults only for endpoints intended to be public.
+
+The operator nsec is stored in the workstation's Git-ignored
+.secrets/operator-identity.json and a root-owned mode-0600 file at
+/etc/ncc-server/operator-identity.json on the VM. Never commit or paste the
+private key. Losing it means losing control of services that use that identity.
+
+HTTPS uses self-signed certificates whose SPKI fingerprints are published in
+the locator. Regular browsers will show a certificate warning; NCC-aware
+clients can verify the published fingerprint.
 
 ## Operations
 
-```sh
-make status
-make logs
-make verify NPUB=npub1... SERVICE=web
-sudo make uninstall
-```
+Run from the VM checkout:
 
-Use `systemctl status caddy ncc-sidecar` and `journalctl -u caddy -u ncc-sidecar`
-for the standard Linux operations surface. See the [operator guide](docs/operator.md)
-and [troubleshooting](docs/troubleshooting.md).
+~~~sh
+sudo make bundle-health
+sudo make bundle-logs
+sudo make bundle-down
+sudo docker-compose -p ncc-bundle -f compose.yaml up -d
+~~~
 
-The MKStack source project is in [`test-app/`](test-app/). Its built static
-output is staged in `public/` for Caddy, so the production host does not need
-Node.js. The generated service test keypair stays under the test app's
-Git-ignored `.secrets/` directory on the host. For an isolated VM test, use
-`NCC_TEST_ENDPOINT=http://<vm-address>:8080 make publish-test-locator` on the
-host; the private key is not copied into the VM. For a pinned HTTPS fixture,
-also set `NCC_TEST_K=<43-character-SPKI-fingerprint>`.
+Configuration and step-by-step recovery details are in the
+[Compose deployment guide](docs/deployment-compose.md). For problems, see
+[troubleshooting](docs/troubleshooting.md). Native systemd deployments are
+covered in the [operator guide](docs/operator.md).
 
-The Ditto Relay integration test adds a second NCC locator and an upstream
-relay/OpenSearch Compose stack, with WSS served by Caddy on TCP 8444. See the
-[Ditto Relay test guide](docs/ditto-relay.md).
+## Development and test notes
 
-## Project status
+- [Ditto Relay integration](docs/ditto-relay.md)
+- [Ditto Web integration](docs/ditto-web.md)
+- [Schema and VM verification results](docs/schema-verification.md)
+- [Alternative Podman deployment notes](docs/alternative-podman.md)
 
-The installer pins sidecar source commit
-`186c3ad50966a2319c354ace12e0a5a2267b75d9` and applies a small compatibility
-patch so it waits for matching positive relay acknowledgements for every event
-in a publish batch. It fails closed if the pinned publisher source has changed.
-M0 toolchain and external reachability checks passed. NCC Browser has resolved
-both the host-published fixture and an actual locator emitted by the VM sidecar;
-independent external checks also returned HTTP 200 from both forwarded ports.
-The current public locator resolves to `https://1.43.63.94:8443/`; see
-[`docs/schema-verification.md`](docs/schema-verification.md).
-
-M1 port-change republishing passed when Caddy and the sidecar profile were
-updated together: the sidecar published a fresh locator for port 8444 without
-a manual publish call, and Primal verification confirmed the endpoint. The
-sidecar profile must be updated to match the Caddy listener; automatic IP-change
-republishing has not passed.
-
-M3 adds an optional pinned HTTPS listener that shares the sidecar-generated
-self-signed certificate with Caddy. Local TLS, matching-pin acceptance,
-mismatched-pin rejection, certificate rotation, service recovery, and the VM
-smoke check passed. HTTPS is externally reachable through the router forward.
-A VM interface-address-change probe republished the old configured endpoint,
-so automatic IP-change republishing is not verified. The 72-hour soak remains.
-Sidecar signing keys remain in its SQLite database with restrictive file
-permissions because this pinned release has no systemd credential input. See
-[`docs/schema-verification.md`](docs/schema-verification.md) for the test result.
-
-Tor can be enabled separately with
-`sudo make enable-tor SERVICE_RECORD_ID=<numeric-id> TOR_TARGET_PORT=8080`.
-Onion service traffic needs no inbound router port forward. The Debian 12 VM
-test reached the onion page through an independent Tor client and verified its
-signed locator on Primal and Ditto. See the
-[operator guide](docs/operator.md#enable-an-onion-endpoint) for setup details.
-
-The Ditto Relay integration test now publishes an independent `relay-locator`
-alongside `web-locator`. Local WSS, NIP-11, certificate pinning, and restart
-checks passed, and external WSS reachability passed after forwarding TCP 8444.
-See [`docs/ditto-relay.md`](docs/ditto-relay.md).
-
-An experimental Docker Compose bundle now runs on the Debian 12 test VM. It
-includes the NCC sidecar, Npanel, Tor, Caddy, Ditto Relay, and OpenSearch while
-reusing the VM's existing persistent data. Its rollback-protected switch passed
-health checks; HTTP app and dashboard routing, HTTPS nsite assets, relay NIP-11,
-local WSS `REQ`/`EOSE`, and the onion test page through Tor all passed. External
-WSS reachability was verified with the prior native stack but has not yet been
-rechecked against this container deployment. NCC Browser has now resolved the
-Ditto service and loaded its home screen through the pinned HTTPS endpoint.
-The shared HTTP listener proxies the unique dashboard hostname to Npanel and
-serves the static test app for IP and onion hosts; Caddy proxies `/nsite/*` on
-HTTPS to Npanel and keeps the test app on other HTTPS paths. The existing
-router forwards remain on 8080, 8443, and 8444. See
-[`docs/alternative-podman.md`](docs/alternative-podman.md) for separate Podman
-notes and Npanel's domain and persistent-data requirements.
-
-The bundle also builds and serves the `imattau/ditto` fork at its NCC test
-commit `29709b8b53d68109dfc14af7f3a44563d177e880`. Caddy routes the dedicated
-`DITTO_WEB_HOST` on HTTP and HTTPS to the isolated static web container. The
-sidecar publishes a public `ditto` service locator over the existing pinned
-HTTPS certificate. The image applies a small React Router basename compatibility
-edit so the app accepts NCC Browser's internal service path; see
-[`docs/ditto-web.md`](docs/ditto-web.md) for build, deployment, and verification
-steps. The fork's native WebSocket pinning path requires an Android or iOS
-build; serving the web app from this bundle does not exercise native-only code.
-
-A separate Npanel 0.7.2 VM test includes a forked NCC path route. Nostr Navigator
-resolved a short-lived
-`nsite-test` locator over HTTPS, accepted its self-signed certificate using the
-published SPKI pin, and loaded the nsite plus its root-relative JavaScript asset.
-The route is Caddy TLS on port 8443 proxying `/nsite/*` to Npanel on loopback
-port 3200; Npanel itself is not configured to terminate TLS.
-
+The test app source is in [test-app/](test-app/). Caddy serves its built files
+from the configured content directory; Node.js is needed only on the
+workstation to build the app.

@@ -9,7 +9,9 @@ import urllib.error
 import urllib.request
 
 API = 'http://127.0.0.1:3000'
-ENV_PATH = pathlib.Path('/etc/ncc-server/ditto-relay.env')
+ENV_PATH = pathlib.Path(os.environ.get('DITTO_ENV_FILE', '/etc/ncc-server/ditto-relay.env'))
+IDENTITY_PATH = pathlib.Path(os.environ.get(
+    'NCC_IDENTITY_FILE', '/etc/ncc-server/operator-identity.json'))
 RELAY_SERVICE_ID = 'relay'
 
 
@@ -23,14 +25,20 @@ def request(path, method='GET', data=None):
         return json.load(response)
 
 
-def make_env(relay_url):
-    keys = request('/api/service/generate-key')
-    if not keys.get('nsec'):
-        raise RuntimeError('sidecar key generation did not return a secret key')
+def read_identity():
+    if not IDENTITY_PATH.is_file():
+        raise RuntimeError(f'operator identity file not found: {IDENTITY_PATH}; run first-run identity setup first')
+    identity = json.loads(IDENTITY_PATH.read_text())
+    if not identity.get('nsec') or not identity.get('npub'):
+        raise RuntimeError(f'operator identity file is invalid: {IDENTITY_PATH}')
+    return identity
+
+
+def make_env(relay_url, nsec):
     content = '\n'.join((
         '# Root-owned Ditto Relay runtime configuration; do not commit.',
         f'RELAY_URL={relay_url}',
-        f'NOSTR_SECRET_KEY={keys["nsec"]}',
+        f'NOSTR_SECRET_KEY={nsec}',
         'RELAY_PORT=127.0.0.1:13131',
         'IP_HEADER=X-Real-IP',
         '',
@@ -59,17 +67,17 @@ def main():
     if not relay_url.startswith('wss://') or ':8444' not in relay_url:
         raise RuntimeError('relay URL must use wss:// and port 8444')
 
+    identity = read_identity()
     services = request('/api/services')
     relay_service = next((s for s in services if s.get('service_id') == RELAY_SERVICE_ID), None)
     if relay_service is not None and relay_service.get('type') != 'relay':
         raise RuntimeError('service ID relay already exists with a non-relay type; inspect the sidecar before proceeding')
     if relay_service is None:
-        service_keys = request('/api/service/generate-key')
         relay_service = request('/api/service/add', 'POST', {
             'type': 'relay',
             'name': 'Ditto Relay',
             'service_id': RELAY_SERVICE_ID,
-            'service_nsec': service_keys['nsec'],
+            'service_nsec': identity['nsec'],
             'config': {
                 'service_mode': 'public',
                 'publication_relays': [
@@ -88,24 +96,45 @@ def main():
                 'ncc05_recipients': [],
             },
         })
-        public_npub = service_keys.get('npub')
+        public_npub = identity.get('npub')
     else:
-        public_npub = None
+        request(f'/api/service/{relay_service["id"]}', 'PUT', {
+            'service_nsec': identity['nsec'],
+        })
+        public_npub = identity.get('npub')
 
     if not ENV_PATH.exists():
-        make_env(relay_url)
+        make_env(relay_url, identity['nsec'])
     else:
         # Keep the key stable on reruns. Only update the public URL if the
         # operator deliberately re-runs provisioning after an address change.
-        env = ENV_PATH.read_text()
-        if f'RELAY_URL={relay_url}' not in env:
-            env = '\n'.join(
-                f'RELAY_URL={relay_url}' if line.startswith('RELAY_URL=') else line
-                for line in env.splitlines()
-            ) + '\n'
-            ENV_PATH.write_text(env)
-            os.chown(ENV_PATH, 0, 0)
-            os.chmod(ENV_PATH, 0o600)
+        env = ENV_PATH.read_text().splitlines()
+        replacements = {'RELAY_URL': relay_url, 'NOSTR_SECRET_KEY': identity['nsec']}
+        seen = set()
+        output = []
+        for line in env:
+            if '=' in line and line.split('=', 1)[0] in replacements:
+                key = line.split('=', 1)[0]
+                if key not in seen:
+                    output.append(f'{key}={replacements[key]}')
+                    seen.add(key)
+            else:
+                output.append(line)
+        for key, value in replacements.items():
+            if key not in seen:
+                output.append(f'{key}={value}')
+        fd, temp_path = tempfile.mkstemp(prefix='.ditto-relay.', dir=ENV_PATH.parent)
+        try:
+            with os.fdopen(fd, 'w') as env_file:
+                env_file.write('\n'.join(output) + '\n')
+                env_file.flush()
+                os.fsync(env_file.fileno())
+            os.chown(temp_path, 0, 0)
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, ENV_PATH)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     publish_result = request('/api/services/republish', 'POST', {})
     failed = [detail for detail in publish_result.get('details', [])

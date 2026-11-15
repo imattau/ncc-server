@@ -1,8 +1,8 @@
-# Podman alternative (not the v0.1 primary path)
+# Podman alternative (not the primary deployment)
 
-The supported path is native systemd. Container deployment is a later,
-operator-maintained alternative because the sidecar needs visibility into host
-interfaces and its installer is designed to create a systemd service.
+The supported path is the Docker Compose bundle documented in
+[`deployment-compose.md`](deployment-compose.md). Podman is an optional,
+operator-maintained alternative.
 
 Any Podman deployment of the sidecar must use host networking; bridge networking
 can hide the host's usable interface addresses and produce incorrect locator

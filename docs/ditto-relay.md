@@ -1,5 +1,10 @@
 # Ditto Relay integration test
 
+For a new Compose install, follow the [Compose deployment guide](deployment-compose.md).
+It provisions Ditto Relay as part of the full bundle. The separate commands
+below document the earlier standalone/native integration path and are intended
+for hosts that still manage Ditto Relay independently.
+
 This test adds Ditto Relay as a second NCC service beside the existing `web`
 service. The Debian VM runs Ditto Relay and OpenSearch from the upstream
 Compose file. Caddy terminates TLS on TCP 8444 and forwards WebSocket traffic
@@ -15,17 +20,21 @@ certificate trust.
 
 ## Provision and start
 
-Create the second NCC service record and its private relay runtime environment:
+Run shared identity setup from the
+[Compose deployment guide](deployment-compose.md#create-and-provision-the-shared-identity)
+before creating the second NCC service record and its private relay runtime
+environment:
 
 ```sh
 sudo make provision-ditto-relay RELAY_URL=wss://1.43.63.94:8444/
 ```
 
-The script creates an active service with ID `relay`, generates an independent
-relay signing key, stores it under `/etc/ncc-server/ditto-relay.env` with mode
-0600, and forces locator publication. It uses the existing public publication
-relays, including `relay.ditto.pub`. The service's locator key is managed by
-the sidecar database, separate from Ditto's signing key.
+The script creates or updates an active service with ID `relay`, reads the
+operator identity from `/etc/ncc-server/operator-identity.json`, stores the
+same signing key in `/etc/ncc-server/ditto-relay.env` with mode 0600, and forces
+locator publication. It uses the existing public publication relays, including
+`relay.ditto.pub`. The service locator signer and Ditto runtime signer use the
+operator identity.
 
 Install Docker Engine and Compose, clone Ditto Relay, and start its upstream
 relay/OpenSearch stack:

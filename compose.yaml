@@ -218,4 +218,6 @@ volumes:
     external:
       name: "${OPENSEARCH_VOLUME}"
   caddy-data:
+    name: "${CADDY_DATA_VOLUME:-ncc-bundle_caddy-data}"
   caddy-config:
+    name: "${CADDY_CONFIG_VOLUME:-ncc-bundle_caddy-config}"

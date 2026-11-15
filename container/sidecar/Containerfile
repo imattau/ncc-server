@@ -10,11 +10,14 @@ RUN git clone --filter=blob:none --no-checkout "$SIDECAR_REPO" /src \
   && git -C /src checkout --detach FETCH_HEAD
 COPY patches/ncc-sidecar-event-ack.patch /tmp/ncc-sidecar-event-ack.patch
 COPY patches/ncc-sidecar-tor-auth-log.patch /tmp/ncc-sidecar-tor-auth-log.patch
+COPY patches/ncc-sidecar-tor-control-close.patch /tmp/ncc-sidecar-tor-control-close.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch --dry-run -p1 < /tmp/ncc-sidecar-tor-auth-log.patch \
   && patch -p1 < /tmp/ncc-sidecar-tor-auth-log.patch \
+  && patch --dry-run -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
+  && patch -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
   && npm ci \
   && npm --prefix ui ci \
   && npm --prefix ui run build \

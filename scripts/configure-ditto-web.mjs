@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+
 const baseUrl = (process.env.SIDECAR_ADMIN_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
+const identityPath = process.env.NCC_IDENTITY_FILE ?? '/etc/ncc-server/operator-identity.json';
 const host = process.env.DITTO_WEB_HOST;
 const pin = process.env.DITTO_WEB_K;
 const port = Number(process.env.CONTENT_TLS_PORT ?? 8443);
@@ -20,6 +23,8 @@ async function request(path, options) {
 }
 
 const endpoint = `https://${host}:${port}/`;
+const identity = JSON.parse(readFileSync(identityPath, 'utf8'));
+if (!identity.nsec || !identity.npub) throw new Error(`Invalid shared Nostr identity at ${identityPath}`);
 const config = {
   refresh_interval_minutes: 360,
   ncc02_expiry_days: 14,
@@ -42,11 +47,10 @@ if (service) {
   await request(`/api/service/${service.id}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'Ditto NCC web test', config, status: 'active' }),
+    body: JSON.stringify({ name: 'Ditto NCC web test', config, status: 'active', service_nsec: identity.nsec }),
   });
 } else {
-  const keys = await request('/api/service/generate-key');
-  npub = keys.npub;
+  npub = identity.npub;
   service = await request('/api/service/add', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -54,7 +58,7 @@ if (service) {
       type: 'custom',
       name: 'Ditto NCC web test',
       service_id: 'ditto',
-      service_nsec: keys.nsec,
+      service_nsec: identity.nsec,
       config,
       state: {},
     }),

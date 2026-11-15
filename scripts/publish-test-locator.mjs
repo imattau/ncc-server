@@ -37,7 +37,7 @@ if (!Number.isInteger(ttl) || ttl < 60 || ttl > 86400) {
   throw new Error('NCC_TEST_TTL must be an integer between 60 and 86400 seconds.');
 }
 
-const relays = (process.env.NCC_TEST_RELAYS ?? 'wss://relay.primal.net/,wss://nos.lol/')
+const relays = (process.env.NCC_TEST_RELAYS ?? 'wss://relay.primal.net/,wss://relay.ditto.pub/')
   .split(',').map((relay) => relay.trim()).filter(Boolean);
 const createdAt = Math.floor(Date.now() / 1000);
 const event = finalizeEvent({

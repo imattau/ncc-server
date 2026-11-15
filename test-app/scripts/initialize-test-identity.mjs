@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, copyFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPublicKey, generateSecretKey, nip19 } from 'nostr-tools';
@@ -7,13 +7,32 @@ const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const projectDir = resolve(appDir, '..');
 const secretDir = resolve(appDir, '.secrets');
 const identityPath = resolve(secretDir, 'ncc-test-key.json');
+const sharedIdentityPath = resolve(projectDir, '.secrets/operator-identity.json');
 const envPath = resolve(appDir, '.env.local');
 
 mkdirSync(secretDir, { recursive: true, mode: 0o700 });
 chmodSync(secretDir, 0o700);
 
 let identity;
-try {
+if (existsSync(sharedIdentityPath)) {
+  const shared = JSON.parse(readFileSync(sharedIdentityPath, 'utf8'));
+  const decoded = nip19.decode(shared.nsec);
+  if (decoded.type !== 'nsec' || !(decoded.data instanceof Uint8Array)) {
+    throw new Error('Shared operator identity contains an invalid nsec.');
+  }
+  const expectedNpub = nip19.npubEncode(getPublicKey(decoded.data));
+  if (shared.npub !== expectedNpub) throw new Error('Shared operator identity npub does not match its nsec.');
+  identity = { nsec: shared.nsec, npub: expectedNpub };
+  if (existsSync(identityPath)) {
+    const previous = JSON.parse(readFileSync(identityPath, 'utf8'));
+    if (previous.nsec !== identity.nsec) {
+      const backupPath = resolve(secretDir, `ncc-test-key.previous-${new Date().toISOString().replaceAll(':', '-')}.json`);
+      copyFileSync(identityPath, backupPath);
+      chmodSync(backupPath, 0o600);
+    }
+  }
+  writeFileSync(identityPath, `${JSON.stringify(identity, null, 2)}\n`, { mode: 0o600 });
+} else try {
   identity = JSON.parse(readFileSync(identityPath, 'utf8'));
   if (typeof identity.nsec !== 'string') throw new Error('Existing identity has no nsec.');
 

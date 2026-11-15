@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 NPUB="${1:-}"
 SERVICE="${2:-web}"
 shift $(( $# > 0 ? 1 : 0 )) || true
@@ -8,16 +9,24 @@ shift $(( $# > 0 ? 1 : 0 )) || true
 RELAYS=("$@")
 SIDECAR_DIR="${NCC_SIDECAR_DIR:-/opt/ncc-sidecar}"
 NODE_BIN="${NCC_NODE_BIN:-$SIDECAR_DIR/.node/bin/node}"
+MODULE_DIR="$SIDECAR_DIR"
 
 [[ -n "$NPUB" ]] || { echo 'Usage: verify-locator.sh <npub-or-hex> [service] [relay ...]' >&2; exit 2; }
+if [[ ! -d "$MODULE_DIR/node_modules/nostr-tools" && -d "$PROJECT_DIR/test-app/node_modules/nostr-tools" ]]; then
+  MODULE_DIR="$PROJECT_DIR/test-app"
+  NODE_BIN="${NCC_NODE_BIN:-$(command -v node || true)}"
+fi
 [[ -x "$NODE_BIN" ]] || NODE_BIN="$(command -v node || true)"
-[[ -n "$NODE_BIN" ]] || { echo 'Node.js is required (normally bundled with ncc-sidecar).' >&2; exit 2; }
-[[ -d "$SIDECAR_DIR/node_modules/nostr-tools" ]] || { echo 'nostr-tools not found in sidecar installation.' >&2; exit 2; }
-if (( ${#RELAYS[@]} == 0 )); then RELAYS=(wss://relay.damus.io wss://nos.lol wss://relay.primal.net); fi
+[[ -n "$NODE_BIN" ]] || { echo 'Node.js is required.' >&2; exit 2; }
+[[ -d "$MODULE_DIR/node_modules/nostr-tools" ]] || {
+  echo 'nostr-tools not found. On a workstation, run npm --prefix test-app ci.' >&2
+  exit 2
+}
+if (( ${#RELAYS[@]} == 0 )); then RELAYS=(wss://relay.primal.net wss://relay.ditto.pub); fi
 
 export NCC_VERIFY_NPUB="$NPUB" NCC_VERIFY_SERVICE="$SERVICE"
 export NCC_VERIFY_RELAYS="$(IFS=,; echo "${RELAYS[*]}")"
-cd "$SIDECAR_DIR"
+cd "$MODULE_DIR"
 "$NODE_BIN" --input-type=module <<'NODE'
 import { SimplePool, nip19, verifyEvent } from 'nostr-tools';
 

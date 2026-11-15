@@ -1,9 +1,18 @@
 SHELL := /bin/bash
 
-.PHONY: install uninstall status logs verify check-nat smoke build-test-app deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
+.PHONY: install install-compose-host first-run-identity bundle-provision-services uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
 
 install:
 	sudo ./scripts/install.sh
+
+install-compose-host:
+	sudo ./scripts/install-compose-host.sh
+
+first-run-identity:
+	node ./test-app/scripts/first-run-identity.mjs $(NCC_SETUP_ARGS)
+
+bundle-provision-services:
+	sudo ./scripts/provision-compose-services.py
 
 uninstall:
 	sudo ./scripts/uninstall.sh
@@ -29,6 +38,10 @@ build-test-app:
 
 deploy-test-app:
 	sudo rsync -a --chown=root:caddy public/ /srv/ncc-server/public/
+
+bundle-deploy-test-app:
+	@test -n "$(TARGET)" || (echo 'Usage: make bundle-deploy-test-app TARGET=user@host' >&2; exit 2)
+	./scripts/deploy-compose-test-app.sh "$(TARGET)"
 
 init-test-identity:
 	node test-app/scripts/initialize-test-identity.mjs
