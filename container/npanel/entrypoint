@@ -6,8 +6,22 @@ case "$DASHBOARD_HOST" in
   *[!A-Za-z0-9.-]*|'') echo 'DASHBOARD_HOST must be a hostname or IPv4 address.' >&2; exit 2 ;;
 esac
 
+# The operator identity is the NCC service host used by the browser, so bind
+# NIP-98 NCC URLs to that identity. Only write validated hex into TOML.
+NCC_PUBKEY="${NCC_PUBKEY:-}"
+if [ -n "$NCC_PUBKEY" ]; then
+  case "$NCC_PUBKEY" in
+    *[!A-Fa-f0-9]*) echo 'NCC_PUBKEY must be a 64-character hex public key.' >&2; exit 2 ;;
+  esac
+  if [ "${#NCC_PUBKEY}" -ne 64 ]; then
+    echo 'NCC_PUBKEY must be a 64-character hex public key.' >&2
+    exit 2
+  fi
+fi
+
 cat > /tmp/npanel.toml <<EOF
 dashboard_host = "$DASHBOARD_HOST"
+$(if [ -n "$NCC_PUBKEY" ]; then printf 'ncc_pubkey = "%s"\n' "$NCC_PUBKEY"; fi)
 data_dir = "/data"
 port = 3000
 bind_address = "0.0.0.0"

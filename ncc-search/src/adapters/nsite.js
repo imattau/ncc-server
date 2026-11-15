@@ -223,7 +223,7 @@ export class NsiteAdapter {
     };
   }
 
-  /** @param {ResolvedSite} resolved @returns {Promise<{status?:number, title?:string|null, description?:string|null, body?:string|null, error?:string}>} */
+  /** @param {ResolvedSite} resolved @returns {Promise<{status?:number, title?:string|null, description?:string|null, text?:string|null, image?:string|null, error?:string}>} */
   async fetchAndExtract(resolved) {
     if (!resolved.entryPath || !resolved.entrySha256) {
       return { error: 'manifest has no usable entry path' };

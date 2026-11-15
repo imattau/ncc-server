@@ -143,6 +143,74 @@ test('NsiteAdapter.fetchAndExtract succeeds and extracts content when the hash m
   await new Promise((resolve) => server.close(resolve));
 });
 
+test('NsiteAdapter.fetchAndExtract carries an absolute og:image through as the site thumbnail', async () => {
+  const html = Buffer.from(
+    '<html><head><title>Has a cover</title>' +
+      '<meta property="og:image" content="https://cdn.example/cover.png"></head><body>hi</body></html>',
+  );
+  const correctHash = sha256hex(html);
+
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(html);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  const pool = new SimplePool();
+  const adapter = new NsiteAdapter(pool, [], {
+    fetchTimeoutMs: 2000,
+    fetchMaxBytes: 1_000_000,
+    torSocks: '',
+  });
+
+  const event = manifestEvent({
+    kind: KIND_NAMED_SITE,
+    dTag: 'blog',
+    paths: [['/index.html', correctHash]],
+    servers: [`http://127.0.0.1:${port}`],
+  });
+
+  const result = await adapter.fetchAndExtract(adapter.resolveSite(event));
+  assert.equal(result.image, 'https://cdn.example/cover.png');
+
+  await new Promise((resolve) => server.close(resolve));
+});
+
+test('NsiteAdapter.fetchAndExtract drops a page-relative og:image -- there is no site domain to resolve it against', async () => {
+  const html = Buffer.from(
+    '<html><head><title>Relative cover</title>' +
+      '<meta property="og:image" content="/cover.png"></head><body>hi</body></html>',
+  );
+  const correctHash = sha256hex(html);
+
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(html);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+
+  const pool = new SimplePool();
+  const adapter = new NsiteAdapter(pool, [], {
+    fetchTimeoutMs: 2000,
+    fetchMaxBytes: 1_000_000,
+    torSocks: '',
+  });
+
+  const event = manifestEvent({
+    kind: KIND_NAMED_SITE,
+    dTag: 'blog',
+    paths: [['/index.html', correctHash]],
+    servers: [`http://127.0.0.1:${port}`],
+  });
+
+  const result = await adapter.fetchAndExtract(adapter.resolveSite(event));
+  assert.equal(result.image, null);
+
+  await new Promise((resolve) => server.close(resolve));
+});
+
 // --- NIP-05 verification ---
 
 const NIP05_PUBKEY = 'a'.repeat(64);

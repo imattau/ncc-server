@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openStore, KIND_ARTICLE, KIND_IMAGE } from '../src/store.js';
+import { openStore, KIND_ARTICLE, KIND_IMAGE, KIND_NSITE_NAMED } from '../src/store.js';
 
 function freshStore() {
   const dir = mkdtempSync(join(tmpdir(), 'ncc-search-store-content-test-'));
@@ -36,6 +36,35 @@ test('upsertContent indexes an article with no reachability claim', () => {
     const results = store.search('wallets');
     assert.equal(results.length, 1);
     assert.equal(results[0].itemId, 'my-post');
+  } finally {
+    cleanup();
+  }
+});
+
+test('upsertNsite stores an extracted og:image as the thumbnail, and a later fetch with none keeps it', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const resolved = {
+      pubkey: 'c'.repeat(64),
+      kind: 35128,
+      siteId: 'blog',
+      title: 'My nsite',
+      description: null,
+    };
+
+    store.upsertNsite(resolved, { status: 200, title: 'My nsite', image: 'https://cdn.example/cover.png' });
+
+    const row = store.getService(resolved.pubkey, 'blog');
+    assert.equal(row.kind, KIND_NSITE_NAMED);
+    assert.equal(row.thumbnail_url, 'https://cdn.example/cover.png');
+
+    // A re-crawl that found no og:image (e.g. the NIP-05-only enrichment
+    // pass, which fetches no content at all) must not blank out a
+    // thumbnail a previous fetch already found -- same COALESCE guarantee
+    // title/description/body already rely on, see store.js's upsertRow.
+    store.upsertNsite(resolved, { status: 200, title: 'My nsite' });
+    const after = store.getService(resolved.pubkey, 'blog');
+    assert.equal(after.thumbnail_url, 'https://cdn.example/cover.png');
   } finally {
     cleanup();
   }

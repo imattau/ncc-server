@@ -264,6 +264,7 @@ export function openStore(dbPath, opts = {}) {
       title: fetched.title ?? existing?.title ?? resolved.title ?? null,
       description: fetched.description ?? existing?.description ?? resolved.description ?? null,
       body: fetched.body ?? null,
+      thumbnailUrl: fetched.image ?? null,
     });
   }
 

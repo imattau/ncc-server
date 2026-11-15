@@ -135,7 +135,7 @@ function CompactThumbnail({ result }: { result: SearchResult }) {
     else if (resized.status === 'error') src = sanitizeHref(result.mediaUrl);
     else src = placeholder;
   } else {
-    // video and article thumbnails are a plain poster/cover image -- no
+    // video/article/nsite thumbnails are a plain poster/cover image -- no
     // resize worker needed, they're not meant to be large to begin with.
     src = sanitizeHref(result.thumbnailUrl) ?? placeholder;
   }
@@ -181,9 +181,14 @@ export function ResultRow({
   const identity = truncateIdentity(rawIdentity);
 
   const isMedia = MEDIA_KINDS.has(result.kind);
-  // A compact thumbnail applies to any image/video result, plus articles
-  // that carry a NIP-23 `image` cover.
-  const useCompactThumbnail = isMedia || (result.kind === 'article' && !!result.thumbnailUrl);
+  // A compact thumbnail applies to any image/video result, plus
+  // articles (NIP-23 `image` cover) and nsites (an extracted `og:image` --
+  // see extract.js) when one was actually found. Most other kinds have no
+  // thumbnail concept at all, and an nsite with no og:image just falls
+  // through to the plain text row, same as always.
+  const hasOptionalThumbnail =
+    (result.kind === 'article' || result.kind.startsWith('nsite')) && !!result.thumbnailUrl;
+  const useCompactThumbnail = isMedia || hasOptionalThumbnail;
 
   // Clicking an image/video result's title opens the original file --
   // there's no separate "page" for it the way there is for an
