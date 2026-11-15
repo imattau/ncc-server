@@ -122,7 +122,7 @@ services:
         NPANEL_GID: "${NPANEL_GID}"
     image: ncc-bundle-npanel:0.7.2
     environment:
-      DASHBOARD_HOST: "${DASHBOARD_HOST}"
+      DASHBOARD_HOST: "${PUBLIC_IPV4}"
       LOG_LEVEL: info
     ports:
       - "127.0.0.1:3200:3000"
@@ -171,22 +171,94 @@ services:
       start_period: 10s
     logging: *bounded-logs
 
+  search:
+    build:
+      context: .
+      dockerfile: container/search/Containerfile
+      args:
+        SEARCH_UID: "${SEARCH_UID}"
+        SEARCH_GID: "${SEARCH_GID}"
+    image: ncc-bundle-search:0.1.0
+    environment:
+      # No Nostr identity of any kind -- this process only subscribes to
+      # relays (read) and serves its own SQLite/FTS5 index over plain HTTP.
+      # It never signs or publishes an event, unlike sidecar/relay/npanel/
+      # ditto-web, which all share the operator identity from step 2 of
+      # docs/deployment-compose.md. See container/search/Containerfile's
+      # comment and ncc-search/README.md.
+      NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
+      NCC_SEARCH_CORS_ORIGIN: "${SEARCH_CORS_ORIGIN}"
+      NCC_SEARCH_DB_MAX_BYTES: "${SEARCH_DB_MAX_BYTES}"
+    ports:
+      - "127.0.0.1:3230:7780"
+    volumes:
+      - "${SEARCH_DATA_DIR}:/data"
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:7780/search?q=a').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging: *bounded-logs
+
+  search-ui:
+    build:
+      context: .
+      dockerfile: container/search-ui/Containerfile
+      args:
+        # Vite bakes these in at image build time (see the Containerfile's
+        # comment) -- an absolute, separately-TLS'd origin, not a relative
+        # path, so this keeps working regardless of where Caddy mounts it.
+        VITE_NCC_SEARCH_API_BASE: "https://${PUBLIC_IPV4}:${SEARCH_API_TLS_PORT}"
+        VITE_NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
+    image: ncc-bundle-search-ui:0.1.0
+    ports:
+      - "127.0.0.1:3220:8080"
+    depends_on:
+      - search
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *bounded-logs
+
   caddy:
     image: caddy:2.11.9-alpine
     network_mode: host
     group_add:
       - "${CADDY_GID}"
     environment:
-      DASHBOARD_HOST: "${DASHBOARD_HOST}"
-      DITTO_WEB_HOST: "${DITTO_WEB_HOST}"
+      PUBLIC_IPV4: "${PUBLIC_IPV4}"
+      NCC_OPERATOR_PUBKEY: "${NCC_OPERATOR_PUBKEY}"
       CONTENT_PORT: "${CONTENT_PORT}"
       CONTENT_TLS_PORT: "${CONTENT_TLS_PORT}"
-      RELAY_TLS_PORT: "${RELAY_TLS_PORT}"
+      SEARCH_TLS_PORT: "${SEARCH_TLS_PORT}"
+      SEARCH_API_TLS_PORT: "${SEARCH_API_TLS_PORT}"
       CONTENT_ROOT: /srv/ncc-server/public
       WEB_CERT: /opt/ncc-sidecar/certs/2/server.crt
       WEB_KEY: /opt/ncc-sidecar/certs/2/server.key
-      RELAY_CERT: /opt/ncc-sidecar/certs/3/server.crt
-      RELAY_KEY: /opt/ncc-sidecar/certs/3/server.key
     volumes:
       - ./container/Caddyfile:/etc/caddy/Caddyfile:ro
       - "${CONTENT_ROOT}:/srv/ncc-server/public:ro"
@@ -201,6 +273,10 @@ services:
       npanel:
         condition: service_healthy
       ditto-web:
+        condition: service_healthy
+      search:
+        condition: service_healthy
+      search-ui:
         condition: service_healthy
     restart: unless-stopped
     cap_add:

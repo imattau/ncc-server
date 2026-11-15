@@ -68,6 +68,20 @@ export function discoverMedia(pool, relays, onMedia, options = {}) {
   return { close: () => sub.close() };
 }
 
+// parseImetaTag collects a *repeated* key into an array -- correct for
+// `fallback` (the only key NIP-92/94 actually expects more than one of),
+// but any key can legally repeat in a tag some publisher writes; nothing
+// stops a video's `imeta` from, say, two `image` entries. Found this live:
+// a real NIP-71 video event crashed the backend with "SQLite3 can only
+// bind numbers, strings, bigints, buffers, and null" because `primary.image`
+// came back as `['url1', 'url2']` and went straight into a TEXT column.
+// Every single-value field this adapter reads off `primary` goes through
+// this first, so a repeated key degrades to "use the first one" instead of
+// crashing the whole crawl.
+function scalar(value) {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+}
+
 /** Parses one `imeta` tag's "key value" entries into an object. Repeated keys (`fallback`) collect into an array. */
 export function parseImetaTag(tag) {
   const result = {};
@@ -93,7 +107,7 @@ export function resolveMedia(event) {
 
   const dTag = event.tags.find((t) => t[0] === 'd')?.[1];
   const title = event.tags.find((t) => t[0] === 'title')?.[1] || null;
-  const altTexts = imetaTags.map((m) => m.alt).filter(Boolean);
+  const altTexts = imetaTags.map((m) => scalar(m.alt)).filter(Boolean);
   const body = [event.content, ...altTexts].filter(Boolean).join(' ').trim().slice(0, 20_000);
   // NIP-68/71 `["content-warning", "<reason>"]`. The reason is optional --
   // presence of the tag at all is what matters for safe search (see ui/'s
@@ -109,19 +123,19 @@ export function resolveMedia(event) {
     title,
     description: event.content || altTexts[0] || null,
     body,
-    mediaUrl: primary.url,
-    mediaType: primary.m || null,
-    thumbnailUrl: primary.image || (storeKindFor(event.kind) === 'image' ? primary.url : null),
+    mediaUrl: scalar(primary.url),
+    mediaType: scalar(primary.m),
+    thumbnailUrl: scalar(primary.image) || (storeKindFor(event.kind) === 'image' ? scalar(primary.url) : null),
     // Both optional per NIP-68/71; parseImetaTag already captures arbitrary
     // keys generically, so these just need picking off `primary`. The UI
     // only decodes `blurhash` today (see ui/'s useBlurhashPlaceholder) --
     // `thumbhash` uses a different binary encoding this project hasn't
     // implemented a decoder for yet, so it's stored for forward
     // compatibility but not currently rendered.
-    blurhash: primary.blurhash || null,
-    thumbhash: primary.thumbhash || null,
+    blurhash: scalar(primary.blurhash),
+    thumbhash: scalar(primary.thumbhash),
     endpoint: null,
-    duration: primary.duration ? Number(primary.duration) : null,
+    duration: scalar(primary.duration) ? Number(scalar(primary.duration)) : null,
     hashtags: extractHashtags(event),
     contentWarning,
   };

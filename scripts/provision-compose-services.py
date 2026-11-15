@@ -17,7 +17,6 @@ import urllib.request
 API = os.environ.get('SIDECAR_ADMIN_URL', 'http://127.0.0.1:3000').rstrip('/')
 IDENTITY_PATH = pathlib.Path(os.environ.get(
     'NCC_IDENTITY_FILE', '/etc/ncc-server/operator-identity.json'))
-RELAY_SCRIPT = pathlib.Path(__file__).with_name('provision-ditto-relay.py')
 RELAYS = [
     'wss://relay.primal.net/',
     'wss://relay.ditto.pub/',
@@ -34,8 +33,9 @@ def request(path, method='GET', data=None):
         return json.load(response)
 
 
-def service_config(host, port, protocol, *, self_signed, pin=None):
-    endpoint = f'{protocol}://{host}:{port}/'
+def service_config(host, port, protocol, *, self_signed, pin=None,
+                   path='/', probe_url=None):
+    endpoint = f'{protocol}://{host}:{port}{path}'
     config = {
         'refresh_interval_minutes': 360,
         'ncc02_expiry_days': 14,
@@ -47,7 +47,7 @@ def service_config(host, port, protocol, *, self_signed, pin=None):
         'primary_protocol': 'ipv4',
         'preferred_protocol': protocol,
         'port': port,
-        'probe_url': endpoint,
+        'probe_url': probe_url or endpoint,
         'ncc05_recipients': [],
     }
     if pin:
@@ -157,20 +157,18 @@ def main():
         if line and not line.lstrip().startswith('#') and '=' in line:
             key, value = line.split('=', 1)
             env[key.strip()] = value.strip().strip('"\'')
-    public_host = env.get('PUBLIC_ENDPOINT_HOST')
-    dashboard_host = env.get('DASHBOARD_HOST')
-    ditto_host = env.get('DITTO_WEB_HOST')
-    if not all((public_host, dashboard_host, ditto_host)):
-        raise RuntimeError('set PUBLIC_ENDPOINT_HOST, DASHBOARD_HOST, and DITTO_WEB_HOST in .env')
+    public_ip = env.get('PUBLIC_IPV4')
+    if not public_ip:
+        raise RuntimeError('set PUBLIC_IPV4 in .env')
     http_port = int(env.get('CONTENT_PORT', '8080'))
     https_port = int(env.get('CONTENT_TLS_PORT', '8443'))
-    relay_port = int(env.get('RELAY_TLS_PORT', '8444'))
+    search_port = int(env.get('SEARCH_TLS_PORT', '8447'))
     cert_dir = pathlib.Path(env.get('SIDECAR_CERT_DIR', '/opt/ncc-sidecar/certs'))
     project = pathlib.Path(__file__).parents[1]
     tor_password = configure_tor(project, pathlib.Path(env.get('TOR_CONFIG_FILE', '/etc/tor/torrc')))
 
     services = request('/api/services')
-    web_config = service_config(public_host, https_port, 'https', self_signed=True)
+    web_config = service_config(public_ip, https_port, 'https', self_signed=True)
     web_config['protocols']['tor'] = True
     web_config['local_port'] = http_port
     web_config['tor_control'] = {
@@ -184,34 +182,63 @@ def main():
         raise RuntimeError(f'web record must have ID 2 for the Caddy certificate path; got {web["id"]}')
     force_publish(web)
 
-    relay_url = env.get('RELAY_PUBLIC_URL', f'wss://{public_host}:{relay_port}/')
-    relay_env = os.environ.copy()
-    relay_env['DITTO_ENV_FILE'] = env.get('DITTO_ENV_FILE', '/etc/ncc-server/ditto-relay.env')
-    relay_env['NCC_IDENTITY_FILE'] = str(IDENTITY_PATH)
-    subprocess.run([sys.executable, str(RELAY_SCRIPT), relay_url],
-                   check=True, env=relay_env)
-    services = request('/api/services')
-    relay = next((item for item in services if item.get('service_id') == 'relay'), None)
-    if not relay or int(relay['id']) != 3:
-        raise RuntimeError(f'relay record must have ID 3 for the Caddy certificate path; got {relay and relay.get("id")}')
-
     cert_path = cert_dir / '2' / 'server.crt'
     if not cert_path.is_file():
         raise RuntimeError(f'web self-signed certificate was not generated: {cert_path}')
     pin = spki_pin(cert_path)
+
+    services = request('/api/services')
+    relay_existing = next((item for item in services if item.get('service_id') == 'relay'), None)
+    if relay_existing and relay_existing.get('type') != 'relay':
+        raise RuntimeError('service ID relay already exists with a non-relay type; inspect the sidecar before proceeding')
+    relay_config = service_config(
+        public_ip, https_port, 'wss', self_signed=False, pin=pin, path='/relay/',
+        probe_url=f'https://127.0.0.1:{https_port}/relay/',
+    )
+    relay_config.update({
+        'ncc05_ttl_hours': 1,
+        'ncc02_expiry_days': 1,
+        'refresh_interval_minutes': 30,
+    })
+    relay = ensure_service(
+        services, identity, service_id='relay', name='Ditto Relay',
+        config=relay_config, service_type='relay',
+    )
+    if not relay or int(relay['id']) != 3:
+        raise RuntimeError(f'relay record must have ID 3; got {relay and relay.get("id")}')
+    force_publish(relay)
+
     services = request('/api/services')
     npanel = ensure_service(
         services, identity, service_id='npanel', name='Npanel Dashboard',
-        config=service_config(dashboard_host, http_port, 'http', self_signed=False),
+        config=service_config(
+            public_ip, https_port, 'https', self_signed=False, pin=pin,
+            probe_url='http://127.0.0.1:3200/api/instance',
+        ),
     )
     ditto = ensure_service(
         services, identity, service_id='ditto', name='Ditto Web',
-        config=service_config(ditto_host, https_port, 'https', self_signed=False, pin=pin),
+        config=service_config(
+            public_ip, https_port, 'https', self_signed=False, pin=pin,
+            probe_url='http://127.0.0.1:3210/',
+        ),
+    )
+    # ncc-search (see ncc-search/README.md) needs no identity or signer of
+    # its own -- it's read-only and never publishes an event -- but it
+    # still gets an NCC-02 record here so it has a discoverable ncc://
+    # address, the same way npanel/ditto-web do despite also not signing
+    # anything themselves. Only the UI is addressed, not its separate API
+    # backend, matching how npanel/ditto-web's own backend ports aren't
+    # published individually either.
+    search = ensure_service(
+        services, identity, service_id='search', name='ncc-search',
+        config=service_config(public_ip, search_port, 'https', self_signed=False, pin=pin),
     )
     force_publish(npanel)
     force_publish(ditto)
+    force_publish(search)
     print(f'Provisioned shared-identity locators: web={web["id"]}, relay={relay["id"]}, '
-          f'npanel={npanel["id"]}, ditto={ditto["id"]}.')
+          f'npanel={npanel["id"]}, ditto={ditto["id"]}, search={search["id"]}.')
     print(f'Web SPKI pin: {pin}')
     current_web = next((item for item in request('/api/services')
                         if item.get('service_id') == 'web'), {})

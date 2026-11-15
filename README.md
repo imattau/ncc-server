@@ -1,51 +1,44 @@
 # NCC-Server
 
-NCC-Server is a Linux host bundle for publishing Nostr Community Convention
-(NCC) service locators and serving the services they describe. The recommended
-deployment uses Docker Compose:
+NCC-Server is a Docker Compose bundle for running NCC services on a Linux
+server. It includes the NCC-06 sidecar, Caddy, Npanel, Ditto Relay, Ditto Web,
+OpenSearch, and optional Tor onion access.
 
-- **NCC-06 sidecar** manages service profiles and publishes signed NCC-02 and
-  NCC-05 records.
-- **Caddy** routes HTTP, pinned HTTPS, and WSS traffic.
-- **Ditto Relay** provides the bundled Nostr relay.
-- **Npanel** provides the admin dashboard and nsite hosting.
-- **Ditto Web** is the bundled web client.
-- **Tor** provides an optional onion endpoint for the web service.
+This guide covers a **new installation** on Debian 12 or Ubuntu. It assumes
+Docker Compose manages the services. The operator key is created and kept on
+your workstation, then securely installed on the server.
 
-The older systemd installation remains available for existing hosts. Use the
-Compose deployment for new installs.
+## What you need
 
-## Before you start
+- A Debian 12 or Ubuntu server or VM with at least 4 GiB RAM and sudo access.
+- A stable LAN IP for the server.
+- A workstation with Git, Node.js 22 or newer, npm, and SSH access to the server.
+- A public IPv4 address reachable by clients.
+- Router and firewall access if the services need to be reachable from the
+  internet.
 
-- A dedicated Debian 12 or Ubuntu server or VM with at least 4 GiB RAM.
-- A stable LAN address for the server. Reserve it in DHCP if router forwards
-  will target the VM.
-- A public IPv4 address and DNS records for the dashboard, Ditto Web, and relay.
-  Direct port forwarding will not work behind CGNAT without an external tunnel.
-- Router and host firewall access for TCP **8080**, **8443**, and **8444**.
-- A workstation with Git, SSH access to the server, Node.js 22 or newer, and
-  npm.
+Forward TCP 8443 to the server for NCC services. Forward 8447 and 8448 only
+when exposing the optional ncc-search UI and API. Port 8080 is optional for
+plain HTTP web access; Tor's onion service reaches it locally.
 
-Forward these public ports to the VM and allow them through the host firewall:
-
-| Port | Service |
+| Port | Purpose |
 | --- | --- |
-| 8080/TCP | HTTP web content, dashboard, and Ditto Web routing |
-| 8443/TCP | Pinned HTTPS web content, nsites, and Ditto Web routing |
-| 8444/TCP | WSS Ditto Relay |
+| 8080 | HTTP web content and local Tor onion target |
+| 8443 | Pinned HTTPS and WSS for web, Npanel, Ditto Web, and Ditto Relay |
+| 8447 | Pinned HTTPS ncc-search UI (optional) |
+| 8448 | Pinned HTTPS ncc-search API (optional) |
 
-Do not forward sidecar port 3000, Npanel ports 3200/3201, relay backend 13131,
-OpenSearch ports, or Tor SOCKS/control ports. Tor onion access needs no router
-forward.
+Do not forward the internal service ports. Onion access uses Tor and needs no
+router port forward. Port forwarding requires a public IP; it will not work
+through CGNAT without an external tunnel.
 
-## Quick start
+## Install
 
-The setup has one VM terminal and one workstation terminal. Keep the VM
-checkout at a path the SSH account can read; /opt/ncc-server is used below.
+### 1. Install the Compose bundle on the server
 
-### 1. Install the base bundle on the VM
+Run on the Debian/Ubuntu server:
 
-~~~sh
+```sh
 sudo apt-get update
 sudo apt-get install -y git
 sudo git clone https://github.com/imattau/ncc-server.git /opt/ncc-server
@@ -53,151 +46,93 @@ cd /opt/ncc-server
 sudo cp .env.example .env
 sudo chmod 600 .env
 sudo make install-compose-host
-~~~
+```
 
-The installer prompts for four public values and saves them to .env:
+The installer installs Docker and Compose, asks for the server's public IPv4
+address, prepares persistent storage, builds the images, and starts the
+services needed for initial setup. No DNS names are required. NCC Browser
+identifies each service with its signed npub/service locator and sends that
+routing metadata to Caddy; Npanel, Ditto Web, and the relay share port 8443.
 
-- **PUBLIC_ENDPOINT_HOST**: public IP or hostname for the web locator.
-- **DASHBOARD_HOST**: DNS hostname for Npanel.
-- **DITTO_WEB_HOST**: DNS hostname for Ditto Web.
-- **RELAY_PUBLIC_URL**: public relay URL, such as
-  wss://relay.example.net:8444/.
+### 2. Create the operator identity from your workstation
 
-Point those DNS names to your public IP before testing external clients. The
-installer configures Docker, storage, pinned images and source checkouts, and
-starts the base services. Caddy and the relay wait for identity and service
-provisioning.
+Clone the project on the workstation. The private key stays here; it is not
+generated on the server.
 
-### 2. Create and install the operator identity
-
-On the workstation, use a separate checkout of this repository:
-
-~~~sh
+```sh
 git clone https://github.com/imattau/ncc-server.git ~/ncc-server
 cd ~/ncc-server
 npm --prefix test-app ci
 NCC_SSH_TARGET=operator@192.168.1.50 \
 NCC_REMOTE_PROJECT_DIR=/opt/ncc-server \
 make first-run-identity
-~~~
+```
 
-Replace operator@192.168.1.50 with your SSH account and VM address. The helper
-asks you to confirm before changing the VM. It generates an identity if one
-does not already exist, prints its public npub, and stores the keypair in
-.secrets/operator-identity.json on the workstation (Git-ignored, mode 0600).
-On a clean install, this first pass initializes the sidecar and sets the
-Ditto Relay key and Npanel admin. The service records are created in step 3
-and aligned on the second pass. Keep a secure offline backup of this file; it
-is the recovery source for the service keys.
+Replace `operator@192.168.1.50` with your SSH account and server address. The
+command creates a keypair if needed, saves it in the Git-ignored
+`.secrets/operator-identity.json` file with owner-only permissions, and
+installs the identity on the server over SSH. Keep a secure backup of this
+file; it is needed to recover control of the services.
 
-### 3. Create service records and start the complete stack
+### 3. Create the service records
 
-Back on the VM:
+Run on the server:
 
-~~~sh
+```sh
 cd /opt/ncc-server
 sudo make bundle-provision-services
-~~~
+```
 
-This creates the web, relay, Npanel, and Ditto Web service records, generates
-the web and relay self-signed certificates, and configures the web onion
-service. Then return to the workstation and run the identity command again:
+Then run `make first-run-identity` again from the workstation using the same
+command as above. This publishes the service records with the operator
+identity and starts Caddy and Ditto Relay.
 
-~~~sh
-cd ~/ncc-server
-NCC_SSH_TARGET=operator@192.168.1.50 \
-NCC_REMOTE_PROJECT_DIR=/opt/ncc-server \
-make first-run-identity
-~~~
+### 4. Check the installation
 
-This final pass republishes the locators with the shared identity and starts
-Caddy and the relay. It creates a protected backup before migrating existing
-identity data.
+Run on the server:
 
-### 4. Put a page at the web root
-
-For a first install, the included MKStack test app is the quickest way to get a
-working page for the web locator and the HTTP/HTTPS smoke check:
-
-~~~sh
-cd ~/ncc-server
-make build-test-app
-make bundle-deploy-test-app TARGET=operator@192.168.1.50
-~~~
-
-For a non-root SSH account, the deploy script uses sudo on the VM. The default
-content directory is /srv/ncc-server/public; override it with
-NCC_CONTENT_ROOT when needed.
-
-### 5. Verify setup
-
-On the VM, check container and endpoint health:
-
-~~~sh
+```sh
 cd /opt/ncc-server
 sudo make bundle-health
-~~~
+```
 
-On the workstation, verify that a fresh, signed web locator is visible on the
-configured relays:
+The installer and health check report any missing configuration or services.
+The web locator's public identifier is the `npub` printed during identity
+setup. NCC Browser can open services using addresses such as
+`ncc://<npub>/web/`, `ncc://<npub>/relay/`, `ncc://<npub>/npanel/`, and
+`ncc://<npub>/ditto/`.
 
-~~~sh
-cd ~/ncc-server
-make verify NPUB=npub1... SERVICE=web
-~~~
+## Optional: deploy the test page
 
-Use the npub printed by the identity helper. Other service identifiers are
-relay, npanel, and ditto. Open them in NCC Browser with addresses such as
-ncc://<npub>/web/ or ncc://<npub>/relay/.
+The included MKStack test app lets you try the web locator. From the
+workstation checkout:
 
-To smoke-test the relay from the workstation:
+```sh
+make build-test-app
+make bundle-deploy-test-app TARGET=operator@192.168.1.50
+```
 
-~~~sh
-make test-ditto-wss RELAY_URL=wss://relay.example.net:8444/
-~~~
+Replace the target with the same SSH account and server address used above.
 
-The command performs a WSS NIP-01 request/EOSE exchange. Testing with TLS
-verification disabled is intended only for this smoke test; clients should
-validate the relay's published certificate pin.
+## Operating the bundle
 
-## Public locator and key handling
+Run these commands from `/opt/ncc-server` on the server:
 
-The Compose defaults publish public NCC-05 locators so clients can resolve the
-services without a signer. Relays can read the published endpoint metadata.
-Use these defaults only for endpoints intended to be public.
-
-The operator nsec is stored in the workstation's Git-ignored
-.secrets/operator-identity.json and a root-owned mode-0600 file at
-/etc/ncc-server/operator-identity.json on the VM. Never commit or paste the
-private key. Losing it means losing control of services that use that identity.
-
-HTTPS uses self-signed certificates whose SPKI fingerprints are published in
-the locator. Regular browsers will show a certificate warning; NCC-aware
-clients can verify the published fingerprint.
-
-## Operations
-
-Run from the VM checkout:
-
-~~~sh
+```sh
 sudo make bundle-health
 sudo make bundle-logs
 sudo make bundle-down
 sudo docker-compose -p ncc-bundle -f compose.yaml up -d
-~~~
+```
 
-Configuration and step-by-step recovery details are in the
-[Compose deployment guide](docs/deployment-compose.md). For problems, see
-[troubleshooting](docs/troubleshooting.md). Native systemd deployments are
-covered in the [operator guide](docs/operator.md).
+Service configuration is in `.env`. Persistent service data is stored outside
+the containers. Keep `.env`, the operator key, and persistent data backed up;
+do not use `docker compose down -v` on an installed server.
 
-## Development and test notes
+HTTPS uses self-signed certificates. NCC-aware clients validate the
+certificate fingerprint published in the service locator; ordinary browsers
+will show a certificate warning.
 
-- [Ditto Relay integration](docs/ditto-relay.md)
-- [Ditto Web integration](docs/ditto-web.md)
-- [Schema and VM verification results](docs/schema-verification.md)
-- [Alternative Podman deployment notes](docs/alternative-podman.md)
-
-The test app source is in [test-app/](test-app/). Caddy serves its built files
-from the configured content directory; Node.js is needed only on the
-workstation to build the app.
+For configuration details and recovery steps, see the
+[deployment guide](docs/deployment-compose.md) and
+[troubleshooting guide](docs/troubleshooting.md).

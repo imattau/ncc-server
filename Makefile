@@ -75,7 +75,7 @@ install-ditto-relay:
 	sudo ./scripts/install-ditto-relay.sh
 
 test-ditto-wss:
-	@test -n "$(RELAY_URL)" || (echo 'Usage: make test-ditto-wss RELAY_URL=wss://<public-address>:8444/' >&2; exit 2)
+	@test -n "$(RELAY_URL)" || (echo 'Usage: make test-ditto-wss RELAY_URL=wss://<public-address>:8443/relay/' >&2; exit 2)
 	NODE_TLS_REJECT_UNAUTHORIZED=0 node ./scripts/test-ditto-wss.mjs "$(RELAY_URL)"
 
 stage-npanel:
@@ -94,7 +94,7 @@ bundle-configure-npanel:
 bundle-configure-ditto-web:
 	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-ditto-web.mjs
 
-bundle-up: bundle-configure-npanel bundle-config
+bundle-up: bundle-configure-npanel bundle-configure-ditto-web bundle-config
 	docker-compose -p ncc-bundle -f compose.yaml up -d
 
 bundle-down:

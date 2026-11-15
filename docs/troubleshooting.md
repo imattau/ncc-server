@@ -36,14 +36,19 @@ Check the listeners from the VM:
 
 ~~~sh
 curl -I http://127.0.0.1:8080/
+set -a; . /opt/ncc-server/.env; set +a
 curl --insecure -I https://127.0.0.1:8443/
-curl -I -H 'Host: dashboard.example.net' http://127.0.0.1:8080/api/instance
-curl --insecure -I -H 'Host: ditto.example.net' https://127.0.0.1:8443/
+curl --insecure -I -H "X-NCC-Pubkey: $NCC_OPERATOR_PUBKEY" \
+  -H 'X-NCC-Service: npanel' https://127.0.0.1:8443/api/instance
+curl --insecure -I -H "X-NCC-Pubkey: $NCC_OPERATOR_PUBKEY" \
+  -H 'X-NCC-Service: ditto' https://127.0.0.1:8443/
+curl --insecure -I https://127.0.0.1:8443/relay/
 ~~~
 
-Replace the sample hostnames with DASHBOARD_HOST and DITTO_WEB_HOST from the
-VM's .env. The dashboard and Ditto Web use host-based routing, so a request
-using only the IP can show the static web page instead.
+NCC Browser supplies the pubkey and service headers for Npanel and Ditto Web.
+Ditto Relay uses the `/relay/` path so ordinary WebSocket clients can connect
+without NCC-specific headers. Requests use the server IP directly; no DNS
+names are needed.
 
 For an empty web root, install the MKStack test page or place your own files in
 the CONTENT_ROOT directory from .env. Check that files are readable by the
@@ -74,7 +79,7 @@ If a locator is absent or stale:
 
 - Confirm the matching service record is active in the sidecar.
 - Check the sidecar logs for relay connection and acknowledgement errors.
-- Confirm the service profile uses the correct port and public hostname.
+- Confirm the service profile uses the correct public IPv4 address and port.
 - Verify the default relays can be reached from the VM.
 - Republish after changing a service profile.
 
@@ -91,17 +96,17 @@ contains the new endpoint before relying on it.
 From the VM, check relay NIP-11:
 
 ~~~sh
-curl --insecure -H 'Accept: application/nostr+json' https://127.0.0.1:8444/
+curl --insecure -H 'Accept: application/nostr+json' https://127.0.0.1:8443/relay/
 ~~~
 
-Then check Caddy and relay logs. Verify that TCP 8444 reaches the VM, Caddy is
-using the relay certificate, and the relay backend is healthy on loopback port
-13131. Do not forward 13131.
+Then check Caddy and relay logs. Verify that TCP 8443 reaches the VM, Caddy is
+using the shared pinned certificate, and the relay backend is healthy on
+loopback port 13131. Do not forward 13131.
 
 From a workstation with Node.js 22 or newer, run:
 
 ~~~sh
-make test-ditto-wss RELAY_URL=wss://relay.example.net:8444/
+make test-ditto-wss RELAY_URL=wss://203.0.113.10:8443/relay/
 ~~~
 
 The smoke script skips certificate verification only for this test. NCC

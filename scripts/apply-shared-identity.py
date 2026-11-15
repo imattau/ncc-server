@@ -78,6 +78,22 @@ def atomic_write(path, data, mode=0o600):
             os.unlink(tmp)
 
 
+def set_env_value(path, key, value):
+    lines = path.read_text().splitlines()
+    output = []
+    found = False
+    for line in lines:
+        if line.startswith(key + '='):
+            if not found:
+                output.append(f'{key}={value}')
+                found = True
+        else:
+            output.append(line)
+    if not found:
+        output.append(f'{key}={value}')
+    atomic_write(path, '\n'.join(output) + '\n')
+
+
 def update_relay_env(path, nsec, relay_url):
     if path.exists():
         lines = path.read_text().splitlines()
@@ -85,21 +101,30 @@ def update_relay_env(path, nsec, relay_url):
         # Compose deployments need a public URL for Relay's NIP-11 metadata.
         # It is operator configuration, not inferred from a private address.
         if not relay_url or not relay_url.startswith('wss://'):
-            die('set RELAY_PUBLIC_URL=wss://<public-host>:<port>/ in the project .env before first run')
+            die('set PUBLIC_IPV4 in the project .env before first run')
         lines = [
             '# Root-owned Ditto Relay runtime configuration; do not commit.',
             f'RELAY_URL={relay_url}',
             'RELAY_PORT=127.0.0.1:13131',
             'IP_HEADER=X-Real-IP',
         ]
-    replaced = False
-    for index, line in enumerate(lines):
-        if line.startswith('NOSTR_SECRET_KEY='):
-            lines[index] = f'NOSTR_SECRET_KEY={nsec}'
-            replaced = True
-    if not replaced:
-        lines.append(f'NOSTR_SECRET_KEY={nsec}')
-    atomic_write(path, '\n'.join(lines) + '\n')
+    replacements = {'NOSTR_SECRET_KEY': nsec}
+    if relay_url:
+        replacements['RELAY_URL'] = relay_url
+    seen = set()
+    output = []
+    for line in lines:
+        key = line.split('=', 1)[0] if '=' in line else None
+        if key in replacements:
+            if key not in seen:
+                output.append(f'{key}={replacements[key]}')
+                seen.add(key)
+        else:
+            output.append(line)
+    for key, value in replacements.items():
+        if key not in seen:
+            output.append(f'{key}={value}')
+    atomic_write(path, '\n'.join(output) + '\n')
 
 
 def migrate_database(db_path, nsec, pubkey):
@@ -179,7 +204,9 @@ def main():
     sidecar_dir = pathlib.Path(env.get('SIDECAR_DATA_DIR', '/var/lib/ncc-sidecar'))
     db_path = sidecar_dir / 'sidecar.db'
     relay_env = pathlib.Path(env.get('DITTO_ENV_FILE', '/etc/ncc-server/ditto-relay.env'))
-    relay_public_url = env.get('RELAY_PUBLIC_URL')
+    public_ip = env.get('PUBLIC_IPV4')
+    relay_public_url = (f'wss://{public_ip}:{env.get("CONTENT_TLS_PORT", "8443")}/relay/'
+                        if public_ip else None)
     compose = compose_command(project)
     relay_env_existed = relay_env.exists()
     if not db_path.is_file():
@@ -188,7 +215,7 @@ def main():
         die('Npanel data directory is missing; start the Compose bundle before setup')
     if not relay_env_existed:
         if not relay_public_url or not relay_public_url.startswith('wss://'):
-            die('set RELAY_PUBLIC_URL=wss://<public-host>:<port>/ in the project .env before first run')
+            die('set PUBLIC_IPV4 in the project .env before first run')
         atomic_write(relay_env, '\n'.join((
             '# Temporary first-run value; replaced before Relay is started.',
             f'RELAY_URL={relay_public_url}',
@@ -197,10 +224,14 @@ def main():
             'IP_HEADER=X-Real-IP',
             '',
         )))
+    project_env_original = env_path.read_text()
+    set_env_value(env_path, 'NCC_OPERATOR_PUBKEY', pubkey)
+    env['NCC_OPERATOR_PUBKEY'] = pubkey
     try:
         subprocess.run(compose + ['config'], cwd=project, check=True,
                        stdout=subprocess.DEVNULL)
     except Exception:
+        atomic_write(env_path, project_env_original)
         if not relay_env_existed:
             relay_env.unlink(missing_ok=True)
         raise
@@ -211,6 +242,7 @@ def main():
     backup_dir = pathlib.Path('/var/backups/ncc-server') / f'identity-{stamp}'
     backup_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     os.chown(backup_dir, 0, 0)
+    atomic_write(backup_dir / 'project.env', project_env_original)
 
     # Back up the SQLite database with its online backup API while sidecar is
     # stopped. This includes WAL contents and is restorable as a single file.
@@ -271,8 +303,8 @@ def main():
                       file=sys.stderr)
 
         ensure_npanel_admin(compose, npub)
-        # A clean node has no web/relay certificate directories yet; Caddy's
-        # TLS listeners intentionally wait until service profiles generate them.
+        # A clean node has no web certificate yet; Caddy's TLS listeners wait
+        # until provisioning creates the shared web certificate.
         if was_initialized:
             subprocess.run(compose + ['up', '-d'], cwd=project, check=True,
                            stdout=subprocess.DEVNULL)
@@ -288,6 +320,11 @@ def main():
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         db_backup = backup_dir / 'sidecar.db'
         env_backup = backup_dir / 'ditto-relay.env'
+        project_env_backup = backup_dir / 'project.env'
+        if project_env_backup.exists():
+            shutil.copy2(project_env_backup, env_path)
+            os.chown(env_path, 0, 0)
+            os.chmod(env_path, 0o600)
         if db_backup.exists():
             for suffix in ('-wal', '-shm'):
                 pathlib.Path(str(db_path) + suffix).unlink(missing_ok=True)

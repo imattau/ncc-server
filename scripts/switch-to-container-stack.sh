@@ -16,6 +16,10 @@ set -a
 # shellcheck disable=SC1090
 source "$PROJECT_DIR/.env"
 set +a
+OPERATOR_IDENTITY_FILE="${NCC_IDENTITY_FILE:-/etc/ncc-server/operator-identity.json}"
+[[ -f "$OPERATOR_IDENTITY_FILE" ]] || die "operator identity is missing: $OPERATOR_IDENTITY_FILE"
+NCC_OPERATOR_PUBKEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pubkey"])' "$OPERATOR_IDENTITY_FILE")"
+export NCC_OPERATOR_PUBKEY
 
 rollback() {
   local rc=$?
@@ -47,6 +51,7 @@ done
 SIDECAR_NODE="${SIDECAR_NODE:-/opt/ncc-sidecar/.node/bin/node}"
 [[ -x "$SIDECAR_NODE" ]] || die 'the existing sidecar Node runtime is missing'
 "$SIDECAR_NODE" "$PROJECT_DIR/scripts/configure-npanel-host.mjs"
+"$SIDECAR_NODE" "$PROJECT_DIR/scripts/configure-ditto-web.mjs"
 
 switched=true
 systemctl stop caddy.service ncc-sidecar.service npanel.service tor@default.service
@@ -64,10 +69,10 @@ while (( SECONDS < deadline )); do
   if [[ "$healthy" == true ]] \
     && curl -fsS --max-time 5 http://127.0.0.1:3000/ >/dev/null \
     && curl -fsS --max-time 5 "http://127.0.0.1:${CONTENT_PORT:-8080}/" >/dev/null \
-    && curl -fsS --max-time 5 -H "Host: ${DASHBOARD_HOST}" "http://127.0.0.1:${CONTENT_PORT:-8080}/api/instance" | grep -Fq "${DASHBOARD_HOST}" \
-    && curl -fsS --max-time 5 -H "Host: ${DITTO_WEB_HOST}" "http://127.0.0.1:${CONTENT_PORT:-8080}/" | grep -qi 'ditto' \
+    && curl -fsSk --max-time 5 -H "X-NCC-Pubkey: ${NCC_OPERATOR_PUBKEY}" -H 'X-NCC-Service: npanel' "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/api/instance" | grep -Fq "${PUBLIC_IPV4}" \
+    && curl -fsSk --max-time 5 -H "X-NCC-Pubkey: ${NCC_OPERATOR_PUBKEY}" -H 'X-NCC-Service: ditto' "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/" | grep -qi 'ditto' \
     && curl -fsSk --max-time 5 "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/nsite/${SITE_NPUB:-npub1asy6ca3ppxa70e6z7lpm2d4tuh09sh3x5cg4485f0juwgvxm77kq6pl8fr}/" | grep -q 'NCC nsite served' \
-    && curl -fsSk --max-time 5 -H 'Accept: application/nostr+json' "https://127.0.0.1:${RELAY_TLS_PORT:-8444}/" | grep -q '"name"' \
+    && curl -fsSk --max-time 5 -H 'Accept: application/nostr+json' "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/relay/" | grep -q '"name"' \
     && ss -lnt | grep -q '127.0.0.1:9051'; then
     break
   fi

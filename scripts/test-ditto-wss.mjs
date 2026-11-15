@@ -1,6 +1,6 @@
 const relayUrl = process.argv[2];
 if (!relayUrl || !relayUrl.startsWith('wss://')) {
-  throw new Error('Usage: node scripts/test-ditto-wss.mjs wss://<relay-host>:8444/');
+  throw new Error('Usage: node scripts/test-ditto-wss.mjs wss://<relay-host>:8443/relay/');
 }
 
 if (typeof WebSocket === 'undefined') {

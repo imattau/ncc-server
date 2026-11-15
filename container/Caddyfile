@@ -4,22 +4,10 @@
 }
 
 :{$CONTENT_PORT} {
-	@npanel host {$DASHBOARD_HOST}
-	@ditto host {$DITTO_WEB_HOST}
-	handle @npanel {
-		reverse_proxy 127.0.0.1:3200 {
-			header_up Host {$DASHBOARD_HOST}
-		}
-	}
-	handle @ditto {
-		reverse_proxy 127.0.0.1:3210
-	}
-	handle {
-		root * {$CONTENT_ROOT}
-		encode gzip
-		try_files {path} /index.html
-		file_server
-	}
+	root * {$CONTENT_ROOT}
+	encode gzip
+	try_files {path} /index.html
+	file_server
 	log {
 		output stdout
 	}
@@ -27,13 +15,36 @@
 
 :{$CONTENT_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
-	@ditto host {$DITTO_WEB_HOST}
+	@npanel {
+		header X-NCC-Pubkey {$NCC_OPERATOR_PUBKEY}
+		header X-NCC-Service npanel
+	}
+	@ditto {
+		header X-NCC-Pubkey {$NCC_OPERATOR_PUBKEY}
+		header X-NCC-Service ditto
+	}
+	handle @npanel {
+		reverse_proxy 127.0.0.1:3200 {
+			header_up Host {$PUBLIC_IPV4}
+			header_up -X-NCC-Pubkey
+			header_up -X-NCC-Service
+		}
+	}
 	handle @ditto {
-		reverse_proxy 127.0.0.1:3210
+		reverse_proxy 127.0.0.1:3210 {
+			header_up Host {$PUBLIC_IPV4}
+			header_up -X-NCC-Pubkey
+			header_up -X-NCC-Service
+		}
+	}
+	handle_path /relay/* {
+		reverse_proxy 127.0.0.1:13131 {
+			header_up X-Real-IP {remote_host}
+		}
 	}
 	handle /nsite/* {
 		reverse_proxy 127.0.0.1:3200 {
-			header_up Host {$DASHBOARD_HOST}
+			header_up Host {$PUBLIC_IPV4}
 		}
 	}
 	handle {
@@ -47,10 +58,20 @@
 	}
 }
 
-:{$RELAY_TLS_PORT} {
-	tls {$RELAY_CERT} {$RELAY_KEY}
-	reverse_proxy 127.0.0.1:13131 {
-		header_up X-Real-IP {remote_host}
+:{$SEARCH_TLS_PORT} {
+	tls {$WEB_CERT} {$WEB_KEY}
+	reverse_proxy 127.0.0.1:3220 {
+		header_up Host {$PUBLIC_IPV4}
+	}
+	log {
+		output stdout
+	}
+}
+
+:{$SEARCH_API_TLS_PORT} {
+	tls {$WEB_CERT} {$WEB_KEY}
+	reverse_proxy 127.0.0.1:3230 {
+		header_up Host {$PUBLIC_IPV4}
 	}
 	log {
 		output stdout

@@ -67,6 +67,36 @@ test('resolveMedia (video, kind 21) uses the imeta `image` field as the thumbnai
   assert.equal(resolved.duration, 42.5);
 });
 
+test('resolveMedia collapses a repeated imeta key to its first value, not an array', () => {
+  // Found live, crawling real relays: a published video repeated `image`
+  // within one `imeta` tag. parseImetaTag's repeated-key handling (meant
+  // for `fallback`) applies to any key, so `primary.image` came back as
+  // `['...jpg', '...png']` -- an array landing straight in a TEXT column
+  // crashed the whole insert with "SQLite3 can only bind numbers, strings,
+  // bigints, buffers, and null" (see store.js's upsertRow). Every
+  // single-value field resolveMedia reads must survive this the same way.
+  const event = {
+    id: 'event-repeated-key',
+    pubkey: 'd'.repeat(64),
+    kind: KIND_VIDEO_NORMAL,
+    content: 'Two posters, one video',
+    tags: [
+      ['title', 'Repeated Key'],
+      [
+        'imeta',
+        'url https://cdn.example.com/clip.mp4',
+        'm video/mp4',
+        'image https://cdn.example.com/poster-1.jpg',
+        'image https://cdn.example.com/poster-2.jpg',
+      ],
+    ],
+  };
+
+  const resolved = resolveMedia(event);
+  assert.equal(typeof resolved.thumbnailUrl, 'string');
+  assert.equal(resolved.thumbnailUrl, 'https://cdn.example.com/poster-1.jpg');
+});
+
 test('resolveMedia captures blurhash and thumbhash from the imeta tag when present', () => {
   const event = {
     id: 'e-hash',

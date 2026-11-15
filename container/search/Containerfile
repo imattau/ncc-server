@@ -1,0 +1,41 @@
+ARG NODE_IMAGE=node:24.12.0-bookworm-slim
+
+# Multi-stage so the runtime image doesn't carry python3/make/g++, only
+# needed to build better-sqlite3's native binding -- same reasoning as
+# container/sidecar/Containerfile.
+FROM ${NODE_IMAGE} AS build
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY ncc-search/package.json ncc-search/package-lock.json ./
+RUN npm ci --omit=dev
+
+ARG SEARCH_UID=995
+ARG SEARCH_GID=997
+FROM ${NODE_IMAGE} AS runtime
+ARG SEARCH_UID=995
+ARG SEARCH_GID=997
+# No Nostr identity/signing key anywhere in this image or its runtime
+# config: this process only ever subscribes to relays (read) and serves
+# its own index over plain HTTP. It never calls `finalizeEvent`/publishes
+# anything, unlike the sidecar/relay/npanel/ditto-web profiles that share
+# the operator identity -- see ../../ncc-search/README.md and
+# ../../docs/deployment-compose.md step 2, neither of which this service
+# needs any part of.
+ENV NODE_ENV=production \
+    NCC_SEARCH_DB_PATH=/data/ncc-search.db \
+    NCC_SEARCH_HTTP_HOST=0.0.0.0 \
+    NCC_SEARCH_HTTP_PORT=7780
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && groupadd --gid "$SEARCH_GID" ncc-search \
+  && useradd --uid "$SEARCH_UID" --gid "$SEARCH_GID" --home-dir /app --shell /usr/sbin/nologin ncc-search \
+  && mkdir -p /app /data \
+  && chown -R "$SEARCH_UID:$SEARCH_GID" /app /data
+WORKDIR /app
+COPY --from=build /app/node_modules /app/node_modules
+COPY ncc-search/package.json ./
+COPY ncc-search/src ./src
+USER ${SEARCH_UID}:${SEARCH_GID}
+EXPOSE 7780
+CMD ["node", "src/index.js"]

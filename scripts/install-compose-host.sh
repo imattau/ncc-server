@@ -8,7 +8,7 @@ command -v apt-get >/dev/null || die 'automated host installation supports Debia
 
 if [[ ! -f "$PROJECT_DIR/.env" ]]; then
   install -m 0600 "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
-  echo 'Created .env from .env.example. Set DASHBOARD_HOST, DITTO_WEB_HOST, and RELAY_PUBLIC_URL, then run this script again.'
+  echo 'Created .env from .env.example. Set PUBLIC_IPV4, then run this script again.'
   exit 2
 fi
 
@@ -47,14 +47,15 @@ PY
   export "$name"
 }
 
-ask_value DASHBOARD_HOST 'Unique hostname for Npanel dashboard (no scheme or path)'
-ask_value DITTO_WEB_HOST 'Unique hostname for Ditto web app (no scheme or path)'
-ask_value RELAY_PUBLIC_URL 'Public Ditto Relay URL (wss://host:port/)'
-ask_value PUBLIC_ENDPOINT_HOST 'Public IP/hostname for the static web locator (not a dashboard hostname)'
-[[ "$DASHBOARD_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || die 'DASHBOARD_HOST must be a hostname'
-[[ "$DITTO_WEB_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || die 'DITTO_WEB_HOST must be a hostname'
-[[ "$RELAY_PUBLIC_URL" =~ ^wss://[^/]+(:[0-9]+)?/?$ ]] || die 'RELAY_PUBLIC_URL must be a public wss:// URL'
-[[ "$PUBLIC_ENDPOINT_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || die 'PUBLIC_ENDPOINT_HOST must be a public hostname or IPv4 address'
+ask_value PUBLIC_IPV4 'Server public IPv4 address (no DNS name, scheme, or port)'
+python3 - "$PUBLIC_IPV4" <<'PY'
+import ipaddress, sys
+try:
+    if ipaddress.ip_address(sys.argv[1]).version != 4:
+        raise ValueError('IPv4 required')
+except ValueError as error:
+    raise SystemExit(f'PUBLIC_IPV4 must be a public IPv4 address: {error}')
+PY
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -66,6 +67,7 @@ install -d -m 0755 "$CONTENT_ROOT"
 install -d -o "$SIDECAR_UID" -g "$SIDECAR_GID" -m 0700 "$SIDECAR_DATA_DIR"
 install -d -o "$SIDECAR_UID" -g "$SIDECAR_CERT_GID" -m 0750 "$SIDECAR_CERT_DIR"
 install -d -o "$NPANEL_UID" -g "$NPANEL_GID" -m 0750 "$NPANEL_DATA_DIR"
+install -d -o "$SEARCH_UID" -g "$SEARCH_GID" -m 0750 "$SEARCH_DATA_DIR"
 install -d -o "$TOR_UID" -g "$TOR_GID" -m 0750 "$TOR_DATA_DIR"
 install -d -o root -g root -m 0755 "$(dirname "$TOR_CONFIG_FILE")"
 if [[ ! -e "$TOR_CONFIG_FILE" ]]; then install -o root -g root -m 0644 /dev/null "$TOR_CONFIG_FILE"; fi
@@ -74,7 +76,7 @@ if [[ ! -e "$DITTO_ENV_FILE" ]]; then
   umask 077
   cat > "$DITTO_ENV_FILE" <<EOF
 # First-run placeholder. Replaced by the operator identity setup before relay start.
-RELAY_URL=$RELAY_PUBLIC_URL
+RELAY_URL=wss://$PUBLIC_IPV4:${CONTENT_TLS_PORT}/relay/
 NOSTR_SECRET_KEY=setup-pending
 RELAY_PORT=127.0.0.1:13131
 IP_HEADER=X-Real-IP
@@ -103,9 +105,11 @@ fi
 docker volume inspect "$OPENSEARCH_VOLUME" >/dev/null 2>&1 || docker volume create "$OPENSEARCH_VOLUME" >/dev/null
 "${COMPOSE[@]}" config >/dev/null
 "${COMPOSE[@]}" build
-# Start everything needed by first-run provisioning. Ditto Relay and Caddy
+# Start everything needed by first-run provisioning. ncc-search needs no
+# identity of its own (see docs/deployment-compose.md step 2), so it starts
+# here with the other identity-independent services. Ditto Relay and Caddy
 # remain stopped until the shared key is installed by the operator workstation.
-"${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web
+"${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web search search-ui
 
 echo 'Base Compose services are running. From the operator workstation, run:'
 echo '  NCC_SSH_TARGET=user@<host> make first-run-identity'

@@ -1,14 +1,13 @@
 # Compose installation and deployment
 
-This guide installs the supported NCC-Server bundle on a dedicated Debian 12
-or Ubuntu host. New users can follow [Quick start](../README.md#quick-start);
-this page explains configuration, identity, networking, verification, and
-recovery in more detail.
+This guide explains a fresh Docker Compose installation, networking,
+verification, and recovery on a dedicated Debian 12 or Ubuntu host.
 
 The bundle uses Docker Compose for the NCC-06 sidecar, Caddy, Npanel, Ditto
-Relay, Ditto Web, OpenSearch, and Tor. Caddy and the sidecar use host
-networking. Do not install the bundle where another service owns the ports or
-Caddy configuration.
+Relay, Ditto Web, ncc-search (the Nostr content search engine and its UI),
+OpenSearch, and Tor. Caddy and the sidecar use host networking. Do not
+install the bundle where another service owns the ports or Caddy
+configuration.
 
 ## Requirements and network preparation
 
@@ -29,30 +28,33 @@ Caddy configuration.
 
 ### Public addresses
 
-Create these DNS records before starting:
+Set the server's public IPv4 address. No DNS records are required; NCC service
+locators publish IP-based URLs. NCC Browser sends the resolved pubkey and
+service ID to Caddy in routing headers, allowing core services to share one
+HTTPS listener:
 
 | Environment value | Purpose |
 | --- | --- |
-| PUBLIC_ENDPOINT_HOST | Public IP or hostname for the web locator |
-| DASHBOARD_HOST | Hostname for Npanel |
-| DITTO_WEB_HOST | Hostname for Ditto Web |
-| RELAY_PUBLIC_URL | Public Ditto Relay URL, normally wss://<relay-host>:8444/ |
+| PUBLIC_IPV4 | Public IPv4 address clients use to reach the server |
 
-The dashboard and Ditto Web hostnames must resolve to the server's public IP.
-Use an A record for IPv4. IPv6 is disabled in the default profiles.
+IPv6 is disabled in the default profiles.
 
 Forward and allow these TCP ports:
 
 | Port | Destination | Purpose |
 | --- | --- | --- |
-| 8080 | VM port 8080 | HTTP and onion web traffic |
-| 8443 | VM port 8443 | Pinned HTTPS |
-| 8444 | VM port 8444 | WSS relay |
+| 8080 | VM port 8080 | Optional HTTP; local Tor onion target |
+| 8443 | VM port 8443 | Pinned HTTPS and WSS for core NCC services |
+| 8447 | VM port 8447 | Pinned HTTPS ncc-search UI |
+| 8448 | VM port 8448 | Pinned HTTPS ncc-search API |
 
-Do not forward ports 3000, 3200, 3201, 9050, 9051, 9200, or 13131. The sidecar
-admin port, Npanel backends, Tor, OpenSearch, and relay backend are local
-services. Onion access uses outbound Tor connections and needs no router
-forward.
+Only 8443 is required for the core NCC services. Forward 8447 and 8448 only if
+you want the separate ncc-search UI and API reachable from outside.
+
+Do not forward ports 3000, 3200, 3201, 3220, 3230, 9050, 9051, 9200, or 13131.
+The sidecar admin port, Npanel backends, ncc-search's own containers, Tor,
+OpenSearch, and relay backend are local services. Onion access uses outbound
+Tor connections and needs no router forward.
 
 If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
@@ -73,10 +75,8 @@ sudo chmod 600 .env
 sudo make install-compose-host
 ~~~
 
-The installer prompts for the four public address values above and saves them
-in .env. Check the values before continuing. If you are adapting an existing
-host, also review the data directories and numeric user/group IDs in .env
-before installation.
+The installer prompts for the server's public IPv4 address and saves it in
+.env. It derives the relay WSS URL from that address and the configured port.
 
 The installer installs Docker Engine and Compose, creates persistent
 directories, stages the pinned Ditto Relay source, builds the images, and
@@ -130,6 +130,12 @@ For root SSH access, use NCC_SSH_TARGET=root@<vm-address>. For a regular
 account, the account must be able to run sudo on the VM. The default remote
 checkout is /opt/ncc-server; set NCC_REMOTE_PROJECT_DIR if yours differs.
 
+ncc-search (the search containers started in step 1) needs none of this: it
+never signs or publishes a Nostr event, only subscribes to relays (read) and
+serves its own index over plain HTTP, so it has no operator identity, signer,
+or certificate of its own to provision. It comes up and starts crawling as
+soon as `make bundle-up` starts the stack, independent of this identity pass.
+
 ## 3. Provision the standard service records
 
 Run this on the VM:
@@ -140,11 +146,17 @@ sudo make bundle-provision-services
 ~~~
 
 The provisioner creates the web profile first (sidecar record ID 2) and relay
-second (ID 3), followed by Npanel and Ditto Web. The first two IDs are fixed
-because Caddy reads their generated certificate files from matching paths.
-All four records use the operator identity. The web profile advertises HTTPS
-on port 8443 and maps its onion service to local HTTP port 8080. The relay
-advertises WSS on port 8444.
+second (ID 3), followed by Npanel, Ditto Web, and ncc-search. The first two
+IDs are fixed because Caddy reads their generated certificate files from
+matching paths. All five records use the operator identity -- including
+ncc-search's, even though that process itself never signs or publishes an
+event; it gets a record purely so it has a discoverable ncc://<npub>/search/
+address, the same reasoning as Npanel/Ditto Web. The web profile advertises
+HTTPS on port 8443 and maps its onion service to local HTTP port 8080. Npanel
+and Ditto Web also use pinned HTTPS on 8443; NCC Browser's routing headers
+select their backends. Ditto Relay advertises WSS at
+`wss://<IP>:8443/relay/`, which Caddy routes by path so ordinary WebSocket
+clients need no custom headers.
 
 The bundle's default publication relays are wss://relay.primal.net/ and
 wss://relay.ditto.pub/. The manager profile does not create its own onion
@@ -186,7 +198,8 @@ operator identity after first-run setup.
 
 Put the test app or your own page in the configured content directory before
 running the full health check. On the VM, it checks the web route, dashboard,
-Ditto Web, relay NIP-11 response, and container states:
+Ditto Web, ncc-search's UI and API, relay NIP-11 response, and container
+states:
 
 ~~~sh
 cd /opt/ncc-server
@@ -194,7 +207,7 @@ sudo make bundle-health
 ~~~
 
 The nsite checks are skipped unless you pass SITE_NPUB. The dashboard and Ditto
-Web checks require their corresponding service profiles and DNS hostnames.
+Web checks use their dedicated HTTPS ports and require their service profiles.
 
 If you already host an nsite, include its npub to check its HTTPS route and
 root-relative JavaScript asset:
@@ -221,7 +234,7 @@ make verify NPUB=npub1... SERVICE=web RELAYS="wss://relay.example/ wss://relay.o
 To test the relay's WSS protocol from the workstation:
 
 ~~~sh
-make test-ditto-wss RELAY_URL=wss://relay.example.net:8444/
+make test-ditto-wss RELAY_URL=wss://203.0.113.10:8443/relay/
 ~~~
 
 This test disables TLS verification for the local smoke request because the
@@ -279,7 +292,10 @@ Ditto Relay environment automatically. For manual recovery, stop the Compose
 stack and restore files from one matching timestamped backup before starting
 it again.
 
-The bundle pins sidecar, Npanel, Ditto Relay, and Ditto Web revisions. Review
+The bundle pins sidecar, Npanel, Ditto Relay, and Ditto Web revisions.
+ncc-search and its UI build from this repository's own `ncc-search/`
+directory instead of a pinned external revision, so they rebuild from
+whatever is checked out when you run `make bundle-build`/`bundle-up`. Review
 the release notes and back up persistent data before changing a pin or
 upgrading images.
 
