@@ -16,6 +16,9 @@ RUN git init \
 COPY ncc-router-basename.mjs /tmp/ncc-router-basename.mjs
 RUN node /tmp/ncc-router-basename.mjs /src/src/AppRouter.tsx \
     && rm /tmp/ncc-router-basename.mjs
+COPY ncc-referrer-policy.mjs /tmp/ncc-referrer-policy.mjs
+RUN node /tmp/ncc-referrer-policy.mjs /src/index.html \
+    && rm /tmp/ncc-referrer-policy.mjs
 COPY ncc-fetch-compat.mjs /tmp/ncc-fetch-compat.mjs
 RUN node /tmp/ncc-fetch-compat.mjs /src/src/components/AppProvider.tsx \
     && rm /tmp/ncc-fetch-compat.mjs

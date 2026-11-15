@@ -3,16 +3,6 @@
 	auto_https disable_redirects
 }
 
-# ncc-browser's webview sends a CORS preflight (OPTIONS) for every
-# subresource of a page it navigated to via ncc://, even same-origin ones
-# -- found live on ditto-web's own assets, not just ncc-search's. Caddy's
-# own file_server (serving web's content root and nsite paths), ditto-web's
-# nginx, and search-ui's nginx all answer OPTIONS with a bare 405 and no
-# CORS headers by default, so the browser aborts every asset fetch after
-# the document itself, leaving the page blank. This answers the preflight
-# before it ever reaches a backend, for every port that serves a
-# browser-facing page.
-#
 # Every browser-facing service gets its own dedicated port rather than
 # sharing one origin via a custom X-NCC-Pubkey/X-NCC-Service request
 # header: that scheme broke in several different ways for services we
@@ -25,23 +15,29 @@
 # tab is open under the same npub. A dedicated port sidesteps all of that
 # at once: there's only one possible destination, so none of those
 # ambiguity-dependent failure modes exist on it.
-(cors_preflight) {
-	# ncc-browser's protocol handler fetches the upstream resource and then
-	# returns it under the ncc:// origin. The preflight alone is insufficient:
-	# Chromium also requires ACAO on the actual GET/HEAD response. Without it,
-	# the upstream can log HTTP 200 while the browser's fetch rejects and the
-	# NCC protocol reports its generic 502 endpoint-unreachable page.
+#
+# ncc-browser itself no longer attaches x-ncc-pubkey/x-ncc-service to its
+# upstream requests either (removed in ncc-browser's own routing.ts, since
+# nothing server-side has consumed them since the move above) -- their
+# mere presence on an otherwise-simple GET/HEAD used to force a CORS
+# preflight (OPTIONS) before every single subresource load, which only
+# worked if the destination happened to answer OPTIONS correctly. Caddy's
+# own file_server, ditto-web's nginx, and search-ui's nginx all didn't, by
+# default -- found live on ditto's and search's own assets. With the
+# headers gone, no preflight is triggered at all for a plain resource
+# load, so there's nothing left to answer here.
+(cors_response) {
+	# ncc-browser's protocol handler still fetches the upstream resource
+	# and returns it under the ncc:// origin, so Chromium still treats the
+	# response as cross-origin and requires this on the actual GET/HEAD
+	# response even without a preflight. Without it, the upstream can log
+	# HTTP 200 while the browser's fetch rejects it and the NCC protocol
+	# reports its generic 502 endpoint-unreachable page.
 	header Access-Control-Allow-Origin "*"
-	@cors_preflight method OPTIONS
-	handle @cors_preflight {
-		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-		header Access-Control-Allow-Headers "*"
-		respond 204
-	}
 }
 
 :{$CONTENT_PORT} {
-	import cors_preflight
+	import cors_response
 	root * {$CONTENT_ROOT}
 	encode gzip
 	try_files {path} /index.html
@@ -53,7 +49,7 @@
 
 :{$CONTENT_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
-	import cors_preflight
+	import cors_response
 	handle /nsite/* {
 		reverse_proxy 127.0.0.1:3200 {
 			header_up Host {$PUBLIC_IPV4}
@@ -89,7 +85,7 @@
 
 :{$DITTO_WEB_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
-	import cors_preflight
+	import cors_response
 	# A dedicated port, not X-NCC-Pubkey/X-NCC-Service header routing, for
 	# the same reason as npanel further down: ditto-web is a generic third-party
 	# Nostr client whose own JS does normal same-origin things (relative
@@ -111,7 +107,7 @@
 
 :{$NPANEL_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
-	import cors_preflight
+	import cors_response
 	# A dedicated port, bypassing the X-NCC-Pubkey/X-NCC-Service header
 	# routing above, on purpose: npanel's own frontend probes
 	# `fetch(window.location.origin + '/api/instance')` on load to detect
@@ -147,7 +143,7 @@
 	# the page load itself. Keeping both under one port is what makes the
 	# trust the client already established actually cover the API too.
 	handle /search* {
-		# No `import cors_preflight` here, deliberately: the backend's own
+		# No `import cors_response` here, deliberately: the backend's own
 		# @fastify/cors already answers preflights and sets a correct,
 		# origin-reflecting Access-Control-Allow-Origin on every response.
 		# Caddy's own blanket "*" would land on top of that, producing TWO
@@ -160,7 +156,7 @@
 		}
 	}
 	handle {
-		import cors_preflight
+		import cors_response
 		reverse_proxy 127.0.0.1:3220 {
 			header_up Host {$PUBLIC_IPV4}
 		}
