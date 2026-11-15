@@ -30,7 +30,9 @@ export function discoverArticles(pool, relays, onArticle, options = {}) {
   const filter = { kinds: [KIND_ARTICLE_EVENT] };
   if (options.since) filter.since = options.since;
 
-  const sub = pool.subscribeMany(relays, [filter], {
+  // See discovery.js's comment on this same call shape: subscribeMany takes
+  // a single filter object here, not `[filter]`.
+  const sub = pool.subscribeMany(relays, filter, {
     onevent(event) {
       const dTag = event.tags.find((t) => t[0] === 'd')?.[1];
       if (!dTag) return;

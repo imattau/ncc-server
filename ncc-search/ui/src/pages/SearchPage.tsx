@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { SearchBar } from '@/components/SearchBar';
 import { ResultRow } from '@/components/ResultRow';
+import { MediaGridCard } from '@/components/MediaGridCard';
 import { LoginButton } from '@/components/LoginButton';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useQueryState } from '@/hooks/useQueryState';
@@ -17,8 +18,12 @@ import { cn } from '@/lib/utils';
 // interests can re-rank the set -- otherwise personalization could only
 // ever reorder the same 20 results the backend's own relevance ranking
 // already chose, and a followed author just outside that cutoff would
-// never surface no matter how strong the boost.
-const PERSONALIZED_LIMIT = 50;
+// never surface no matter how strong the boost. 100 is the backend's own
+// hard cap (server.js), so there's no reason to ask for less here -- tested
+// this against a real signed-in account and found a genuine followed-author
+// match sitting at position 57 of 74 for a real query, which the original
+// value of 50 would have missed entirely.
+const PERSONALIZED_LIMIT = 100;
 
 const WORDMARK = (
   <span className="text-xl font-normal tracking-tight text-foreground select-none sm:text-2xl">
@@ -75,6 +80,7 @@ export function SearchPage() {
     [results],
   );
   const filtered = results.filter((r) => matchesFilter(r, filter));
+  const isGridView = filter === 'image' || filter === 'video';
 
   function handleSubmit(value: string) {
     setQuery(value);
@@ -161,6 +167,16 @@ export function SearchPage() {
                   <p className="max-w-xl text-sm text-foreground/80">
                     No results of this type for &ldquo;{result.data.query}&rdquo;.
                   </p>
+                ) : isGridView ? (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+                    {filtered.map((r) => (
+                      <MediaGridCard
+                        key={`${r.pubkey}:${r.itemId}:${r.source}`}
+                        result={r}
+                        isFollowed={isFollowed(r, personalization)}
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <div className="max-w-2xl">
                     {filtered.map((r) => (

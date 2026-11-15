@@ -184,6 +184,26 @@ server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
   just NCC/nsite discovery, since the pool is shared across all adapters --
   a single flaky relay in `NCC_SEARCH_RELAYS` would otherwise have been able
   to kill the whole indexer.
+- **Fixed: discovery never actually worked against a real relay, at all.**
+  `pool.subscribeMany(relays, filter, params)` in this pinned `nostr-tools`
+  version takes a single filter OBJECT as its second argument, not an array
+  of filters -- every discovery function in this project
+  (`discovery.js`/`article.js`/`media.js`/`nsite.js`) called it as
+  `subscribeMany(relays, [filter], {...})`, the array-wrapped shape older
+  nostr-tools/NDK-style APIs use. The relay doesn't fail loudly on this: it
+  sends `CLOSED ... "bad req: provided filter is not an object"`, which
+  `subscribeMany` only surfaces through an `onclose` callback nothing here
+  was listening for -- so every subscription silently received zero events,
+  forever, with no error anywhere in this project's own logs. The entire
+  test suite stayed green throughout, because it exercises `resolve*()`
+  functions directly with synthetic events and never exercises the real
+  wire call. Only caught by running the real backend against
+  `wss://relay.primal.net` end-to-end (prompted by trying this out with a
+  real NIP-07 extension) and noticing the database stayed empty; confirmed
+  with a standalone script that logged `oneose`/`onclose` explicitly. Fixed
+  by removing the array wrapping in all four call sites -- verified with the
+  same standalone script: 0 events before, 500 after, against the same live
+  relay and filter.
 - **NIP-50 adoption is thin and inconsistent** (confirmed while researching
   this project -- strfry's own support was still an open PR at the time of
   writing). Expect `capableRelays()` to return `[]` for most relay lists

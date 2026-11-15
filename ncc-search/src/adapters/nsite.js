@@ -57,7 +57,9 @@ export function discoverNsites(pool, relays, onCandidate, options = {}) {
   const filter = { kinds: [KIND_ROOT_SITE, KIND_NAMED_SITE] };
   if (options.since) filter.since = options.since;
 
-  const sub = pool.subscribeMany(relays, [filter], {
+  // See discovery.js's comment on this same call shape: subscribeMany takes
+  // a single filter object here, not `[filter]`.
+  const sub = pool.subscribeMany(relays, filter, {
     onevent(event) {
       const dTag = event.tags.find((t) => t[0] === 'd')?.[1] || null;
       // Malformed per spec (root MUST NOT have `d`, named MUST have one).

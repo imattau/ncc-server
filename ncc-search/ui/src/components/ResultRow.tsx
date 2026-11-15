@@ -1,3 +1,4 @@
+import { Play } from 'lucide-react';
 import type { ResultKind, SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useMediaProbe } from '@/hooks/useMediaProbe';
@@ -114,78 +115,58 @@ function StatusDot({ status }: { status: StatusInfo }) {
   );
 }
 
-const PREVIEW_CLASS = 'mt-2 max-h-80 rounded-md border border-border object-contain';
+const COMPACT_THUMB_CLASS =
+  'size-20 shrink-0 rounded-md border border-border object-cover bg-accent sm:size-24';
 
-// Three-tier display while the real image loads, cheapest-first:
-//   1. blurhash placeholder (instant, decoded on the main thread -- see
-//      useBlurhashPlaceholder; a handful of pixels, not worth a worker)
-//   2. the worker-resized, re-encoded (smaller) image, once ready
-//   3. the original full-size URL directly, if resizing fails for any
-//      reason (no CORS on the host, network error, unsupported browser) --
-//      this is a fallback, not a requirement: every image stays viewable
-//      even when the optimization can't apply.
-// Never shows nothing: a plain skeleton box fills the gap before the first
-// of these is available.
-function ImagePreview({ result, mediaSrc }: { result: SearchResult; mediaSrc: string }) {
+// The small thumbnail-beside-text layout every real search engine uses
+// outside its dedicated Images/Videos tab -- a full-width media block makes
+// sense when the user asked to see images/videos specifically, but clutters
+// a mixed "All" list where most rows are plain text. Reuses the same
+// resize/blurhash pipeline as the full MediaPreview (cached by URL, so
+// switching tabs never re-fetches), just rendered small.
+function CompactThumbnail({ result }: { result: SearchResult }) {
+  const isImage = result.kind === 'image';
   const placeholder = useBlurhashPlaceholder(result.blurhash);
-  const resized = useResizedImage(mediaSrc);
-  const alt = result.description || result.title || 'image preview';
+  const resized = useResizedImage(isImage ? sanitizeHref(result.mediaUrl) : null);
 
-  if (resized.status === 'ready' && resized.blobUrl) {
-    return <img src={resized.blobUrl} alt={alt} loading="lazy" decoding="async" className={PREVIEW_CLASS} />;
+  let src: string | null;
+  if (isImage) {
+    if (resized.status === 'ready' && resized.blobUrl) src = resized.blobUrl;
+    else if (resized.status === 'error') src = sanitizeHref(result.mediaUrl);
+    else src = placeholder;
+  } else {
+    // video and article thumbnails are a plain poster/cover image -- no
+    // resize worker needed, they're not meant to be large to begin with.
+    src = sanitizeHref(result.thumbnailUrl) ?? placeholder;
   }
-  if (resized.status === 'error') {
-    return <img src={mediaSrc} alt={alt} loading="lazy" decoding="async" className={PREVIEW_CLASS} />;
+
+  if (!src) {
+    return <div aria-hidden="true" className={`${COMPACT_THUMB_CLASS} animate-pulse`} />;
   }
-  if (placeholder) {
-    return (
-      <img
-        src={placeholder}
-        alt={alt}
-        aria-busy="true"
-        className={`${PREVIEW_CLASS} blur-sm`}
-        style={{ maxWidth: 320 }}
-      />
-    );
-  }
+
+  const alt = result.title || result.description || `${result.kind} thumbnail`;
   return (
-    <div
-      aria-hidden="true"
-      className="mt-2 h-40 w-full max-w-sm animate-pulse rounded-md border border-border bg-accent"
-    />
+    <div className="relative shrink-0">
+      <img src={src} alt={alt} loading="lazy" decoding="async" className={COMPACT_THUMB_CLASS} />
+      {result.kind === 'video' && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 flex items-center justify-center rounded-md bg-black/10"
+        >
+          <span className="flex size-6 items-center justify-center rounded-full bg-black/60">
+            <Play className="size-3 fill-white text-white" />
+          </span>
+        </span>
+      )}
+    </div>
   );
 }
 
-function VideoPreview({ result, mediaSrc }: { result: SearchResult; mediaSrc: string }) {
-  const posterSrc = sanitizeHref(result.thumbnailUrl);
-  const placeholder = useBlurhashPlaceholder(result.blurhash);
-
-  return (
-    <video
-      controls
-      preload="metadata"
-      poster={posterSrc ?? placeholder ?? undefined}
-      className="mt-2 max-h-80 w-full max-w-md rounded-md border border-border"
-    >
-      <source src={mediaSrc} type={result.mediaType ?? undefined} />
-    </video>
-  );
-}
-
-// Only rendered once sanitizeHref approves the URL's scheme (http/https) --
-// same rule as the title link, applied to a src/poster this time instead of
-// an href. The browser fetches/decodes the media directly from its
-// original host either way, never proxied through this UI's backend.
-function MediaPreview({ result }: { result: SearchResult }) {
-  const mediaSrc = sanitizeHref(result.mediaUrl);
-  if (!mediaSrc) return null;
-  return result.kind === 'image' ? (
-    <ImagePreview result={result} mediaSrc={mediaSrc} />
-  ) : (
-    <VideoPreview result={result} mediaSrc={mediaSrc} />
-  );
-}
-
+// Used for every result EXCEPT the Images/Videos tabs, which render
+// MediaGridCard's grid instead -- see SearchPage.tsx. So an image/video
+// result reaching this component only ever happens in "All" or one of the
+// other mixed tabs, where it always gets the compact thumbnail treatment,
+// never a full-size preview (that's what the dedicated grid is for).
 export function ResultRow({
   result,
   isFollowed = false,
@@ -200,6 +181,10 @@ export function ResultRow({
   const identity = truncateIdentity(rawIdentity);
 
   const isMedia = MEDIA_KINDS.has(result.kind);
+  // A compact thumbnail applies to any image/video result, plus articles
+  // that carry a NIP-23 `image` cover.
+  const useCompactThumbnail = isMedia || (result.kind === 'article' && !!result.thumbnailUrl);
+
   // Clicking an image/video result's title opens the original file --
   // there's no separate "page" for it the way there is for an
   // ncc-service/nsite result.
@@ -208,8 +193,8 @@ export function ResultRow({
   const body = result.snippet || result.description || '';
   const status = useResultStatus(result);
 
-  return (
-    <article className="max-w-2xl py-5 first:pt-0">
+  const content = (
+    <>
       {href ? (
         <a
           href={href}
@@ -243,13 +228,22 @@ export function ResultRow({
         )}
       </div>
 
-      {isMedia && <MediaPreview result={result} />}
-
       {body && (
         <p className="mt-1 text-sm leading-snug text-foreground/80">
           <Snippet text={body} />
         </p>
       )}
-    </article>
+    </>
   );
+
+  if (useCompactThumbnail) {
+    return (
+      <article className="flex max-w-2xl gap-3 py-5 first:pt-0">
+        <CompactThumbnail result={result} />
+        <div className="min-w-0 flex-1">{content}</div>
+      </article>
+    );
+  }
+
+  return <article className="max-w-2xl py-5 first:pt-0">{content}</article>;
 }

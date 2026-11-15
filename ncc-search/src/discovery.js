@@ -21,7 +21,15 @@ export function discoverServiceRecords(pool, relays, onRecord, options = {}) {
   const filter = { kinds: [SERVICE_RECORD_KIND] };
   if (options.since) filter.since = options.since;
 
-  const sub = pool.subscribeMany(relays, [filter], {
+  // This version of nostr-tools' SimplePool.subscribeMany(relays, filter, params)
+  // takes a single filter OBJECT, not an array of filters -- wrapping it in
+  // `[filter]` (as older nostr-tools/NDK-style APIs expect) makes the relay
+  // reject the REQ outright ("bad req: provided filter is not an object"),
+  // which subscribeMany itself swallows into a oneclose callback rather than
+  // throwing. Confirmed this was silently breaking every discovery filter in
+  // this project by testing live against wss://relay.primal.net: zero events
+  // ever arrived despite the relay demonstrably having matching data.
+  const sub = pool.subscribeMany(relays, filter, {
     onevent(event) {
       const serviceId = event.tags.find((t) => t[0] === 'd')?.[1];
       if (!serviceId) return;

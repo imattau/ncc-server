@@ -54,7 +54,9 @@ export function discoverMedia(pool, relays, onMedia, options = {}) {
   const filter = { kinds: MEDIA_KINDS };
   if (options.since) filter.since = options.since;
 
-  const sub = pool.subscribeMany(relays, [filter], {
+  // See discovery.js's comment on this same call shape: subscribeMany takes
+  // a single filter object here, not `[filter]`.
+  const sub = pool.subscribeMany(relays, filter, {
     onevent(event) {
       if (ADDRESSABLE_KINDS.has(event.kind) && !event.tags.some((t) => t[0] === 'd')) return;
       if (!event.tags.some((t) => t[0] === 'imeta')) return; // nothing to render
