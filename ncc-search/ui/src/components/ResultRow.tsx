@@ -186,7 +186,14 @@ function MediaPreview({ result }: { result: SearchResult }) {
   );
 }
 
-export function ResultRow({ result }: { result: SearchResult }) {
+export function ResultRow({
+  result,
+  isFollowed = false,
+}: {
+  result: SearchResult;
+  /** Whether the signed-in NIP-07 user follows this result's author -- see lib/ranking.ts. */
+  isFollowed?: boolean;
+}) {
   const author = useAuthor(result.pubkey);
   const displayName = author.data?.metadata?.name?.trim();
   const rawIdentity = result.nip05 ?? displayName ?? result.npub ?? result.pubkey;
@@ -222,6 +229,12 @@ export function ResultRow({ result }: { result: SearchResult }) {
         <span className="truncate text-emerald-700 dark:text-emerald-400">{identity}</span>
         <span className="text-muted-foreground" aria-hidden="true">·</span>
         <span className="text-muted-foreground">{KIND_LABEL[result.kind]}</span>
+        {isFollowed && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <span className="font-medium text-blue-700 dark:text-blue-400">following</span>
+          </>
+        )}
         {status && (
           <>
             <span className="text-muted-foreground" aria-hidden="true">·</span>

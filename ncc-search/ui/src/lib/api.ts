@@ -39,6 +39,11 @@ export interface SearchResult {
   // encoding, no decoder implemented).
   blurhash?: string | null;
   thumbhash?: string | null;
+  // article/image/video only -- NIP-23/68/71 `t` tags, lowercased. null for
+  // ncc-service/nsite (no hashtag concept in those conventions). Used only
+  // for client-side ranking against a logged-in user's interests (see
+  // lib/ranking.ts) -- this backend computes no ranking itself.
+  hashtags?: string[] | null;
   // 'index' = resolved/verified by the backend crawler (or, for
   // article/image/video, simply discovered -- there's nothing to verify);
   // 'live' = a just-found NIP-50 relay hit, not yet even discovered by the

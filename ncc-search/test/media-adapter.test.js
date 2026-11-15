@@ -33,6 +33,7 @@ test('resolveMedia (picture, kind 20) keys by the event id, not a d tag', () => 
     tags: [
       ['title', 'Sunset'],
       ['imeta', 'url https://cdn.example.com/sunset.jpg', 'm image/jpeg', 'alt Sunset over water'],
+      ['t', 'photography'],
     ],
   };
 
@@ -43,6 +44,7 @@ test('resolveMedia (picture, kind 20) keys by the event id, not a d tag', () => 
   assert.equal(resolved.mediaType, 'image/jpeg');
   assert.equal(resolved.thumbnailUrl, 'https://cdn.example.com/sunset.jpg', 'an image is its own thumbnail');
   assert.match(resolved.body, /Sunset over water/);
+  assert.deepEqual(resolved.hashtags, ['photography']);
 });
 
 test('resolveMedia (video, kind 21) uses the imeta `image` field as the thumbnail, not the video url', () => {

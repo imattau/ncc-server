@@ -2,11 +2,23 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { SearchBar } from '@/components/SearchBar';
 import { ResultRow } from '@/components/ResultRow';
+import { LoginButton } from '@/components/LoginButton';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useQueryState } from '@/hooks/useQueryState';
 import { useSearch } from '@/hooks/useSearch';
+import { useNip07Login } from '@/hooks/useNip07Login';
+import { useFollows } from '@/hooks/useFollows';
+import { useInterests } from '@/hooks/useInterests';
 import type { SearchResult } from '@/lib/api';
+import { rankResults, isFollowed, type PersonalizationContext } from '@/lib/ranking';
 import { cn } from '@/lib/utils';
+
+// Requesting more than the default when a logged-in user's follows/
+// interests can re-rank the set -- otherwise personalization could only
+// ever reorder the same 20 results the backend's own relevance ranking
+// already chose, and a followed author just outside that cutoff would
+// never surface no matter how strong the boost.
+const PERSONALIZED_LIMIT = 50;
 
 const WORDMARK = (
   <span className="text-xl font-normal tracking-tight text-foreground select-none sm:text-2xl">
@@ -24,7 +36,10 @@ function matchesFilter(result: SearchResult, filter: KindFilter) {
 
 export function SearchPage() {
   const [query, setQuery] = useQueryState();
-  const result = useSearch(query);
+  const { pubkey, login, logout } = useNip07Login();
+  const follows = useFollows(pubkey);
+  const interests = useInterests(pubkey);
+  const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined);
   const hasQuery = query.trim().length > 0;
   const [filter, setFilter] = useState<KindFilter>('all');
 
@@ -34,7 +49,20 @@ export function SearchPage() {
     setFilter('all');
   }, [query]);
 
-  const results = result.data?.results ?? [];
+  const personalization: PersonalizationContext | null = pubkey
+    ? { follows: follows.data ?? new Set(), interests: interests.data ?? new Set() }
+    : null;
+
+  // Ranked once here, before filtering/counting, so a kind tab shows a
+  // personalized result set too instead of only the "All" tab. Depend on
+  // the two Sets directly, not `personalization` itself -- that object
+  // literal is rebuilt every render, which would otherwise re-rank on every
+  // keystroke/unrelated state change instead of only when the data that
+  // actually matters (results, follows, interests) changes.
+  const results = useMemo(
+    () => rankResults(result.data?.results ?? [], personalization),
+    [result.data, personalization?.follows, personalization?.interests],
+  );
   const counts = useMemo(
     () => ({
       all: results.length,
@@ -56,7 +84,10 @@ export function SearchPage() {
   // homepage -- not a hero banner, not a chat prompt.
   if (!hasQuery) {
     return (
-      <div className="flex min-h-dvh flex-col items-center px-4 pt-[18vh]">
+      <div className="relative flex min-h-dvh flex-col items-center px-4 pt-[18vh]">
+        <div className="absolute top-4 right-4 sm:top-6 sm:right-8">
+          <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
+        </div>
         <h1 className="mb-8">
           <span className="text-5xl font-normal tracking-tight text-foreground select-none">
             ncc<span className="text-muted-foreground">search</span>
@@ -65,6 +96,7 @@ export function SearchPage() {
         <SearchBar defaultValue="" onSubmit={handleSubmit} size="hero" className="max-w-xl" autoFocus />
         <p className="mt-6 max-w-sm text-center text-xs text-muted-foreground">
           Searches NCC-02 service records and nsites discovered across configured Nostr relays.
+          {pubkey && ' Signed in: results are prioritized by who you follow and your interests.'}
         </p>
       </div>
     );
@@ -82,6 +114,9 @@ export function SearchPage() {
           {WORDMARK}
         </button>
         <SearchBar defaultValue={query} onSubmit={handleSubmit} size="compact" className="max-w-xl" />
+        <div className="ml-auto">
+          <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
+        </div>
       </header>
 
       <main className="px-4 py-5 sm:px-8">
@@ -129,7 +164,11 @@ export function SearchPage() {
                 ) : (
                   <div className="max-w-2xl">
                     {filtered.map((r) => (
-                      <ResultRow key={`${r.pubkey}:${r.itemId}:${r.source}`} result={r} />
+                      <ResultRow
+                        key={`${r.pubkey}:${r.itemId}:${r.source}`}
+                        result={r}
+                        isFollowed={isFollowed(r, personalization)}
+                      />
                     ))}
                   </div>
                 )}

@@ -63,6 +63,13 @@ export function openStore(dbPath) {
       -- a different binary encoding than blurhash's string format.
       blurhash TEXT,
       thumbhash TEXT,
+      -- article/image/video only: t tags (NIP-23/68/71), stored as a JSON
+      -- array string. Not a ranking signal this backend computes anything
+      -- from -- it's exposed so the UI can match them against a logged-in
+      -- NIP-07 user's own interests to prioritize results client-side (see
+      -- ui/src/lib/ranking.ts). NCC-02/nsite have no hashtag concept, so
+      -- this stays null for those kinds.
+      hashtags TEXT,
       PRIMARY KEY (pubkey, item_id)
     );
 
@@ -82,13 +89,13 @@ export function openStore(dbPath) {
       anchored, used_fallback, attestation_count, is_revoked, ttl_seconds,
       last_resolved_at, last_reachable_at, last_status, last_error,
       title, description, body, media_url, media_type, thumbnail_url,
-      blurhash, thumbhash
+      blurhash, thumbhash, hashtags
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
       @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
-      @blurhash, @thumbhash
+      @blurhash, @thumbhash, @hashtags
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -113,7 +120,8 @@ export function openStore(dbPath) {
       media_type = COALESCE(excluded.media_type, services.media_type),
       thumbnail_url = COALESCE(excluded.thumbnail_url, services.thumbnail_url),
       blurhash = COALESCE(excluded.blurhash, services.blurhash),
-      thumbhash = COALESCE(excluded.thumbhash, services.thumbhash)
+      thumbhash = COALESCE(excluded.thumbhash, services.thumbhash),
+      hashtags = COALESCE(excluded.hashtags, services.hashtags)
   `);
 
   // Partial updates (e.g. attaching a NIP-05 handle without re-fetching
@@ -157,6 +165,7 @@ export function openStore(dbPath) {
       thumbnailUrl: null,
       blurhash: null,
       thumbhash: null,
+      hashtags: null,
       ...row,
     });
   }
@@ -273,6 +282,8 @@ export function openStore(dbPath) {
       thumbnailUrl: resolved.thumbnailUrl ?? null,
       blurhash: resolved.blurhash ?? null,
       thumbhash: resolved.thumbhash ?? null,
+      hashtags:
+        resolved.hashtags && resolved.hashtags.length ? JSON.stringify(resolved.hashtags) : null,
     });
   }
 
@@ -302,7 +313,7 @@ export function openStore(dbPath) {
   }
 
   function search(query, limit = 20) {
-    return db
+    const rows = db
       .prepare(
         `SELECT s.pubkey, s.npub, s.nip05, s.item_id AS "itemId", s.kind, s.endpoint,
                 s.anchored, s.attestation_count AS "attestationCount",
@@ -310,7 +321,7 @@ export function openStore(dbPath) {
                 s.title, s.description,
                 s.media_url AS "mediaUrl", s.media_type AS "mediaType",
                 s.thumbnail_url AS "thumbnailUrl",
-                s.blurhash, s.thumbhash,
+                s.blurhash, s.thumbhash, s.hashtags,
                 snippet(services_fts, 5, '[', ']', '…', 12) AS snippet
          FROM services_fts f
          JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
@@ -319,10 +330,12 @@ export function openStore(dbPath) {
          LIMIT ?`,
       )
       .all(query, limit);
+    return rows.map((row) => ({ ...row, hashtags: parseHashtags(row.hashtags) }));
   }
 
   function getService(pubkey, itemId) {
-    return db.prepare(`SELECT * FROM services WHERE pubkey = ? AND item_id = ?`).get(pubkey, itemId);
+    const row = db.prepare(`SELECT * FROM services WHERE pubkey = ? AND item_id = ?`).get(pubkey, itemId);
+    return row ? { ...row, hashtags: parseHashtags(row.hashtags) } : row;
   }
 
   function listStale(olderThanSeconds) {
@@ -347,6 +360,15 @@ export function openStore(dbPath) {
 function safeNpub(hexPubkey) {
   try {
     return nip19.npubEncode(hexPubkey);
+  } catch {
+    return null;
+  }
+}
+
+function parseHashtags(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
   } catch {
     return null;
   }

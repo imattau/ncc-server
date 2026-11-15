@@ -16,6 +16,7 @@
 //     malformed manifests)
 
 import { stripMarkdown } from './markdown.js';
+import { extractHashtags } from './hashtags.js';
 
 export const KIND_ARTICLE_EVENT = 30023;
 
@@ -62,6 +63,7 @@ export function resolveArticle(event) {
     mediaType: null,
     endpoint: null,
     publishedAt: publishedAt ? Number(publishedAt) : null,
+    hashtags: extractHashtags(event),
   };
 }
 
@@ -78,4 +80,5 @@ export function resolveArticle(event) {
  * @property {null} mediaType
  * @property {null} endpoint
  * @property {number|null} publishedAt
+ * @property {string[]} hashtags - from `t` tags, lowercased; [] if none
  */

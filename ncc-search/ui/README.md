@@ -5,11 +5,12 @@ plain SERP list, not a card grid or chat-style layout) for the `ncc-search`
 backend. React+Vite+TypeScript+Tailwind, in the spirit of
 [MKStack](https://soapbox.pub/tools/mkstack) — same core stack as this
 repo's [`test-app/`](../../test-app) — but trimmed down from the full
-MKStack template: no login, no routing library, no shadcn/ui kit beyond a
-`Skeleton` component, since a one-page, read-only search UI doesn't need
-publish/auth machinery or a polymorphic component library. The generic
-shadcn card/badge/button kit was tried first and dropped in favor of a
-plain list layout that actually reads like a search engine result.
+MKStack template: no routing library, no shadcn/ui kit beyond a `Skeleton`
+component, and login is NIP-07-only rather than `test-app`'s full
+nsec/bunker/extension-chooser `LoginArea`, since this app never publishes
+anything -- see "Personalization" below. The generic shadcn card/badge/
+button kit was tried first and dropped in favor of a plain list layout that
+actually reads like a search engine result.
 
 ## Division of labour
 
@@ -55,6 +56,49 @@ plain list layout that actually reads like a search engine result.
       anything else in that pipeline fails, `ResultRow.tsx` falls back to
       the plain `<img src={mediaUrl}>` this project started with — the
       optimization is additive, never a requirement to view a result.
+
+## Personalization (NIP-07 sign-in)
+
+Signing in identifies which pubkey's follows/interests should re-rank
+results — it is not a login *session* the way `test-app`'s `LoginArea` is.
+[`useNip07Login`](src/hooks/useNip07Login.ts) calls only
+`window.nostr.getPublicKey()` — never `signEvent` — the narrowest permission
+an extension can grant, since this app never publishes anything. The pubkey
+(public data) persists in `localStorage` so a reload doesn't force
+re-signing-in.
+
+Once signed in:
+- [`useFollows`](src/hooks/useFollows.ts) reads the user's NIP-02 contact
+  list (`kind:3`) for a follow-boost.
+- [`useInterests`](src/hooks/useInterests.ts) reads their NIP-51 interest
+  list (`kind:10015`) if they have one, unioned with the most-used hashtags
+  across their own recent notes (`kind:1`) as a fallback — most accounts
+  don't have a populated `kind:10015` list today, but do have hashtagged
+  notes. Doesn't follow `kind:10015`'s `a`-tag references to named
+  `kind:30015` sets; a real NIP-51 feature, skipped for now as another
+  relay round-trip for a signal few users have populated anyway.
+- [`lib/ranking.ts`](src/lib/ranking.ts) boosts followed authors above
+  hashtag-interest matches above everything else, stably — ties keep the
+  backend's own relevance order rather than whatever `Array.prototype.sort`
+  would otherwise leave them in. `SearchPage.tsx` also requests more results
+  (`PERSONALIZED_LIMIT = 50` instead of the default 20) when signed in, so
+  there's something beyond the first page to actually re-rank.
+- This backend computes none of this itself — it only exposes `hashtags`
+  per result (NIP-23/68/71 `t` tags; null for ncc-service/nsite, which have
+  no hashtag concept) for the UI to match against.
+
+**Bug caught live while verifying this**: `LoginButton` originally called
+`useNip07Login()` itself, and it's rendered in two places (landing view +
+compact header). Two hook instances means two independent `useState`s —
+signing out via one updated that button correctly but left `SearchPage`'s
+own `pubkey` (the one actually driving `useFollows`/`useInterests`) stale,
+confirmed by a personalization notice that kept reading "Signed in" after
+the header had already flipped back to "Sign in". Fixed by lifting the one
+`useNip07Login()` call to `SearchPage` and making `LoginButton` a controlled
+component (`pubkey`/`onSignIn`/`onSignOut` props) — verified by signing in
+and out with a mocked `window.nostr` and confirming both places update
+together on every transition, not just after a reload happens to
+resynchronize them from `localStorage`.
 
 ## Running it
 

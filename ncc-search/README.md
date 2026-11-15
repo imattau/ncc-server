@@ -100,6 +100,12 @@ content (src/adapters/article.js + media.js + content-crawl.js)
                     means no pending/schedule queue at all), plus the same
                     periodic NIP-05 enrichment pass nsite-crawl.js uses,
                     reusing nsite.js's resolveNip05() directly
+  hashtags.js    -- shared `t`-tag extraction for article.js/media.js (the
+                    only two conventions here that define one). This backend
+                    computes no ranking from them itself -- they're exposed
+                    so ui/'s NIP-07-signed-in ranking can match them against
+                    a user's own interests (see ui/README.md
+                    "Personalization")
 
 NIP-50 (src/nip11.js + adapters/nip50.js)   -- live search, not a crawl adapter
   Nip11Prober    -- fetches each relay's NIP-11 document (wss:// -> https://,

@@ -22,6 +22,8 @@
 //     alt, x (sha256), image (video preview thumbnail), duration.
 //   - `title` tag: required by both NIPs.
 
+import { extractHashtags } from './hashtags.js';
+
 export const KIND_PICTURE = 20;
 export const KIND_VIDEO_NORMAL = 21;
 export const KIND_VIDEO_SHORT = 22;
@@ -112,6 +114,7 @@ export function resolveMedia(event) {
     thumbhash: primary.thumbhash || null,
     endpoint: null,
     duration: primary.duration ? Number(primary.duration) : null,
+    hashtags: extractHashtags(event),
   };
 }
 
@@ -130,4 +133,5 @@ export function resolveMedia(event) {
  * @property {string|null} thumbhash
  * @property {null} endpoint
  * @property {number|null} duration
+ * @property {string[]} hashtags - from `t` tags, lowercased; [] if none
  */

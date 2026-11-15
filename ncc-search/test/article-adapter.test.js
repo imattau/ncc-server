@@ -21,6 +21,8 @@ test('resolveArticle extracts d/title/summary/image/published_at', () => {
       ['summary', 'A short summary'],
       ['image', 'https://example.com/cover.jpg'],
       ['published_at', '1700000000'],
+      ['t', 'Bitcoin'],
+      ['t', 'nostr'],
     ],
   });
 
@@ -33,6 +35,7 @@ test('resolveArticle extracts d/title/summary/image/published_at', () => {
   assert.equal(resolved.publishedAt, 1700000000);
   assert.equal(resolved.body, 'The body.');
   assert.equal(resolved.mediaUrl, null);
+  assert.deepEqual(resolved.hashtags, ['bitcoin', 'nostr']);
 });
 
 test('resolveArticle has no itemId (and is skippable) when the d tag is missing', () => {
