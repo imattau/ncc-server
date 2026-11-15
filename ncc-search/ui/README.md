@@ -197,8 +197,11 @@ build output for now rather than assuming it shares the main site's route.
 
 Done: the search page itself (landing view, results list, loading/error/
 empty states, URL-synced query via `?q=`, filter tabs with live counts,
-snippet match highlighting, `sanitizeHref`-gated result links/media src —
-see `src/lib/sanitize.ts`), profile display names via Nostrify, and
+snippet match highlighting, NIP-21 `nostr:` URI truncation + linking to
+njump.me within a result's body text (see `src/components/Snippet.tsx`;
+this app has no profile/post page of its own to link to instead),
+`sanitizeHref`-gated result links/media src — see `src/lib/sanitize.ts`),
+profile display names via Nostrify, and
 client-side image/video rendering + reachability probing (see above), safe
 search (see above), light/dark mode (see above), and a memory-bounded LRU
 cache for resized images (see above).
