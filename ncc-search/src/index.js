@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { SimplePool } from 'nostr-tools';
+import { WebSocket } from 'ws';
 import { config } from './config.js';
 import { openStore } from './store.js';
 import { startCrawler } from './crawl.js';
@@ -13,7 +14,21 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 const store = openStore(config.dbPath);
 // One pool, shared by every adapter, so they reuse the same relay
 // connections instead of each opening its own.
-const pool = new SimplePool();
+//
+// `websocketImplementation` is NOT cosmetic: nostr-tools' SimplePool
+// defaults to Node's native (undici-based) global `WebSocket`. That
+// implementation's `AbstractRelay.onerror` handler calls `this.ws.close()`
+// synchronously from inside the socket's own `error` event -- which, on a
+// failed/refused connection, re-enters undici's internal
+// failWebsocketConnection/closeWebSocketConnection dispatch and recurses
+// until the stack overflows, crashing the entire process. Reproduced this
+// directly (both against an unreachable port and against a momentary error
+// from a real public relay) while building the UI against this backend.
+// The `ws` package (already a dependency the sidecar itself uses for the
+// same reason) implements the same onopen/onmessage/onerror/onclose
+// interface without that reentrancy bug, so every relay connection this
+// process makes goes through it instead of the native implementation.
+const pool = new SimplePool({ websocketImplementation: WebSocket });
 
 const nccCrawler = startCrawler(config, store, pool);
 const nsiteCrawler = config.enableNsite ? startNsiteCrawler(config, store, pool) : null;
@@ -21,7 +36,7 @@ const nip50Adapter = config.enableNip50
   ? new Nip50Adapter(pool, config, { nccCrawler, nsiteCrawler })
   : null;
 
-const app = createServer(store, nip50Adapter);
+const app = createServer(store, nip50Adapter, { corsOrigin: config.corsOrigin });
 
 app
   .listen({ host: config.httpHost, port: config.httpPort })

@@ -143,6 +143,21 @@ server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
   (`fetched.title ?? existing?.title ?? resolved.title`) if `upsertNsite`'s
   fallback chain changes again -- it's easy to regress silently because
   every individual upsert still "succeeds".
+- **Fixed: a bad relay used to crash the whole process.** Node's native
+  (undici-based) global `WebSocket` -- what `nostr-tools`' `SimplePool`
+  defaults to -- has a reentrancy bug: its `AbstractRelay.onerror` handler
+  calls `this.ws.close()` synchronously from inside the socket's own `error`
+  event, which re-enters undici's internal close/fail dispatch and recurses
+  until the stack overflows, taking the entire Node process down with it.
+  Reproduced directly against both an unreachable port and a momentary error
+  from a real public relay (`wss://relay.damus.io`). `src/index.js` now
+  constructs the shared `SimplePool` with `websocketImplementation: WebSocket`
+  from the `ws` package (already a dependency the sidecar itself uses, for
+  the same reason) instead of the native implementation, which does not have
+  this bug. This matters for every relay this process ever connects to, not
+  just NCC/nsite discovery, since the pool is shared across all adapters --
+  a single flaky relay in `NCC_SEARCH_RELAYS` would otherwise have been able
+  to kill the whole indexer.
 - **NIP-50 adoption is thin and inconsistent** (confirmed while researching
   this project -- strfry's own support was still an open PR at the time of
   writing). Expect `capableRelays()` to return `[]` for most relay lists
@@ -178,7 +193,9 @@ something.
 
 ## UI
 
-See [`ui/README.md`](ui/README.md) — planned as an MKStack
-(React+Vite+Nostrify) frontend, same stack this repo's `test-app/` already
-uses, talking to this backend's `/search` endpoint plus Nostrify for
-client-side profile lookups and live re-checks.
+[`ui/`](ui/README.md) — a search-engine-style results page (React+Vite+
+TypeScript+Tailwind+Nostrify), built against this backend's `/search`
+endpoint. Needs `NCC_SEARCH_CORS_ORIGIN` left unset (the default) or set to
+the UI's own origin — the backend's CORS support exists specifically because
+the UI runs as a separate origin/port and a plain `fetch` from it fails
+silently without CORS headers (caught while standing the two up together).

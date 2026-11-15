@@ -28,4 +28,12 @@ export const config = {
   // if none of the configured relays support it (the common case today),
   // this costs one cached NIP-11 probe per relay and nothing per search.
   enableNip50: process.env.NCC_SEARCH_ENABLE_NIP50 !== 'false',
+  // Passed straight to @fastify/cors's `origin` option. `true` (default)
+  // reflects whatever Origin the browser sends -- fine for this
+  // unauthenticated, read-only search API (see server.js). Set to a
+  // specific origin string (or comma-separated list) to restrict it once
+  // ui/ has a fixed deployed origin.
+  corsOrigin: process.env.NCC_SEARCH_CORS_ORIGIN
+    ? listEnv('NCC_SEARCH_CORS_ORIGIN', [])
+    : true,
 };

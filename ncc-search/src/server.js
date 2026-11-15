@@ -4,14 +4,26 @@
 // pattern as every other service in this repo.
 
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 
 /**
  * @param {ReturnType<typeof import('./store.js').openStore>} store
  * @param {import('./adapters/nip50.js').Nip50Adapter} [nip50Adapter] optional
  *   -- omit to run index-only, e.g. in tests or with NIP-50 disabled.
+ * @param {{ corsOrigin?: string | boolean }} [options]
+ *   `corsOrigin` defaults to `true` (reflect any request origin). This is a
+ *   public, read-only, unauthenticated search API -- no cookies, no
+ *   credentials -- so a permissive default is the same risk profile as a
+ *   regular web search engine's API, not an open CORS misconfiguration on
+ *   something that carries auth. Without CORS enabled at all, the `ui/`
+ *   frontend (served from its own origin/port in dev, and often its own
+ *   subdomain behind Caddy in production -- see ui/README.md) cannot call
+ *   this endpoint from the browser; this was caught live while standing up
+ *   the UI for the first time (`fetch` failing with no CORS headers set).
  */
-export function createServer(store, nip50Adapter = null) {
+export function createServer(store, nip50Adapter = null, options = {}) {
   const app = Fastify({ logger: false });
+  app.register(cors, { origin: options.corsOrigin ?? true });
 
   app.get('/health', async () => ({ ok: true }));
 

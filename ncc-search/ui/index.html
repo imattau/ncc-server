@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="description" content="Search NCC-02/NCC-05 service records and nsites discovered across Nostr relays.">
+        <meta property="og:type" content="website">
+        <meta property="og:title" content="NCC Search">
+        <meta property="og:description" content="Search NCC-02/NCC-05 service records and nsites discovered across Nostr relays.">
+        <title>NCC Search</title>
+        <!-- connect-src includes http: for the ncc-search backend during local dev
+             (http://127.0.0.1:7780, a different origin than this page's own dev
+             server); tighten to https-only once both are deployed behind Caddy TLS. -->
+        <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'self'; connect-src 'self' http: https: wss:; img-src 'self' data: https:">
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+    </body>
+</html>

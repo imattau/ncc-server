@@ -1,43 +1,65 @@
-# ncc-search UI (not yet scaffolded)
+# ncc-search UI
 
-This directory is reserved for the search page frontend. Plan is to generate
-it from [MKStack](https://soapbox.pub/tools/mkstack) — the same
-React+Vite+TypeScript+Tailwind+shadcn/ui+[Nostrify](https://nostrify.dev/)
-template this repo's own [`test-app/`](../../test-app) is built from — rather
-than hand-rolling a page, for consistency with the rest of this project.
+A search-engine-style results page (compact header + pill search box +
+plain SERP list, not a card grid or chat-style layout) for the `ncc-search`
+backend. React+Vite+TypeScript+Tailwind, in the spirit of
+[MKStack](https://soapbox.pub/tools/mkstack) — same core stack as this
+repo's [`test-app/`](../../test-app) — but trimmed down from the full
+MKStack template: no login, no routing library, no shadcn/ui kit beyond a
+`Skeleton` component, since a one-page, read-only search UI doesn't need
+publish/auth machinery or a polymorphic component library. The generic
+shadcn card/badge/button kit was tried first and dropped in favor of a
+plain list layout that actually reads like a search engine result.
 
-Division of labour:
+## Division of labour
 
 - **`ncc-search` backend** (`../src`) owns the crawl, the anchored NCC-02/
   NCC-05 resolution, the nsite (NIP-5A) adapter, NIP-05 verification, and the
-  SQLite/FTS5 full-text index. It exposes `GET /search?q=` as plain JSON — see
-  [`../src/server.js`](../src/server.js). Results carry a `kind` field
-  (`ncc-service` / `nsite-root` / `nsite-named`) and, when verified, a
-  `nip05` handle — the UI should badge these rather than treat every result
-  as the same shape.
-- **This UI** is a thin client: it calls that `/search` endpoint for results.
-  Nostrify is relevant here, not for full-text search (relays don't do that —
-  see the research notes in the parent conversation on NIP-50's thin support),
-  but for optional client-side extras that *do* belong on the relay side:
-    - resolving a result's own profile (`kind:0`) for display, so results show
-      a name/avatar instead of a bare npub -- note the backend already
-      verifies `nip05` server-side (see `src/adapters/nsite.js`); the UI
-      should trust that field rather than re-deriving it, and only use its
-      own `kind:0` lookup for the avatar/display name.
-    - a "re-check now" action per result that re-runs resolution live in the
-      browser against the user's own relay set, rather than trusting only the
-      backend's last crawl.
+  SQLite/FTS5 full-text index. It exposes `GET /search?q=` as plain JSON —
+  see [`../src/server.js`](../src/server.js). Results carry a `kind` field
+  (`ncc-service` / `nsite-root` / `nsite-named`), a `source` field
+  (`index` = verified by the crawler, `live` = a just-found NIP-50 hit, not
+  yet verified), and, when verified, a `nip05` handle.
+- **This UI** is a thin client over that endpoint, plus one piece of
+  client-side Nostr: [`src/hooks/useAuthor.ts`](src/hooks/useAuthor.ts)
+  resolves a result's `kind:0` profile for display only (a name instead of a
+  bare npub), via [Nostrify](https://nostrify.dev/)
+  (`src/lib/nostrPool.ts` — a minimal, read-only, no-login `NPool`, not
+  `test-app`'s full `NostrProvider`, since this page never publishes).
+  `nip05`, when the backend already verified it, always takes priority over
+  this display-only lookup — see `ResultRow.tsx`.
 
-## Scaffolding steps (when ready to build this)
+## Running it
 
-1. Generate a new MKStack project here (per the Stacks CLI / template clone
-   flow on soapbox.pub/tools/mkstack).
-2. Point its data fetching at this backend's `/search` endpoint — proxy it
-   through Caddy on a path alongside the rest of this repo's services rather
-   than exposing `ncc-search`'s port directly.
-3. Keep Nostrify's relay pool configured with the same relay list as
-   `NCC_SEARCH_RELAYS` (`../.env.example`), so "re-check now" queries the same
-   relays the backend crawls.
-4. Build output goes to `public/` the same way `test-app/` does for the main
-   site (see repo root README's "Quick start"), or to its own Caddy route if
-   it should be served separately from the primary site.
+```bash
+cd ncc-search/ui
+cp .env.example .env   # point VITE_NCC_SEARCH_API_BASE at the backend
+npm install
+npm run dev
+```
+
+The backend must have CORS enabled for this to work from a browser at a
+different origin/port — it is by default (`NCC_SEARCH_CORS_ORIGIN` unset
+reflects any origin; see `../.env.example`). This was caught live while
+first wiring the two together: the backend returned correct JSON over curl
+but the browser's `fetch` failed silently with no CORS headers set.
+
+`npm run build` type-checks (`tsc --noEmit`) then builds to `dist/`. Not
+wired into Caddy yet — see the root README's "Quick start" for how
+`test-app/` is built into `public/`; this UI is deliberately kept as its own
+build output for now rather than assuming it shares the main site's route.
+
+## What's implemented vs. not
+
+Done: the search page itself (landing view, results list, loading/error/
+empty states, URL-synced query via `?q=`, snippet match highlighting,
+`sanitizeHref`-gated result links — see `src/lib/sanitize.ts`), profile
+display names via Nostrify.
+
+Not yet: a "re-check now" action that re-runs resolution live in the
+browser against the user's own relay set rather than trusting only the
+backend's last crawl. `NOSTR_RELAYS` in `src/lib/nostrPool.ts` already holds
+the relay list this would query; the resolution logic itself would need to
+be ported or shared from the backend's `src/resolver.js` /
+`src/adapters/nsite.js` to avoid re-implementing the anchor/locator/
+integrity checks differently on the client.
