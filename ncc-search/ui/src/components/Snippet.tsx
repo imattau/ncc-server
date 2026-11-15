@@ -17,6 +17,34 @@ import type { ReactNode } from 'react';
 // public read-only nostr viewer, rather than leaving a dead-end string.
 const NOSTR_URI_RE = /nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+/g;
 
+// The backend's FTS5 snippet() has a token budget (see store.js's `search`)
+// and can run out of it partway through one of these references -- the
+// leftover ("...full article. nostr…", or "...nostr:naddr1qpu…" if it gets
+// further before cutting off) is never a complete, matchable URI, so
+// without this it would render as raw, meaningless noise right at the end
+// of the line. A half-finished reference conveys nothing a reader can act
+// on, so it's dropped entirely rather than shown broken.
+const DANGLING_NOSTR_PREFIX_RE = /nostr:?(?:npub|nprofile|note|nevent|naddr)?[a-z0-9]*…?$/i;
+
+function stripDanglingNostrPrefix(text: string): string {
+  const lastNostrIndex = text.lastIndexOf('nostr');
+  if (lastNostrIndex === -1) return text;
+  const tail = text.slice(lastNostrIndex);
+  // A *complete* reference (nothing actually truncated) is left alone --
+  // linkifyNostrUris below turns it into a real link as usual. Only an
+  // incomplete prefix sitting at the very end of the string -- the exact
+  // place snippet()'s own cutoff would leave one -- gets removed; "nostr"
+  // appearing earlier in the text for some unrelated reason never matches
+  // this because it requires being anchored to the string's end.
+  if (new RegExp(`^nostr:(?:npub|nprofile|note|nevent|naddr)1[a-z0-9]+…?$`, 'i').test(tail)) {
+    return text;
+  }
+  if (DANGLING_NOSTR_PREFIX_RE.test(tail)) {
+    return text.slice(0, lastNostrIndex).trimEnd();
+  }
+  return text;
+}
+
 function truncateNostrUri(uri: string): string {
   return uri.length > 24 ? `${uri.slice(0, 16)}…${uri.slice(-6)}` : uri;
 }
@@ -52,7 +80,7 @@ function linkifyNostrUris(text: string, keyPrefix: string): ReactNode[] {
 }
 
 export function Snippet({ text }: { text: string }) {
-  const parts = text.split(/\[([^\]]*)\]/g);
+  const parts = stripDanglingNostrPrefix(text).split(/\[([^\]]*)\]/g);
   return (
     <>
       {parts.map((part, i) =>
