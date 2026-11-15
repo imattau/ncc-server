@@ -49,10 +49,12 @@ cd /opt/ncc-server
 sudo make install-compose-host
 ```
 
-The installer creates a private `.env` from `.env.example`, asks for the
-server's public IPv4 address, builds the images, and starts the full stack.
-During first startup, choose to import an existing identity JSON file or
-generate a new keypair. The bootstrap saves it at
+The installer creates a private `.env` from `.env.example`, checks the host
+has enough RAM/disk and that the required ports are free, tries to
+auto-detect the server's public IPv4 address (confirm or type a different one
+when prompted), builds the images, and starts the full stack. During first
+startup, choose to import an existing identity JSON file or generate a new
+keypair. The bootstrap saves it at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), initializes
 the sidecar, creates and publishes the `web`, `relay`, `npanel`, `ditto`, and
 `search` records, then brings up Caddy and Ditto Relay. No DNS names or
@@ -61,6 +63,28 @@ identity file outside the server; it is needed to recover service control.
 
 NCC Browser identifies each service with its signed npub/service locator and
 sends routing metadata to Caddy; Npanel and Ditto Web share HTTPS port 8443.
+
+The installer also writes a placeholder `index.html` into `CONTENT_ROOT` if
+it's empty, so `make bundle-health` sees HTTP 200 on the web root even
+before you deploy a real site or the test app.
+
+### Unattended / scripted installs
+
+`install-compose-host.sh` only prompts when a value isn't already set. For a
+non-interactive run, set these before calling `make install-compose-host`:
+
+| Variable | Purpose |
+| --- | --- |
+| `PUBLIC_IPV4` | Skips IP auto-detection and the prompt. |
+| `NCC_IMPORT_IDENTITY_FILE` | Path to an existing operator identity JSON; skips the generate/import prompt. |
+| `NCC_SKIP_PREFLIGHT` | Skips the RAM/disk/port confirmation prompt (the warnings still print). |
+| `NCC_SKIP_NAT_CHECK` | Skips the advisory CGNAT/reachability check. |
+
+Pre-flight RAM, disk, and port checks, and the public-IPv4 reachability check,
+are advisory: they print warnings but don't stop the install (outside of an
+interactive terminal they never block at all). Fix the underlying issue
+(free RAM, free a port, get a real public IPv4) rather than relying on the
+skip variables if you hit one of these for real.
 
 ### 2. Check the installation
 
@@ -102,7 +126,10 @@ sudo docker-compose -p ncc-bundle -f compose.yaml up -d
 
 Service configuration is in `.env`. Persistent service data is stored outside
 the containers. Keep `.env`, the operator key, and persistent data backed up;
-do not use `docker compose down -v` on an installed server.
+do not use `docker compose down -v` on an installed server. `make bundle-down`
+stops the containers without deleting data or images. `make uninstall` is for
+the separate legacy systemd install (see [deployment guide](docs/deployment-compose.md));
+it does not apply to this Compose bundle and should not be run against it.
 
 HTTPS uses self-signed certificates. NCC-aware clients validate the
 certificate fingerprint published in the service locator; ordinary browsers

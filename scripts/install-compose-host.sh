@@ -6,6 +6,48 @@ die() { echo "Error: $*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || die 'run this script as root on the Debian 12/Ubuntu host'
 command -v apt-get >/dev/null || die 'automated host installation supports Debian/Ubuntu only'
 
+preflight_checks() {
+  local problems=0 mem_kib mem_gib avail_kib avail_gib port
+
+  mem_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+  mem_gib=$(( mem_kib / 1024 / 1024 ))
+  if (( mem_kib < 4 * 1024 * 1024 )); then
+    echo "Pre-flight: ${mem_gib} GiB RAM detected; the bundle wants at least 4 GiB (OpenSearch alone uses a 1 GiB heap). Containers may crash or get OOM-killed." >&2
+    problems=1
+  fi
+
+  avail_kib="$(df --output=avail -k "$PROJECT_DIR" | tail -n1 | tr -d ' ')"
+  avail_gib=$(( avail_kib / 1024 / 1024 ))
+  if (( avail_kib < 10 * 1024 * 1024 )); then
+    echo "Pre-flight: only ${avail_gib} GiB free on $(df --output=target "$PROJECT_DIR" | tail -n1 | tr -d ' '); building the images and OpenSearch's data can need more than that." >&2
+    problems=1
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    for port in "${CONTENT_PORT:-8080}" "${CONTENT_TLS_PORT:-8443}" "${SEARCH_TLS_PORT:-8447}"; do
+      ss -Htln "( sport = :$port )" 2>/dev/null | grep -q . || continue
+      if command -v docker >/dev/null 2>&1 \
+        && docker ps --filter 'label=com.docker.compose.project=ncc-bundle' --format '{{.Ports}}' 2>/dev/null \
+           | grep -q ":${port}->"; then
+        continue
+      fi
+      echo "Pre-flight: port $port is already in use by something other than this bundle; Compose will fail to bind it." >&2
+      problems=1
+    done
+  fi
+
+  if (( problems )) && [[ -z "${NCC_SKIP_PREFLIGHT:-}" ]]; then
+    if [[ -t 0 ]]; then
+      local reply
+      read -r -p 'Continue despite the pre-flight warnings above? [y/N] ' reply
+      [[ "${reply,,}" == y || "${reply,,}" == yes ]] \
+        || die 'aborted after pre-flight warnings; set NCC_SKIP_PREFLIGHT=1 to bypass this prompt'
+    else
+      echo 'Pre-flight: continuing despite the warnings above (non-interactive); set NCC_SKIP_PREFLIGHT=1 to silence this check.' >&2
+    fi
+  fi
+}
+
 if [[ ! -f "$PROJECT_DIR/.env" ]]; then
   install -m 0600 "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
   echo 'Created .env from .env.example.'
@@ -16,6 +58,8 @@ set -a
 source "$PROJECT_DIR/.env"
 set +a
 DITTO_RELAY_REV="${DITTO_RELAY_REV:-e8974053dcf99ac952d1951deaffec105aeb08f1}"
+
+preflight_checks
 
 write_env_value() {
   local name="$1" value="$2"
@@ -67,7 +111,27 @@ if [[ -z "${PUBLIC_IPV4:-}" && -n "${PUBLIC_ENDPOINT_HOST:-}" ]]; then
   write_env_value PUBLIC_IPV4 "$PUBLIC_IPV4"
   export PUBLIC_IPV4
 fi
-ask_value PUBLIC_IPV4 'Server public IPv4 address (no DNS name, scheme, or port)'
+
+ask_public_ipv4() {
+  local value="${PUBLIC_IPV4:-}" detected
+  if [[ -z "$value" ]]; then
+    detected="$(curl -4 --fail --silent --show-error --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+    if [[ -n "$detected" && -t 0 ]]; then
+      read -r -p "Server public IPv4 address [detected: $detected]: " value
+      value="${value:-$detected}"
+    elif [[ -n "$detected" ]]; then
+      echo "Pre-flight: no terminal attached; using the detected public IPv4 $detected. Set PUBLIC_IPV4 to override." >&2
+      value="$detected"
+    else
+      read -r -p 'Server public IPv4 address (no DNS name, scheme, or port; auto-detect failed): ' value
+    fi
+    [[ -n "$value" ]] || die 'PUBLIC_IPV4 is required'
+    write_env_value PUBLIC_IPV4 "$value"
+  fi
+  printf -v PUBLIC_IPV4 '%s' "$value"
+  export PUBLIC_IPV4
+}
+ask_public_ipv4
 ensure_env_default CONTENT_PORT 8080
 ensure_env_default CONTENT_TLS_PORT 8443
 ensure_env_default SEARCH_TLS_PORT 8447
@@ -81,6 +145,17 @@ except ValueError as error:
     raise SystemExit(f'PUBLIC_IPV4 must be a public IPv4 address: {error}')
 PY
 
+if [[ -z "${NCC_SKIP_NAT_CHECK:-}" && -x "$PROJECT_DIR/scripts/check-nat.sh" ]] && command -v ip >/dev/null 2>&1; then
+  set +e
+  nat_output="$("$PROJECT_DIR/scripts/check-nat.sh" 2>&1)"
+  nat_status=$?
+  set -e
+  echo "$nat_output"
+  if (( nat_status != 0 )); then
+    echo "Pre-flight: could not confirm $PUBLIC_IPV4 is directly reachable from the internet (see above). This is advisory only and the install continues. If clients can't reach the server afterwards, run 'scripts/check-nat.sh <router-wan-ipv4>' from a workstation on the same router to check for CGNAT/upstream NAT." >&2
+  fi
+fi
+
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   ca-certificates curl git openssl python3 rsync docker.io docker-compose
@@ -88,6 +163,23 @@ systemctl enable --now docker.service
 
 install -d -m 0755 /etc/ncc-server
 install -d -m 0755 "$CONTENT_ROOT"
+if [[ -z "$(find "$CONTENT_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null)" ]]; then
+  cat > "$CONTENT_ROOT/index.html" <<'HTML'
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>NCC-Server</title></head>
+<body>
+<h1>NCC-Server is running</h1>
+<p>This is a placeholder page served from CONTENT_ROOT. Replace it with your
+own site, or deploy the included MKStack test app (see
+docs/deployment-compose.md).</p>
+</body>
+</html>
+HTML
+  chown root:root "$CONTENT_ROOT/index.html"
+  chmod 0644 "$CONTENT_ROOT/index.html"
+  echo "Wrote a placeholder page to $CONTENT_ROOT/index.html so the web root serves HTTP 200 before you deploy real content."
+fi
 install -d -o "$SIDECAR_UID" -g "$SIDECAR_GID" -m 0700 "$SIDECAR_DATA_DIR"
 install -d -o "$SIDECAR_UID" -g "$SIDECAR_CERT_GID" -m 0750 "$SIDECAR_CERT_DIR"
 install -d -o "$NPANEL_UID" -g "$NPANEL_GID" -m 0750 "$NPANEL_DATA_DIR"
