@@ -18,6 +18,12 @@ import { takeSeenRelays } from '../relayTracking.js';
 
 const NIP05_RECHECK_MS = 6 * 60 * 60_000;
 
+// See crawl.js's own MAX_CONCURRENT_PER_TICK comment for why this exists:
+// resolveNip05 (nsite.js) queries a relay for a kind:0 profile event, and a
+// discovery backfill can hand this queue dozens of newly-seen pubkeys due
+// in the very same tick.
+const MAX_CONCURRENT_PER_TICK = 5;
+
 /**
  * @param {import('../config.js').config} config
  * @param {ReturnType<typeof import('../store.js').openStore>} store
@@ -64,10 +70,13 @@ export function startContentCrawler(config, store, pool) {
 
   async function tick() {
     const now = Date.now();
+    let launched = 0;
     for (const [pubkey, at] of nip05Pending) {
+      if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       nip05Pending.delete(pubkey);
       processNip05(pubkey).catch((err) => console.error(`[ncc-search] nip05 check failed for ${pubkey}:`, err));
+      launched++;
     }
   }
 

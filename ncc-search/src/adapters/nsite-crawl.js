@@ -11,6 +11,13 @@ import { takeSeenRelays } from '../relayTracking.js';
 const DEFAULT_RECRAWL_MS = 30 * 60_000;
 const NIP05_RECHECK_MS = 6 * 60 * 60_000; // verified handles change rarely
 
+// See crawl.js's own MAX_CONCURRENT_PER_TICK comment for why this exists --
+// same reasoning applies here: NIP-05 resolution queries a relay for a
+// kind:0 profile event (resolveNip05, via nsite.js) same as processOne's
+// manifest fetch does its own relay work indirectly, and a discovery
+// backfill can hand either queue dozens of due items in the same tick.
+const MAX_CONCURRENT_PER_TICK = 5;
+
 /**
  * @param {import('../config.js').config} config
  * @param {ReturnType<typeof import('../store.js').openStore>} store
@@ -92,15 +99,21 @@ export function startNsiteCrawler(config, store, pool) {
 
   async function tick() {
     const now = Date.now();
+    let launched = 0;
     for (const [k, at] of pending) {
+      if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       pending.delete(k);
       processOne(k).catch((err) => console.error(`[ncc-search] nsite crawl failed for ${k}:`, err));
+      launched++;
     }
+    launched = 0;
     for (const [pubkey, at] of nip05Pending) {
+      if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       nip05Pending.delete(pubkey);
       processNip05(pubkey).catch((err) => console.error(`[ncc-search] nip05 check failed for ${pubkey}:`, err));
+      launched++;
     }
   }
 

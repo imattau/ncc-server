@@ -11,6 +11,19 @@ import { extractDocument } from './extract.js';
 const MIN_RECRAWL_MS = 5 * 60_000;
 const DEFAULT_RECRAWL_MS = 30 * 60_000;
 
+// Caps how many due items a single tick launches, rather than firing
+// resolveService() for every one of them at once. Each call queries relays
+// via NCC02Resolver/NCC05Resolver (ncc-02-js/ncc-05-js), and a discovery
+// backfill routinely hands this crawler dozens of newly-seen (pubkey,
+// serviceId) pairs scheduled for the very same tick -- launching all of
+// them simultaneously is exactly what tripped a real relay's own
+// concurrent-subscription limit ("too many concurrent REQs" from
+// wss://relay.primal.net) the first time this ran against it live. The
+// items left over simply stay queued for the next tick, a few seconds
+// later -- there is no deadline being missed, just a backlog draining a
+// bit more slowly.
+const MAX_CONCURRENT_PER_TICK = 5;
+
 /**
  * @param {import('./config.js').config} config
  * @param {ReturnType<typeof import('./store.js').openStore>} store
@@ -92,13 +105,16 @@ export function startCrawler(config, store, pool) {
 
   async function tick() {
     const now = Date.now();
+    let launched = 0;
     for (const [k, at] of pending) {
+      if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       pending.delete(k);
       const [pubkey, serviceId] = k.split('\u0000');
       processOne(pubkey, serviceId).catch((err) => {
         console.error(`[ncc-search] crawl failed for ${pubkey} ${serviceId}:`, err);
       });
+      launched++;
     }
   }
 
