@@ -4,7 +4,7 @@ import { useAuthor } from '@/hooks/useAuthor';
 import { useMediaProbe } from '@/hooks/useMediaProbe';
 import { useResizedImage } from '@/hooks/useResizedImage';
 import { useBlurhashPlaceholder } from '@/hooks/useBlurhashPlaceholder';
-import { sanitizeHref } from '@/lib/sanitize';
+import { nsiteHref, sanitizeHref } from '@/lib/sanitize';
 import { Snippet } from '@/components/Snippet';
 
 const KIND_LABEL: Record<ResultKind, string> = {
@@ -190,10 +190,17 @@ export function ResultRow({
     (result.kind === 'article' || result.kind.startsWith('nsite')) && !!result.thumbnailUrl;
   const useCompactThumbnail = isMedia || hasOptionalThumbnail;
 
-  // Clicking an image/video result's title opens the original file --
-  // there's no separate "page" for it the way there is for an
-  // ncc-service/nsite result.
-  const href = sanitizeHref(result.endpoint) ?? (isMedia ? sanitizeHref(result.mediaUrl) : null);
+  // An nsite's `endpoint` (the manifest's resolved entry path, e.g.
+  // "/index.html" -- see store.js's upsertNsite) is never itself a usable
+  // href, just a relative path with no host; link to the site's
+  // `nsite://` address instead (see lib/sanitize.ts) and let ncc-browser's
+  // own directory-index resolution pick the entry page, same as this
+  // backend does for the crawl. Clicking an image/video result's title
+  // opens the original file -- there's no separate "page" for it the way
+  // there is for an ncc-service/nsite result.
+  const href = result.kind.startsWith('nsite')
+    ? nsiteHref(result.pubkey, result.npub, result.itemId)
+    : (sanitizeHref(result.endpoint) ?? (isMedia ? sanitizeHref(result.mediaUrl) : null));
   const title = result.title?.trim() || identity;
   const body = result.snippet || result.description || '';
   const status = useResultStatus(result);
