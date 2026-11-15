@@ -221,6 +221,38 @@ fi
 docker volume inspect "$OPENSEARCH_VOLUME" >/dev/null 2>&1 || docker volume create "$OPENSEARCH_VOLUME" >/dev/null
 "${COMPOSE[@]}" config >/dev/null
 "${COMPOSE[@]}" build
+# Keep public service locators in sync with a changing ISP address. The unit
+# points at this checkout, so timer runs use the same Compose project/config.
+chmod 0755 "$PROJECT_DIR/scripts/reconcile-public-ip.py"
+cat > /etc/systemd/system/ncc-public-ip-reconcile.service <<EOF
+[Unit]
+Description=Reconcile NCC public IP service locators
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$PROJECT_DIR/scripts/reconcile-public-ip.py
+TimeoutStartSec=10min
+EOF
+cat > /etc/systemd/system/ncc-public-ip-reconcile.timer <<'EOF'
+[Unit]
+Description=Check NCC public IP address periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+RandomizedDelaySec=2min
+Persistent=true
+Unit=ncc-public-ip-reconcile.service
+
+[Install]
+WantedBy=timers.target
+EOF
+chmod 0644 /etc/systemd/system/ncc-public-ip-reconcile.service /etc/systemd/system/ncc-public-ip-reconcile.timer
+systemctl daemon-reload
+systemctl enable --now ncc-public-ip-reconcile.timer
 # Start the identity-independent services. The bootstrap then generates or
 # reuses the root-only host identity, initializes the sidecar, provisions the
 # service records, and starts the full stack.

@@ -186,5 +186,8 @@ for service in sidecar opensearch relay npanel ditto-web search search-ui caddy;
   wait_healthy "$service"
 done
 
+echo 'Reconciling the saved public IPv4 address with the current network address...'
+"$PROJECT_DIR/scripts/reconcile-public-ip.py"
+
 echo "Operator npub: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["npub"])' "$IDENTITY_FILE")"
 echo 'Fresh Compose setup is complete. Core NCC services use TCP 8443.'

@@ -87,9 +87,28 @@ The bundle defaults to wss://relay.primal.net/ and wss://relay.ditto.pub/.
 If changing those values, update the sidecar publication list and service
 profiles together.
 
-Public IP changes are not automatically verified. After an address change,
-update the service profile, republish, and confirm the fresh signed event
-contains the new endpoint before relying on it.
+The host installer enables `ncc-public-ip-reconcile.timer`, which checks the
+outbound public IPv4 every 15 minutes. When it changes, the reconciler updates
+the `web`, `relay`, `npanel`, `ditto`, and `search` profiles, updates the saved
+Compose and Relay configuration, rebuilds the search UI with its new address,
+recreates the affected containers, and republishes all five locators. The
+operation is safe to retry; a pending change is recorded under
+`/var/lib/ncc-server/` until publication succeeds.
+
+Check the timer and recent run logs with:
+
+~~~sh
+systemctl status ncc-public-ip-reconcile.timer
+sudo journalctl -u ncc-public-ip-reconcile.service -n 100 --no-pager
+~~~
+
+To reconcile immediately, run
+`sudo /path/to/ncc-server/scripts/reconcile-public-ip.py` from the deployed
+checkout. If a run fails, inspect the service logs and sidecar logs, resolve the
+reported profile, Docker, or relay connectivity issue, then run the command
+again. Confirm fresh signed locators contain the current endpoint before
+relying on them. The check observes the outbound public address; it does not
+detect a router or ISP port-forwarding problem.
 
 ## Relay WSS connection fails
 

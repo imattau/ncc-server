@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-reconcile-public-ip uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
 
 install:
 	sudo ./scripts/install.sh
@@ -13,6 +13,9 @@ first-run-identity:
 
 bundle-provision-services:
 	sudo ./scripts/provision-compose-services.py
+
+bundle-reconcile-public-ip:
+	sudo ./scripts/reconcile-public-ip.py
 
 uninstall:
 	sudo ./scripts/uninstall.sh
