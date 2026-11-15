@@ -64,6 +64,13 @@ export function SearchPage() {
     ? { follows: follows.data ?? new Set(), interests: interests.data ?? new Set() }
     : null;
 
+  // All pages loaded so far, flattened -- "Load more" appends another page
+  // rather than replacing what's already on screen (see useSearch).
+  const allResults = useMemo(
+    () => result.data?.pages.flatMap((page) => page.results) ?? [],
+    [result.data],
+  );
+
   // Ranked once here, before filtering/counting, so a kind tab shows a
   // personalized result set too instead of only the "All" tab. Depend on
   // the two Sets directly, not `personalization` itself -- that object
@@ -71,8 +78,8 @@ export function SearchPage() {
   // keystroke/unrelated state change instead of only when the data that
   // actually matters (results, follows, interests) changes.
   const ranked = useMemo(
-    () => rankResults(result.data?.results ?? [], personalization),
-    [result.data, personalization?.follows, personalization?.interests],
+    () => rankResults(allResults, personalization),
+    [allResults, personalization?.follows, personalization?.interests],
   );
 
   // Safe search hides anything the publisher tagged NIP-68/71
@@ -171,7 +178,7 @@ export function SearchPage() {
             {results.length === 0 ? (
               <>
                 <p className="mb-3 text-sm text-muted-foreground">
-                  No results for &ldquo;{result.data.query}&rdquo;
+                  No results for &ldquo;{query}&rdquo;
                 </p>
                 <p className="max-w-xl text-sm text-foreground/80">
                   Try a different npub, nip05 handle, or service/site name. If this identity was
@@ -200,7 +207,7 @@ export function SearchPage() {
 
                 {filtered.length === 0 ? (
                   <p className="max-w-xl text-sm text-foreground/80">
-                    No results of this type for &ldquo;{result.data.query}&rdquo;.
+                    No results of this type for &ldquo;{query}&rdquo;.
                   </p>
                 ) : isGridView ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
@@ -221,6 +228,22 @@ export function SearchPage() {
                         isFollowed={isFollowed(r, personalization)}
                       />
                     ))}
+                  </div>
+                )}
+
+                {/* Only on the "All" tab -- a kind filter hides most of
+                    `results` client-side already, so "load more" there
+                    would fetch rows the filter would just hide again. */}
+                {filter === 'all' && result.hasNextPage && (
+                  <div className="mt-6 max-w-2xl">
+                    <button
+                      type="button"
+                      onClick={() => result.fetchNextPage()}
+                      disabled={result.isFetchingNextPage}
+                      className="w-full rounded-md border border-border py-2 text-sm text-foreground hover:bg-muted disabled:opacity-60"
+                    >
+                      {result.isFetchingNextPage ? 'Loading…' : 'Load more'}
+                    </button>
                   </div>
                 )}
               </>

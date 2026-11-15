@@ -31,21 +31,30 @@ export function createServer(store, nip50Adapter = null, options = {}) {
     const q = (req.query.q || '').trim();
     if (!q) return reply.code(400).send({ error: 'missing q' });
     const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
 
-    const indexResults = store.search(q, limit).map((r) => ({ ...r, source: 'index' }));
+    // Fetch one extra row to know whether another page exists, without a
+    // separate COUNT(*) query -- then trim it back off before returning.
+    const indexRows = store.search(q, limit + 1, offset);
+    const hasMore = indexRows.length > limit;
+    const indexResults = indexRows.slice(0, limit).map((r) => ({ ...r, source: 'index' }));
 
     // Live NIP-50 results supplement the verified index; they never
     // replace it, and are only shown for a pubkey/item not already in it --
     // the index result is the one that passed resolve/fetch/verify, so it
-    // always wins when both exist.
+    // always wins when both exist. Only fetched on the first page: a live
+    // relay search has no stable offset/cursor of its own, so paging it
+    // would either repeat the same hits on every page or silently drop
+    // some -- the index (which does support offset) carries pagination
+    // from page 2 on.
     let liveHits = [];
-    if (nip50Adapter && req.query.live !== 'false') {
+    if (nip50Adapter && req.query.live !== 'false' && offset === 0) {
       const seen = new Set(indexResults.map((r) => `${r.pubkey}\u0000${r.itemId}`));
       const found = await nip50Adapter.search(q, { limit });
       liveHits = found.filter((h) => !seen.has(`${h.pubkey}\u0000${h.itemId}`));
     }
 
-    return { query: q, results: [...indexResults, ...liveHits] };
+    return { query: q, results: [...indexResults, ...liveHits], hasMore };
   });
 
   // :itemId is an NCC-02 `d` tag, an nsite `d` tag, or `_root` for a root site.

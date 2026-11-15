@@ -61,17 +61,23 @@ export interface SearchResult {
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
+  // Whether another page of index results exists beyond this one -- see
+  // useSearch's useInfiniteQuery and the "Load more" button in
+  // SearchPage.tsx. Live NIP-50 hits never affect this; they're only ever
+  // attached to the first page (see server.js).
+  hasMore: boolean;
 }
 
 const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE ?? 'http://127.0.0.1:7780';
 
 export async function search(
   query: string,
-  opts: { limit?: number; signal?: AbortSignal } = {},
+  opts: { limit?: number; offset?: number; signal?: AbortSignal } = {},
 ): Promise<SearchResponse> {
   const url = new URL('/search', API_BASE);
   url.searchParams.set('q', query);
   if (opts.limit) url.searchParams.set('limit', String(opts.limit));
+  if (opts.offset) url.searchParams.set('offset', String(opts.offset));
 
   const res = await fetch(url, { signal: opts.signal });
   if (!res.ok) {

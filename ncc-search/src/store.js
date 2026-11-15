@@ -339,7 +339,7 @@ export function openStore(dbPath, opts = {}) {
     attachNip05Txn(pubkey, nip05);
   }
 
-  function search(query, limit = 20) {
+  function search(query, limit = 20, offset = 0) {
     const rows = db
       .prepare(
         `SELECT s.pubkey, s.npub, s.nip05, s.item_id AS "itemId", s.kind, s.endpoint,
@@ -355,9 +355,9 @@ export function openStore(dbPath, opts = {}) {
          JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
          WHERE services_fts MATCH ?
          ORDER BY rank
-         LIMIT ?`,
+         LIMIT ? OFFSET ?`,
       )
-      .all(query, limit);
+      .all(query, limit, offset);
     return rows.map((row) => ({ ...row, hashtags: parseHashtags(row.hashtags) }));
   }
 

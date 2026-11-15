@@ -4,7 +4,7 @@ import { createServer } from '../src/server.js';
 
 function fakeStore(indexResults) {
   return {
-    search: () => indexResults,
+    search: (_query, limit, offset = 0) => indexResults.slice(offset, offset + limit),
     getService: () => null,
   };
 }
@@ -67,4 +67,28 @@ test('GET /search without q returns 400', async () => {
   const app = createServer(fakeStore([]), null);
   const res = await app.inject({ method: 'GET', url: '/search' });
   assert.equal(res.statusCode, 400);
+});
+
+test('GET /search reports hasMore and pages through offset', async () => {
+  const indexResults = Array.from({ length: 5 }, (_, i) => ({ pubkey: `p${i}`, itemId: `item${i}` }));
+  const app = createServer(fakeStore(indexResults), null);
+
+  const page1 = (await app.inject({ method: 'GET', url: '/search?q=wallet&limit=2&offset=0' })).json();
+  assert.equal(page1.results.length, 2);
+  assert.equal(page1.hasMore, true);
+  assert.deepEqual(page1.results.map((r) => r.itemId), ['item0', 'item1']);
+
+  const page3 = (await app.inject({ method: 'GET', url: '/search?q=wallet&limit=2&offset=4' })).json();
+  assert.equal(page3.results.length, 1);
+  assert.equal(page3.hasMore, false, 'nothing left after the last row');
+});
+
+test('GET /search skips live NIP-50 hits on pages after the first', async () => {
+  const store = fakeStore([{ pubkey: 'a', itemId: 'web' }]);
+  let called = false;
+  const nip50Adapter = { search: async () => { called = true; return []; } };
+  const app = createServer(store, nip50Adapter);
+
+  await app.inject({ method: 'GET', url: '/search?q=wallet&offset=20' });
+  assert.equal(called, false, 'a live relay search has no offset of its own to page through');
 });
