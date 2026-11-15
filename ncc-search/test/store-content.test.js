@@ -73,6 +73,38 @@ test('upsertNsite indexes the fetched page body, not just title/description', ()
   }
 });
 
+test('upsertNsite records which relays delivered the event, and a later pass with none keeps it', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const resolved = {
+      pubkey: 'd'.repeat(64),
+      kind: 35128,
+      siteId: 'blog',
+      title: 'My nsite',
+      description: null,
+    };
+
+    store.upsertNsite(
+      resolved,
+      { status: 200, title: 'My nsite' },
+      null,
+      ['wss://relay.b.example', 'wss://relay.a.example'],
+    );
+
+    const row = store.getService(resolved.pubkey, 'blog');
+    assert.deepEqual(JSON.parse(row.seen_relays), ['wss://relay.b.example', 'wss://relay.a.example']);
+
+    // A later pass that didn't record any relays (e.g. the NIP-05-only
+    // enrichment path) must not blank this out -- same COALESCE guarantee
+    // title/description/thumbnail already rely on.
+    store.upsertNsite(resolved, { status: 200, title: 'My nsite' }, null, []);
+    const after = store.getService(resolved.pubkey, 'blog');
+    assert.deepEqual(JSON.parse(after.seen_relays), ['wss://relay.b.example', 'wss://relay.a.example']);
+  } finally {
+    cleanup();
+  }
+});
+
 test('upsertNsite stores an extracted og:image as the thumbnail, and a later fetch with none keeps it', () => {
   const { store, cleanup } = freshStore();
   try {

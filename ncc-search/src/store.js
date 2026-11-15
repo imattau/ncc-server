@@ -94,6 +94,17 @@ export function openStore(dbPath, opts = {}) {
       -- ui/'s safe-search toggle (see ui/src/hooks/useSafeSearch.ts) to
       -- filter or label on.
       content_warning TEXT,
+      -- nsite/article/image/video only (see relayTracking.js): which
+      -- relay(s), by URL, actually delivered the event this row was built
+      -- from -- a JSON array string, same encoding as hashtags. A
+      -- redundancy signal, not a ranking input this backend computes
+      -- anything from today: a record seen on only one relay is one relay
+      -- outage away from becoming undiscoverable again, one seen on
+      -- several is not. Null for ncc-service rows -- those are built from
+      -- a *resolved* anchor+locator (ncc-02-js/ncc-05-js's own relay
+      -- traversal via resolver.js), not a single raw event this process
+      -- holds onto, so there's no one event id to look up a relay set for.
+      seen_relays TEXT,
       PRIMARY KEY (pubkey, item_id)
     );
 
@@ -107,19 +118,33 @@ export function openStore(dbPath, opts = {}) {
     );
   `);
 
+  // `CREATE TABLE IF NOT EXISTS` above only creates the table on a brand
+  // new database -- it does nothing for `seen_relays` on a database that
+  // already existed before this column did. This is the first schema
+  // change this project has needed since its initial release, so there is
+  // no migration runner yet; this ad hoc guard is deliberately small
+  // rather than standing one up for a single column.
+  const hasSeenRelays = db
+    .prepare(`PRAGMA table_info(services)`)
+    .all()
+    .some((column) => column.name === 'seen_relays');
+  if (!hasSeenRelays) {
+    db.exec(`ALTER TABLE services ADD COLUMN seen_relays TEXT`);
+  }
+
   const upsertServiceStmt = db.prepare(`
     INSERT INTO services (
       pubkey, item_id, kind, npub, nip05, endpoint, fingerprint, family,
       anchored, used_fallback, attestation_count, is_revoked, ttl_seconds,
       last_resolved_at, last_reachable_at, last_status, last_error,
       title, description, body, media_url, media_type, thumbnail_url,
-      blurhash, thumbhash, hashtags, content_warning
+      blurhash, thumbhash, hashtags, content_warning, seen_relays
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
       @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
-      @blurhash, @thumbhash, @hashtags, @contentWarning
+      @blurhash, @thumbhash, @hashtags, @contentWarning, @seenRelays
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -146,7 +171,8 @@ export function openStore(dbPath, opts = {}) {
       blurhash = COALESCE(excluded.blurhash, services.blurhash),
       thumbhash = COALESCE(excluded.thumbhash, services.thumbhash),
       hashtags = COALESCE(excluded.hashtags, services.hashtags),
-      content_warning = COALESCE(excluded.content_warning, services.content_warning)
+      content_warning = COALESCE(excluded.content_warning, services.content_warning),
+      seen_relays = COALESCE(excluded.seen_relays, services.seen_relays)
   `);
 
   // Partial updates (e.g. attaching a NIP-05 handle without re-fetching
@@ -192,6 +218,7 @@ export function openStore(dbPath, opts = {}) {
       thumbhash: null,
       hashtags: null,
       contentWarning: null,
+      seenRelays: null,
       ...row,
     });
   }
@@ -231,8 +258,9 @@ export function openStore(dbPath, opts = {}) {
    * @param {import('./adapters/nsite.js').ResolvedSite} resolved
    * @param {{ status?: number|null, error?: string|null, title?: string|null, description?: string|null, body?: string|null }} fetched
    * @param {string|null} nip05 - verified `name@domain` (or bare domain for `_`), or null if absent/unverifiable
+   * @param {string[]} [seenRelays] - relay URLs that delivered the manifest event (see relayTracking.js); omit/empty to leave whatever was already stored untouched
    */
-  function upsertNsite(resolved, fetched = {}, nip05 = null) {
+  function upsertNsite(resolved, fetched = {}, nip05 = null, seenRelays = []) {
     const now = Math.floor(Date.now() / 1000);
     const reachable = fetched.status != null && fetched.status < 400;
     // Precedence: a freshly fetched page title/description beats anything
@@ -271,6 +299,7 @@ export function openStore(dbPath, opts = {}) {
       // never indexed into FTS, searchable only by its title/description.
       body: fetched.text ?? null,
       thumbnailUrl: fetched.image ?? null,
+      seenRelays: seenRelays.length ? JSON.stringify(seenRelays) : null,
     });
   }
 
@@ -286,8 +315,9 @@ export function openStore(dbPath, opts = {}) {
    *
    * @param {import('./adapters/article.js').ResolvedArticle | import('./adapters/media.js').ResolvedMedia} resolved
    * @param {string|null} [nip05] verified `name@domain`, or null if absent/unverifiable
+   * @param {string[]} [seenRelays] - relay URLs that delivered this event (see relayTracking.js); omit/empty to leave whatever was already stored untouched
    */
-  function upsertContent(resolved, nip05 = null) {
+  function upsertContent(resolved, nip05 = null, seenRelays = []) {
     const now = Math.floor(Date.now() / 1000);
     upsertRow({
       pubkey: resolved.pubkey,
@@ -318,6 +348,7 @@ export function openStore(dbPath, opts = {}) {
       hashtags:
         resolved.hashtags && resolved.hashtags.length ? JSON.stringify(resolved.hashtags) : null,
       contentWarning: resolved.contentWarning ?? null,
+      seenRelays: seenRelays.length ? JSON.stringify(seenRelays) : null,
     });
   }
 

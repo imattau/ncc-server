@@ -6,6 +6,7 @@
 // a fixed interval instead.
 
 import { discoverNsites, NsiteAdapter } from './nsite.js';
+import { takeSeenRelays } from '../relayTracking.js';
 
 const DEFAULT_RECRAWL_MS = 30 * 60_000;
 const NIP05_RECHECK_MS = 6 * 60 * 60_000; // verified handles change rarely
@@ -62,7 +63,8 @@ export function startNsiteCrawler(config, store, pool) {
     const resolved = adapter.resolveSite(event);
     const fetched = await adapter.fetchAndExtract(resolved);
     const existing = store.getService(resolved.pubkey, resolved.siteId);
-    store.upsertNsite(resolved, fetched, existing?.nip05 ?? null);
+    const seenRelays = takeSeenRelays(pool, event.id);
+    store.upsertNsite(resolved, fetched, existing?.nip05 ?? null, seenRelays);
 
     schedule(pending, k, DEFAULT_RECRAWL_MS);
   }

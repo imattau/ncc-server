@@ -45,6 +45,13 @@ if (config.dbMaxBytes > 0) {
 // interface without that reentrancy bug, so every relay connection this
 // process makes goes through it instead of the native implementation.
 const pool = new SimplePool({ websocketImplementation: WebSocket });
+// Lets nsite-crawl.js/content-crawl.js record which relay(s) actually
+// served a given event (see relayTracking.js) -- a redundancy signal: a
+// record seen on only one relay is one relay outage away from becoming
+// undiscoverable again, a record seen on several is not. `trackRelays`
+// isn't a constructor option (checked against nostr-tools' own source);
+// it's a plain field that must be set after construction.
+pool.trackRelays = true;
 
 const nccCrawler = startCrawler(config, store, pool);
 const nsiteCrawler = config.enableNsite ? startNsiteCrawler(config, store, pool) : null;

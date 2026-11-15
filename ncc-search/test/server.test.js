@@ -53,6 +53,25 @@ test('GET /search drops a live hit that duplicates an already-indexed (pubkey, i
   assert.equal(body.results[1].title, 'Genuinely new');
 });
 
+test('GET /search drops a live hit that duplicates another live hit for the same (pubkey, itemId)', async () => {
+  const store = fakeStore([]);
+  const nip50Adapter = {
+    search: async () => [
+      { pubkey: 'a', itemId: 'web', title: 'Seen on relay one', eventId: 'e1', source: 'live' },
+      { pubkey: 'a', itemId: 'web', title: 'Seen on relay two', eventId: 'e2', source: 'live' },
+      { pubkey: 'b', itemId: 'blog', title: 'Genuinely different', eventId: 'e3', source: 'live' },
+    ],
+  };
+  const app = createServer(store, nip50Adapter);
+
+  const res = await app.inject({ method: 'GET', url: '/search?q=wallet' });
+  const body = res.json();
+
+  assert.equal(body.results.length, 2, 'the two (a, web) hits -- different event ids, same coordinate -- must collapse to one');
+  assert.equal(body.results[0].title, 'Seen on relay one', 'the first one seen wins');
+  assert.equal(body.results[1].title, 'Genuinely different');
+});
+
 test('GET /search?live=false skips the NIP-50 adapter entirely', async () => {
   const store = fakeStore([]);
   let called = false;

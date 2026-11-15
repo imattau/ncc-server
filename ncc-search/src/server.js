@@ -51,7 +51,18 @@ export function createServer(store, nip50Adapter = null, options = {}) {
     if (nip50Adapter && req.query.live !== 'false' && offset === 0) {
       const seen = new Set(indexResults.map((r) => `${r.pubkey}\u0000${r.itemId}`));
       const found = await nip50Adapter.search(q, { limit });
-      liveHits = found.filter((h) => !seen.has(`${h.pubkey}\u0000${h.itemId}`));
+      // Dedupe against each other too, not just against the index: two
+      // relays can each serve a different event id for the same
+      // (pubkey, itemId) coordinate (e.g. after the author republished an
+      // addressable record and relays disagree on which copy they have),
+      // and querySync's own id-based dedup (nostr-tools) wouldn't catch
+      // that since the ids genuinely differ. First one seen wins.
+      for (const hit of found) {
+        const key = `${hit.pubkey}\u0000${hit.itemId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        liveHits.push(hit);
+      }
     }
 
     return { query: q, results: [...indexResults, ...liveHits], hasMore };
