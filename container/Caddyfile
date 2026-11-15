@@ -3,7 +3,27 @@
 	auto_https disable_redirects
 }
 
+# ncc-browser's webview sends a CORS preflight (OPTIONS) for every
+# subresource of a page it navigated to via ncc://, even same-origin ones
+# -- found live on ditto-web's own assets, not just ncc-search's. Caddy's
+# own file_server (serving web's content root and nsite paths), ditto-web's
+# nginx, and search-ui's nginx all answer OPTIONS with a bare 405 and no
+# CORS headers by default, so the browser aborts every asset fetch after
+# the document itself, leaving the page blank. This answers the preflight
+# before it ever reaches a backend, for every port that serves a
+# browser-facing page.
+(cors_preflight) {
+	@cors_preflight method OPTIONS
+	handle @cors_preflight {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
+		header Access-Control-Allow-Headers "*"
+		respond 204
+	}
+}
+
 :{$CONTENT_PORT} {
+	import cors_preflight
 	root * {$CONTENT_ROOT}
 	encode gzip
 	try_files {path} /index.html
@@ -15,6 +35,7 @@
 
 :{$CONTENT_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
+	import cors_preflight
 	@npanel {
 		header X-NCC-Pubkey {$NCC_OPERATOR_PUBKEY}
 		header X-NCC-Service npanel
@@ -60,6 +81,7 @@
 
 :{$SEARCH_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
+	import cors_preflight
 	# The UI and its API share this one origin on purpose -- a browser's
 	# own JS only gets the special NCC-02 "k"-pin trust an ncc:// client
 	# extends to the host it actually resolved. A second hostname/port for
