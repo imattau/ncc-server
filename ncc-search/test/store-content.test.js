@@ -41,6 +41,63 @@ test('upsertContent indexes an article with no reachability claim', () => {
   }
 });
 
+test('FTS ranks title matches above a repeated match in the body and exposes index time', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({
+      pubkey: '1'.repeat(64), itemId: 'title-match', kind: KIND_ARTICLE,
+      title: 'Solar guide', description: null, body: 'A short guide.',
+    });
+    store.upsertContent({
+      pubkey: '2'.repeat(64), itemId: 'body-match', kind: KIND_ARTICLE,
+      title: 'General notes', description: null, body: 'solar '.repeat(80),
+    });
+
+    const results = store.search('solar');
+    assert.equal(results[0].itemId, 'title-match');
+    assert.ok(results[0].indexedAt > 1_000_000_000_000, 'indexedAt is Unix milliseconds');
+  } finally {
+    cleanup();
+  }
+});
+
+test('curated relevance cases return the expected title match first', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    const cases = [
+      { query: 'wallet security', expected: 'wallet-security', title: 'Wallet security basics', body: 'Key management guide.' },
+      { query: 'solar mapping', expected: 'solar-mapping', title: 'Solar mapping project', body: 'Satellite imagery notes.' },
+      { query: 'leather bags', expected: 'leather-bags', title: 'Leather bags and care', body: 'Materials and maintenance.' },
+    ];
+    for (const [index, item] of cases.entries()) {
+      store.upsertContent({
+        pubkey: String(index + 3).repeat(64), itemId: item.expected, kind: KIND_ARTICLE,
+        title: item.title, description: null, body: item.body,
+      });
+    }
+
+    for (const item of cases) {
+      assert.equal(store.search(item.query)[0]?.itemId, item.expected, `top result for ${item.query}`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('discovery cursors persist independently for each source and relay', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.saveDiscoveryCursor('articles', 'wss://relay.example', 1234);
+    store.saveDiscoveryCursor('media', 'wss://relay.example', 5678);
+    store.saveDiscoveryCursor('articles', 'wss://relay.example', 1000);
+
+    assert.equal(store.getDiscoveryCursor('articles', 'wss://relay.example'), 1234);
+    assert.equal(store.getDiscoveryCursor('media', 'wss://relay.example'), 5678);
+  } finally {
+    cleanup();
+  }
+});
+
 test('upsertNsite indexes the fetched page body, not just title/description', () => {
   const { store, cleanup } = freshStore();
   try {

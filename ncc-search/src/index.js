@@ -9,10 +9,13 @@ import { startNsiteCrawler } from './adapters/nsite-crawl.js';
 import { startContentCrawler } from './adapters/content-crawl.js';
 import { Nip50Adapter } from './adapters/nip50.js';
 import { createServer } from './server.js';
+import { createCrawlMonitor } from './crawlMonitor.js';
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
 const store = openStore(config.dbPath, { maxBytes: config.dbMaxBytes });
+const crawlMonitor = createCrawlMonitor();
+config.crawlMonitor = crawlMonitor;
 
 // Enforced on the same cadence as everything else's periodic work
 // (config.tickIntervalMs), not its own separate timer -- pruneToFit() is
@@ -60,7 +63,7 @@ const nip50Adapter = config.enableNip50
   ? new Nip50Adapter(pool, config, { nccCrawler, nsiteCrawler, contentCrawler })
   : null;
 
-const app = createServer(store, nip50Adapter, { corsOrigin: config.corsOrigin });
+const app = createServer(store, nip50Adapter, { corsOrigin: config.corsOrigin, crawlMonitor });
 
 app
   .listen({ host: config.httpHost, port: config.httpPort })

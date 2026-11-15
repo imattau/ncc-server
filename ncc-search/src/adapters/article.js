@@ -17,6 +17,7 @@
 
 import { stripMarkdown } from './markdown.js';
 import { extractHashtags } from './hashtags.js';
+import { discoverFromRelays } from '../relayDiscovery.js';
 
 export const KIND_ARTICLE_EVENT = 30023;
 
@@ -24,24 +25,14 @@ export const KIND_ARTICLE_EVENT = 30023;
  * @param {import('nostr-tools').SimplePool} pool
  * @param {string[]} relays
  * @param {(event: object) => void} onArticle
- * @param {{ since?: number }} [options]
+ * @param {{ since?: number, store?: object, monitor?: object }} [options]
  */
 export function discoverArticles(pool, relays, onArticle, options = {}) {
   const filter = { kinds: [KIND_ARTICLE_EVENT] };
-  if (options.since) filter.since = options.since;
-
-  // See discovery.js's comment on this same call shape: subscribeMany takes
-  // a single filter object here, not `[filter]`.
-  const sub = pool.subscribeMany(relays, filter, {
-    onevent(event) {
-      const dTag = event.tags.find((t) => t[0] === 'd')?.[1];
-      if (!dTag) return;
-      onArticle(event);
-    },
-    oneose() {},
-  });
-
-  return { close: () => sub.close() };
+  return discoverFromRelays(pool, relays, 'articles', filter, (event) => {
+    const dTag = event.tags.find((t) => t[0] === 'd')?.[1];
+    if (dTag) onArticle(event);
+  }, options);
 }
 
 /** @param {object} event a kind:30023 event @returns {ResolvedArticle} */

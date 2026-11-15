@@ -10,7 +10,7 @@ import cors from '@fastify/cors';
  * @param {ReturnType<typeof import('./store.js').openStore>} store
  * @param {import('./adapters/nip50.js').Nip50Adapter} [nip50Adapter] optional
  *   -- omit to run index-only, e.g. in tests or with NIP-50 disabled.
- * @param {{ corsOrigin?: string | boolean }} [options]
+ * @param {{ corsOrigin?: string | boolean, crawlMonitor?: { snapshot: () => object } }} [options]
  *   `corsOrigin` defaults to `true` (reflect any request origin). This is a
  *   public, read-only, unauthenticated search API -- no cookies, no
  *   credentials -- so a permissive default is the same risk profile as a
@@ -26,6 +26,13 @@ export function createServer(store, nip50Adapter = null, options = {}) {
   app.register(cors, { origin: options.corsOrigin ?? true });
 
   app.get('/health', async () => ({ ok: true }));
+
+  app.get('/status', async () => ({
+    ok: true,
+    checkedAt: Date.now(),
+    index: store.getStatus?.() ?? null,
+    crawlers: options.crawlMonitor?.snapshot?.() ?? {},
+  }));
 
   app.get('/search', async (req, reply) => {
     const q = (req.query.q || '').trim();

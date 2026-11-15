@@ -20,6 +20,22 @@ test('GET /search returns only index results when no NIP-50 adapter is configure
   assert.equal(body.results[0].source, 'index');
 });
 
+test('GET /status returns aggregate index and crawler status', async () => {
+  const store = {
+    ...fakeStore([]),
+    getStatus: () => ({ recordCount: 7, rowsByKind: { article: 7 }, storage: { databaseBytes: 1234 } }),
+  };
+  const app = createServer(store, null, {
+    crawlMonitor: { snapshot: () => ({ articles: { state: 'healthy', connectedRelays: 2 } }) },
+  });
+
+  const res = await app.inject({ method: 'GET', url: '/status' });
+  const body = res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.index.recordCount, 7);
+  assert.equal(body.crawlers.articles.state, 'healthy');
+});
+
 test('GET /search appends live NIP-50 hits that are not already in the index', async () => {
   const store = fakeStore([{ pubkey: 'a', itemId: 'web', title: 'Indexed' }]);
   const nip50Adapter = {

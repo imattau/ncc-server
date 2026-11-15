@@ -38,6 +38,7 @@
 import crypto from 'node:crypto';
 import { fetchUrl } from '../fetcher.js';
 import { extractDocument } from '../extract.js';
+import { discoverFromRelays } from '../relayDiscovery.js';
 
 export const KIND_ROOT_SITE = 15128;
 export const KIND_NAMED_SITE = 35128;
@@ -51,26 +52,16 @@ export const KIND_PROFILE = 0;
  * @param {import('nostr-tools').SimplePool} pool
  * @param {string[]} relays
  * @param {(candidate: { pubkey: string, kind: number, event: object }) => void} onCandidate
- * @param {{ since?: number }} [options]
+ * @param {{ since?: number, store?: object, monitor?: object }} [options]
  */
 export function discoverNsites(pool, relays, onCandidate, options = {}) {
   const filter = { kinds: [KIND_ROOT_SITE, KIND_NAMED_SITE] };
-  if (options.since) filter.since = options.since;
-
-  // See discovery.js's comment on this same call shape: subscribeMany takes
-  // a single filter object here, not `[filter]`.
-  const sub = pool.subscribeMany(relays, filter, {
-    onevent(event) {
-      const dTag = event.tags.find((t) => t[0] === 'd')?.[1] || null;
-      // Malformed per spec (root MUST NOT have `d`, named MUST have one).
-      if (event.kind === KIND_ROOT_SITE && dTag) return;
-      if (event.kind === KIND_NAMED_SITE && !dTag) return;
-      onCandidate({ pubkey: event.pubkey, kind: event.kind, event });
-    },
-    oneose() {},
-  });
-
-  return { close: () => sub.close() };
+  return discoverFromRelays(pool, relays, 'nsites', filter, (event) => {
+    const dTag = event.tags.find((t) => t[0] === 'd')?.[1] || null;
+    if (event.kind === KIND_ROOT_SITE && dTag) return;
+    if (event.kind === KIND_NAMED_SITE && !dTag) return;
+    onCandidate({ pubkey: event.pubkey, kind: event.kind, event });
+  }, options);
 }
 
 /** @param {object} event */

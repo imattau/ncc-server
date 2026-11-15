@@ -12,7 +12,8 @@
 // One table serves every adapter so search results are unified across
 // content types; `kind` discriminates what produced a row.
 
-import { statSync } from 'node:fs';
+import { statSync, statfsSync } from 'node:fs';
+import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import { nip19 } from 'nostr-tools';
 
@@ -115,6 +116,13 @@ export function openStore(dbPath, opts = {}) {
       description,
       nip05,
       body
+    );
+
+    CREATE TABLE IF NOT EXISTS discovery_cursors (
+      source TEXT NOT NULL,
+      relay TEXT NOT NULL,
+      cursor INTEGER NOT NULL,
+      PRIMARY KEY (source, relay)
     );
   `);
 
@@ -384,6 +392,7 @@ export function openStore(dbPath, opts = {}) {
                 s.anchored, s.attestation_count AS "attestationCount",
                 s.last_reachable_at AS "lastReachableAt", s.last_status AS "lastStatus",
                 s.title, s.description,
+                s.last_resolved_at * 1000 AS "indexedAt",
                 s.media_url AS "mediaUrl", s.media_type AS "mediaType",
                 s.thumbnail_url AS "thumbnailUrl",
                 s.blurhash, s.thumbhash, s.hashtags,
@@ -392,7 +401,7 @@ export function openStore(dbPath, opts = {}) {
          FROM services_fts f
          JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
          WHERE services_fts MATCH ?
-         ORDER BY rank
+         ORDER BY bm25(services_fts, 0, 0, 30.0, 8.0, 5.0, 1.0)
          LIMIT ? OFFSET ?`,
       )
       .all(query, limit, offset);
@@ -402,6 +411,38 @@ export function openStore(dbPath, opts = {}) {
   function getService(pubkey, itemId) {
     const row = db.prepare(`SELECT * FROM services WHERE pubkey = ? AND item_id = ?`).get(pubkey, itemId);
     return row ? { ...row, hashtags: parseHashtags(row.hashtags) } : row;
+  }
+
+  function getDiscoveryCursor(source, relay) {
+    return db.prepare(`SELECT cursor FROM discovery_cursors WHERE source = ? AND relay = ?`).get(source, relay)?.cursor ?? 0;
+  }
+
+  function saveDiscoveryCursor(source, relay, cursor) {
+    db.prepare(`INSERT INTO discovery_cursors (source, relay, cursor)
+      VALUES (?, ?, ?)
+      ON CONFLICT (source, relay) DO UPDATE SET cursor = MAX(cursor, excluded.cursor)`)
+      .run(source, relay, cursor);
+  }
+
+  function getStatus() {
+    const rowsByKind = Object.fromEntries(
+      db.prepare(`SELECT kind, count(*) AS count FROM services GROUP BY kind`).all().map((row) => [row.kind, row.count]),
+    );
+    let databaseBytes = 0;
+    try { databaseBytes = statSync(dbPath).size; } catch { /* database may not exist during startup */ }
+    const diskBytes = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].reduce((total, path) => {
+      try { return total + statSync(path).size; } catch { return total; }
+    }, 0);
+    let freeBytes = null;
+    try {
+      const fs = statfsSync(dirname(dbPath));
+      freeBytes = fs.bavail * fs.bsize;
+    } catch { /* optional filesystem metric */ }
+    return {
+      recordCount: Object.values(rowsByKind).reduce((sum, count) => sum + count, 0),
+      rowsByKind,
+      storage: { databaseBytes, diskBytes, limitBytes: maxBytes || null, freeBytes },
+    };
   }
 
   function listStale(olderThanSeconds) {
@@ -457,6 +498,9 @@ export function openStore(dbPath, opts = {}) {
     attachNip05,
     search,
     getService,
+    getDiscoveryCursor,
+    saveDiscoveryCursor,
+    getStatus,
     listStale,
     pruneToFit,
   };

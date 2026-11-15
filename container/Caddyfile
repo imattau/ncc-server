@@ -155,6 +155,11 @@
 			header_up Host {$PUBLIC_IPV4}
 		}
 	}
+	handle /status* {
+		reverse_proxy 127.0.0.1:3230 {
+			header_up Host {$PUBLIC_IPV4}
+		}
+	}
 	handle {
 		import cors_response
 		reverse_proxy 127.0.0.1:3220 {

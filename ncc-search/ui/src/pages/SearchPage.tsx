@@ -16,6 +16,7 @@ import { useMuteList } from '@/hooks/useMuteList';
 import { useSafeSearch } from '@/hooks/useSafeSearch';
 import { useTheme } from '@/hooks/useTheme';
 import type { SearchResult } from '@/lib/api';
+import { useSearchStatus } from '@/hooks/useSearchStatus';
 import { rankResults, isFollowed, type PersonalizationContext } from '@/lib/ranking';
 import { isMuted } from '@/lib/muting';
 import { cn } from '@/lib/utils';
@@ -53,6 +54,7 @@ export function SearchPage() {
   const muteList = useMuteList(pubkey);
   const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined);
   const hasQuery = query.trim().length > 0;
+  const status = useSearchStatus(hasQuery);
   const [filter, setFilter] = useState<KindFilter>('all');
   const safeSearch = useSafeSearch();
   const theme = useTheme();
@@ -174,6 +176,7 @@ export function SearchPage() {
       </header>
 
       <main className="px-4 py-5 sm:px-8">
+        {status.data && <SearchHealthNotice status={status.data} />}
         {result.isLoading && <ResultsSkeleton />}
 
         {result.isError && (
@@ -276,6 +279,22 @@ export function SearchPage() {
         )}
       </main>
     </div>
+  );
+}
+
+function SearchHealthNotice({ status }: { status: NonNullable<ReturnType<typeof useSearchStatus>['data']> }) {
+  const availability = Object.values(status.crawlers).filter((crawler) =>
+    crawler.state === 'unavailable' || crawler.state === 'degraded',
+  );
+  const storage = status.index?.storage;
+  const nearLimit = Boolean(storage?.limitBytes && storage.databaseBytes >= storage.limitBytes * 0.8);
+  if (availability.length === 0 && !nearLimit) return null;
+
+  return (
+    <aside role="status" className="mb-4 max-w-2xl rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+      {availability.length > 0 ? 'Some search sources are reconnecting; results may be incomplete.' : null}
+      {nearLimit ? `${availability.length > 0 ? ' ' : ''}The search index is nearing its configured storage limit.` : null}
+    </aside>
   );
 }
 

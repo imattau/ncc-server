@@ -61,7 +61,7 @@ export function startNsiteCrawler(config, store, pool) {
     schedule(nip05Pending, event.pubkey, 0);
   }
 
-  const discovery = discoverNsites(pool, config.relays, ({ event }) => ingestEvent(event));
+  const discovery = discoverNsites(pool, config.relays, ({ event }) => ingestEvent(event), { store, monitor: config.crawlMonitor });
 
   async function processOne(k) {
     const event = eventsByKey.get(k);
@@ -69,6 +69,7 @@ export function startNsiteCrawler(config, store, pool) {
 
     const resolved = adapter.resolveSite(event);
     const fetched = await adapter.fetchAndExtract(resolved);
+    if (fetched.error) config.crawlMonitor?.processingFailed('nsites');
     const existing = store.getService(resolved.pubkey, resolved.siteId);
     const seenRelays = takeSeenRelays(pool, event.id);
     store.upsertNsite(resolved, fetched, existing?.nip05 ?? null, seenRelays);
@@ -104,7 +105,10 @@ export function startNsiteCrawler(config, store, pool) {
       if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       pending.delete(k);
-      processOne(k).catch((err) => console.error(`[ncc-search] nsite crawl failed for ${k}:`, err));
+      processOne(k).catch((err) => {
+        config.crawlMonitor?.processingFailed('nsites');
+        console.error(`[ncc-search] nsite crawl failed for ${k}:`, err);
+      });
       launched++;
     }
     launched = 0;
@@ -112,7 +116,9 @@ export function startNsiteCrawler(config, store, pool) {
       if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       nip05Pending.delete(pubkey);
-      processNip05(pubkey).catch((err) => console.error(`[ncc-search] nip05 check failed for ${pubkey}:`, err));
+      processNip05(pubkey).catch((err) => {
+        console.error(`[ncc-search] nip05 check failed for ${pubkey}:`, err);
+      });
       launched++;
     }
   }

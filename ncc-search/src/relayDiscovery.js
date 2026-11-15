@@ -1,0 +1,76 @@
+const CHECKPOINT_OVERLAP_SECONDS = 5 * 60;
+const INITIAL_BACKOFF_MS = 1_000;
+const MAX_BACKOFF_MS = 5 * 60_000;
+
+/** Keeps one relay subscription alive and resumes its bounded backfill after disconnects. */
+export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, { store, monitor, since: initialSince } = {}) {
+  let stopped = false;
+  let timer = null;
+  let subscription = null;
+  let failures = 0;
+
+  function connect() {
+    if (stopped) return;
+    monitor?.connecting(source, relay);
+    const cursor = store?.getDiscoveryCursor(source, relay) ?? initialSince ?? 0;
+    const since = cursor ? Math.max(0, cursor - CHECKPOINT_OVERLAP_SECONDS) : undefined;
+    const resumedFilter = since ? { ...filter, since } : filter;
+    try {
+      subscription = pool.subscribeMany([relay], resumedFilter, {
+        onevent(event) {
+          monitor?.event(source, relay);
+          try {
+            onEvent(event);
+          } catch (error) {
+            monitor?.processingFailed(source);
+            console.error(`[ncc-search] ${source} event handler failed:`, error);
+          }
+        },
+        oneose() {
+          failures = 0;
+          monitor?.eose(source, relay);
+          try {
+            store?.saveDiscoveryCursor(source, relay, Math.floor(Date.now() / 1000));
+          } catch {
+            monitor?.processingFailed(source);
+            console.warn(`[ncc-search] ${source} checkpoint could not be saved`);
+          }
+        },
+        onclose() {
+          if (stopped) return;
+          subscription = null;
+          failures += 1;
+          monitor?.failed(source, relay);
+          const base = Math.min(INITIAL_BACKOFF_MS * (2 ** Math.min(failures - 1, 9)), MAX_BACKOFF_MS);
+          const delay = Math.round(base * (0.8 + Math.random() * 0.4));
+          timer = setTimeout(connect, delay);
+        },
+      });
+    } catch (error) {
+      if (stopped) return;
+      failures += 1;
+      monitor?.failed(source, relay);
+      const base = Math.min(INITIAL_BACKOFF_MS * (2 ** Math.min(failures - 1, 9)), MAX_BACKOFF_MS);
+      timer = setTimeout(connect, Math.round(base * (0.8 + Math.random() * 0.4)));
+      console.warn(`[ncc-search] ${source} relay subscription failed; retry scheduled`);
+    }
+  }
+
+  connect();
+  return {
+    close() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      const current = subscription;
+      subscription = null;
+      current?.close();
+    },
+  };
+}
+
+export function discoverFromRelays(pool, relays, source, filter, onEvent, options = {}) {
+  const subscriptions = relays.map((relay) =>
+    subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, options),
+  );
+  return { close: () => subscriptions.forEach((subscription) => subscription.close()) };
+}

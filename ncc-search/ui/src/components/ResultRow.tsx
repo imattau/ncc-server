@@ -238,6 +238,18 @@ export function ResultRow({
             <StatusDot status={status} />
           </>
         )}
+        {result.indexedAt && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <time
+              dateTime={new Date(result.indexedAt).toISOString()}
+              title={`Indexed ${new Date(result.indexedAt).toLocaleString()}`}
+              className="text-xs text-muted-foreground"
+            >
+              indexed {new Date(result.indexedAt).toLocaleDateString()}
+            </time>
+          </>
+        )}
         {/* Only reachable with safe search off -- see SearchPage.tsx's
             `results` filter. Labels what the publisher tagged; this app
             makes no judgment of its own, see src/adapters/media.js. */}

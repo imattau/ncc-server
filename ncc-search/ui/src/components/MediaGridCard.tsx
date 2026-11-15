@@ -38,6 +38,7 @@ export function MediaGridCard({
   const displayName = author.data?.metadata?.name?.trim();
   const identity = result.nip05 ?? displayName ?? result.npub ?? result.pubkey;
   const title = result.title?.trim() || identity;
+  const indexedLabel = result.indexedAt ? new Date(result.indexedAt).toLocaleDateString() : null;
 
   let src: string | null;
   if (isImage) {
@@ -94,7 +95,9 @@ export function MediaGridCard({
 
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pt-6 pb-1.5">
         <p className="truncate text-xs font-medium text-white">{title}</p>
-        <p className="truncate text-[10px] text-white/75">{identity}</p>
+        <p className="truncate text-[10px] text-white/75">
+          {identity}{indexedLabel ? ` · indexed ${indexedLabel}` : ''}
+        </p>
       </div>
     </div>
   );

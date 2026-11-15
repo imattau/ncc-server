@@ -55,8 +55,8 @@ export function startContentCrawler(config, store, pool) {
     scheduleNip05(resolved.pubkey, 0);
   }
 
-  const articleSub = discoverArticles(pool, config.relays, ingestArticle);
-  const mediaSub = discoverMedia(pool, config.relays, ingestMedia);
+  const articleSub = discoverArticles(pool, config.relays, ingestArticle, { store, monitor: config.crawlMonitor });
+  const mediaSub = discoverMedia(pool, config.relays, ingestMedia, { store, monitor: config.crawlMonitor });
 
   async function processNip05(pubkey) {
     const nip05 = await resolveNip05(pool, config.relays, pubkey, {
@@ -75,7 +75,9 @@ export function startContentCrawler(config, store, pool) {
       if (launched >= MAX_CONCURRENT_PER_TICK) break;
       if (at > now) continue;
       nip05Pending.delete(pubkey);
-      processNip05(pubkey).catch((err) => console.error(`[ncc-search] nip05 check failed for ${pubkey}:`, err));
+      processNip05(pubkey).catch((err) => {
+        console.error(`[ncc-search] nip05 check failed for ${pubkey}:`, err);
+      });
       launched++;
     }
   }

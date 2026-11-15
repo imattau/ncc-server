@@ -133,11 +133,25 @@ store.js  -- one `services` table/FTS5 index for both crawl adapters,
              discriminated by a `kind` column, keyed by (pubkey, item_id) --
              an NCC-02 `d` tag, an nsite's `d` tag, or `_root` for a root
              site. Never keyed by URL, since both NCC-05 and Blossom expect
-             the endpoint to move.
+             the endpoint to move. Title/description fields have higher FTS5
+             weight than profile handles and body text.
 server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
              rows always winning on a (pubkey, itemId) collision; add
-             &live=false to skip the live fan-out), GET /services/:pubkey/:itemId
+             &live=false to skip the live fan-out), GET /services/:pubkey/:itemId,
+             GET /status (aggregate index size/counts and crawler health)
 ```
+
+## Relay recovery and status
+
+Discovery subscribes to each configured relay independently. If a subscription
+closes, it reconnects with exponential backoff capped at five minutes. After
+each successful EOSE, the timestamp is stored in SQLite; reconnects and process
+restarts resume from that cursor with a five-minute overlap, so duplicate
+delivery is safe and recent events are less likely to fall into a gap.
+`GET /status` exposes only aggregate per-adapter connection counts, failure
+counts, last event/sync times, index bytes, free disk bytes, and row counts by
+kind. It omits relay URLs and error text. Relay health is process-local; the
+resume cursors persist in the database.
 
 ## Known caveats / things to verify before relying on this
 

@@ -16,6 +16,8 @@ export interface SearchResult {
   anchored?: number;
   attestationCount?: number;
   lastReachableAt?: number | null;
+  /** Unix milliseconds when the local index row was last resolved or updated. */
+  indexedAt?: number | null;
   // For ncc-service/nsite rows, the backend's own reachability check.
   // Always null for article/image/video: this backend never fetches media
   // bytes or re-renders article content, so it has no reachability claim to
@@ -68,6 +70,30 @@ export interface SearchResponse {
   hasMore: boolean;
 }
 
+export interface CrawlerStatus {
+  relayCount: number;
+  connectedRelays: number;
+  connectingRelays: number;
+  failedRelays: number;
+  failureCount: number;
+  processingFailureCount: number;
+  lastEventAt: number | null;
+  lastSuccessfulSyncAt: number | null;
+  lastFailureAt: number | null;
+  state: 'starting' | 'healthy' | 'degraded' | 'unavailable';
+}
+
+export interface SearchStatus {
+  ok: boolean;
+  checkedAt: number;
+  index: {
+    recordCount: number;
+    rowsByKind: Record<string, number>;
+    storage: { databaseBytes: number; diskBytes: number; limitBytes: number | null; freeBytes: number | null };
+  } | null;
+  crawlers: Record<string, CrawlerStatus>;
+}
+
 const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE ?? 'http://127.0.0.1:7780';
 
 export async function search(
@@ -91,4 +117,10 @@ export async function search(
     throw new Error(message);
   }
   return res.json();
+}
+
+export async function getStatus(signal?: AbortSignal): Promise<SearchStatus> {
+  const res = await fetch(new URL('/status', API_BASE), { signal });
+  if (!res.ok) throw new Error(`Status unavailable (HTTP ${res.status})`);
+  return res.json() as Promise<SearchStatus>;
 }

@@ -67,7 +67,7 @@ export function startCrawler(config, store, pool) {
 
   const discovery = discoverServiceRecords(pool, config.relays, ({ pubkey, serviceId }) => {
     schedule(pubkey, serviceId, 0);
-  });
+  }, { store, monitor: config.crawlMonitor });
 
   async function processOne(pubkey, serviceId) {
     const resolved = await resolver.resolveService(pubkey, serviceId);
@@ -90,6 +90,7 @@ export function startCrawler(config, store, pool) {
         }
       } catch (err) {
         fetched.error = String(err && err.message ? err.message : err);
+        config.crawlMonitor?.processingFailed('ncc-services');
       }
     } else if (resolved.isRevoked) {
       fetched.error = 'anchor revoked';
@@ -112,6 +113,7 @@ export function startCrawler(config, store, pool) {
       pending.delete(k);
       const [pubkey, serviceId] = k.split('\u0000');
       processOne(pubkey, serviceId).catch((err) => {
+        config.crawlMonitor?.processingFailed('ncc-services');
         console.error(`[ncc-search] crawl failed for ${pubkey} ${serviceId}:`, err);
       });
       launched++;

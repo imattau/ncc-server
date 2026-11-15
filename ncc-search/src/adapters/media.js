@@ -23,6 +23,7 @@
 //   - `title` tag: required by both NIPs.
 
 import { extractHashtags } from './hashtags.js';
+import { discoverFromRelays } from '../relayDiscovery.js';
 
 export const KIND_PICTURE = 20;
 export const KIND_VIDEO_NORMAL = 21;
@@ -48,24 +49,14 @@ function storeKindFor(eventKind) {
  * @param {import('nostr-tools').SimplePool} pool
  * @param {string[]} relays
  * @param {(event: object) => void} onMedia
- * @param {{ since?: number }} [options]
+ * @param {{ since?: number, store?: object, monitor?: object }} [options]
  */
 export function discoverMedia(pool, relays, onMedia, options = {}) {
   const filter = { kinds: MEDIA_KINDS };
-  if (options.since) filter.since = options.since;
-
-  // See discovery.js's comment on this same call shape: subscribeMany takes
-  // a single filter object here, not `[filter]`.
-  const sub = pool.subscribeMany(relays, filter, {
-    onevent(event) {
-      if (ADDRESSABLE_KINDS.has(event.kind) && !event.tags.some((t) => t[0] === 'd')) return;
-      if (!event.tags.some((t) => t[0] === 'imeta')) return; // nothing to render
-      onMedia(event);
-    },
-    oneose() {},
-  });
-
-  return { close: () => sub.close() };
+  return discoverFromRelays(pool, relays, 'media', filter, (event) => {
+    if (ADDRESSABLE_KINDS.has(event.kind) && !event.tags.some((t) => t[0] === 'd')) return;
+    if (event.tags.some((t) => t[0] === 'imeta')) onMedia(event);
+  }, options);
 }
 
 // parseImetaTag collects a *repeated* key into an array -- correct for
