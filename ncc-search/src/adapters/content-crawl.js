@@ -14,6 +14,7 @@
 import { discoverArticles, resolveArticle } from './article.js';
 import { discoverMedia, resolveMedia } from './media.js';
 import { resolveNip05 } from './nsite.js';
+import { takeSeenRelays } from '../relayTracking.js';
 
 const NIP05_RECHECK_MS = 6 * 60 * 60_000;
 
@@ -36,7 +37,7 @@ export function startContentCrawler(config, store, pool) {
     const resolved = resolveArticle(event);
     if (!resolved.itemId) return;
     const existing = store.getService(resolved.pubkey, resolved.itemId);
-    store.upsertContent(resolved, existing?.nip05 ?? null);
+    store.upsertContent(resolved, existing?.nip05 ?? null, takeSeenRelays(pool, event.id));
     scheduleNip05(resolved.pubkey, 0);
   }
 
@@ -44,7 +45,7 @@ export function startContentCrawler(config, store, pool) {
     const resolved = resolveMedia(event);
     if (!resolved) return;
     const existing = store.getService(resolved.pubkey, resolved.itemId);
-    store.upsertContent(resolved, existing?.nip05 ?? null);
+    store.upsertContent(resolved, existing?.nip05 ?? null, takeSeenRelays(pool, event.id));
     scheduleNip05(resolved.pubkey, 0);
   }
 
