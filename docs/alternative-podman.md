@@ -15,3 +15,8 @@ key.
 This alternative has not been implemented or tested in v0.1. Use it only after
 the native M0 contract and locator behavior are verified.
 
+The Ditto Relay integration test uses its own upstream Compose stack; it does
+not bundle the relay into the NCC sidecar container. See
+[`ditto-relay.md`](ditto-relay.md) for the current network, secret, and data
+boundaries to preserve when a later Podman bundle is designed.
+

@@ -18,3 +18,5 @@
 		output stdout
 	}
 }
+
+import /etc/ncc-server/relay-proxy.caddy

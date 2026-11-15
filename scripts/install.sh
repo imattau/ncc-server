@@ -66,6 +66,12 @@ install -d -o root -g root -m 0755 /etc/systemd/system/caddy.service.d
 install -o root -g root -m 0644 "$PROJECT_DIR/systemd/caddy-ncc-server.conf" \
   /etc/systemd/system/caddy.service.d/ncc-server.conf
 install -o root -g root -m 0644 "$PROJECT_DIR/caddy/Caddyfile" "$CONFIG_DIR/Caddyfile"
+if [[ ! -e "$CONFIG_DIR/relay-proxy.caddy" ]]; then
+  install -o root -g root -m 0644 /dev/null "$CONFIG_DIR/relay-proxy.caddy"
+else
+  chown root:root "$CONFIG_DIR/relay-proxy.caddy"
+  chmod 0644 "$CONFIG_DIR/relay-proxy.caddy"
+fi
 
 if ! systemctl is-active --quiet ncc-sidecar; then
   "$SIDECAR_SOURCE/scripts/install-sidecar.sh" install \

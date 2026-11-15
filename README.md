@@ -62,6 +62,10 @@ Git-ignored `.secrets/` directory on the host. For an isolated VM test, use
 host; the private key is not copied into the VM. For a pinned HTTPS fixture,
 also set `NCC_TEST_K=<43-character-SPKI-fingerprint>`.
 
+The Ditto Relay integration test adds a second NCC locator and an upstream
+relay/OpenSearch Compose stack, with WSS served by Caddy on TCP 8444. See the
+[Ditto Relay test guide](docs/ditto-relay.md).
+
 ## Project status
 
 The installer pins sidecar source commit
@@ -96,4 +100,9 @@ Onion service traffic needs no inbound router port forward. The Debian 12 VM
 test reached the onion page through an independent Tor client and verified its
 signed locator on Primal and Ditto. See the
 [operator guide](docs/operator.md#enable-an-onion-endpoint) for setup details.
+
+The Ditto Relay integration test now publishes an independent `relay-locator`
+alongside `web-locator`. Local WSS, NIP-11, certificate pinning, and restart
+checks passed, and external WSS reachability passed after forwarding TCP 8444.
+See [`docs/ditto-relay.md`](docs/ditto-relay.md).
 
