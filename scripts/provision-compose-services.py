@@ -193,7 +193,9 @@ def main():
         raise RuntimeError('service ID relay already exists with a non-relay type; inspect the sidecar before proceeding')
     relay_config = service_config(
         public_ip, https_port, 'wss', self_signed=False, pin=pin, path='/relay/',
-        probe_url=f'https://127.0.0.1:{https_port}/relay/',
+        # Probe the relay backend directly during first-run provisioning; Caddy
+        # depends on the certificate and profiles created by this script.
+        probe_url='http://127.0.0.1:13131/',
     )
     relay_config.update({
         'ncc05_ttl_hours': 1,

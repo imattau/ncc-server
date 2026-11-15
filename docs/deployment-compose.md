@@ -22,9 +22,8 @@ configuration.
 
 ### Workstation
 
-- Git, SSH access to the VM, Node.js 22 or newer, and npm.
-- A separate NCC-Server checkout. The workstation keeps the operator key and
-  builds the optional test app; it does not need Docker.
+- Git and SSH access to the VM. Node.js 22 or newer and npm are only needed
+  when building the optional test app.
 
 ### Public addresses
 
@@ -62,7 +61,7 @@ If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
 same-LAN or NAT loopback access does not prove internet reachability.
 
-## 1. Install the base services on the VM
+## 1. Install and initialize the Compose bundle
 
 Clone the project on the VM. The examples use /opt/ncc-server; use the same
 directory in all later VM commands.
@@ -72,82 +71,44 @@ sudo apt-get update
 sudo apt-get install -y git
 sudo git clone https://github.com/imattau/ncc-server.git /opt/ncc-server
 cd /opt/ncc-server
-sudo cp .env.example .env
-sudo chmod 600 .env
 sudo make install-compose-host
 ~~~
 
-The installer prompts for the server's public IPv4 address and saves it in
-.env. It derives the relay WSS URL from that address and the configured port.
-
-The installer installs Docker Engine and Compose, creates persistent
-directories, stages the pinned Ditto Relay source, builds the images, and
-starts the base services. It leaves Caddy and Ditto Relay stopped until the
-operator identity and service certificates are ready.
+The installer creates a private `.env` from `.env.example`, prompts for the
+server's public IPv4 address, and saves it in `.env`. It installs Docker Engine
+and Compose, prepares persistent directories,
+stages the pinned Ditto Relay source, builds the images, and starts the stack.
+On first startup, choose to import an existing operator identity JSON file or
+generate a new keypair. The bootstrap validates imported `nsec`, `npub`, and
+`pubkey` values, saves the key at `/etc/ncc-server/operator-identity.json`,
+initializes the sidecar, provisions and publishes the service records, and
+starts Caddy and Ditto Relay. No separate identity, profile-provisioning, or
+second-pass commands are needed for a fresh install.
 
 Persistent data locations are controlled by .env. Defaults include the
 sidecar database, generated certificates, Npanel data, Tor data, and
 OpenSearch/Caddy named volumes. Keep these paths and volume names stable when
 upgrading. Do not run docker compose down -v on an installed server.
 
-## 2. Create and install the operator identity
+The operator identity is stored at
+`/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), outside the
+container images. Keep an encrypted backup off the server; it is needed to
+recover service control. The installer prints the public npub once setup is
+complete. Re-running the installer reuses the existing identity. If the
+sidecar is initialized but that identity file is missing, setup stops rather
+than silently generating a replacement key.
 
-On the workstation, clone the repository and install the test app dependencies
-once. These dependencies also provide the Nostr key handling used by the
-first-run helper and locator verifier.
+For import, make the JSON identity file available on the server host and enter
+its path at the first-start prompt. The source file is left unchanged; the
+installer copies it into the root-only identity path after checking that its
+`nsec`, `npub`, and `pubkey` values match.
 
-~~~sh
-git clone https://github.com/imattau/ncc-server.git ~/ncc-server
-cd ~/ncc-server
-npm --prefix test-app ci
-~~~
+ncc-search never signs or publishes a Nostr event. It only subscribes to relays
+(read) and serves its own index over plain HTTP, so it has no operator
+identity, signer, or certificate of its own. Its NCC service record is created
+by first-start provisioning so clients can resolve its UI.
 
-Apply the identity to the VM:
-
-~~~sh
-NCC_SSH_TARGET=operator@192.168.1.50 \
-NCC_REMOTE_PROJECT_DIR=/opt/ncc-server \
-make first-run-identity
-~~~
-
-Replace the sample SSH account and address. The helper prompts you to confirm
-the migration. It creates .secrets/operator-identity.json if needed, checks
-an existing file before reuse, and prints the public npub. Local permissions
-are set to directory mode 0700 and file mode 0600. The keypair is Git-ignored.
-
-The helper transfers the key over SSH, removes its temporary remote copy, and
-stores the durable VM copy at /etc/ncc-server/operator-identity.json
-(root-owned, mode 0600). On an existing deployment, it aligns active service
-signers and admin keys, Ditto Relay, Npanel admin, and the local test app. On a
-clean install, it initializes the sidecar and admin; the new service records
-are aligned during the second identity pass in step 3.
-
-Before changing an initialized deployment, the helper backs up the sidecar
-database, Ditto Relay environment, and prior server identity in
-/var/backups/ncc-server/identity-<UTC-time>/. Replacing an identity changes
-the author npub for its locators. Keep a secure offline backup of the
-workstation keypair; without it the operator cannot recover these services.
-
-For root SSH access, use NCC_SSH_TARGET=root@<vm-address>. For a regular
-account, the account must be able to run sudo on the VM. The default remote
-checkout is /opt/ncc-server; set NCC_REMOTE_PROJECT_DIR if yours differs.
-
-ncc-search (the search containers started in step 1) needs none of this: it
-never signs or publishes a Nostr event, only subscribes to relays (read) and
-serves its own index over plain HTTP, so it has no operator identity, signer,
-or certificate of its own to provision. It comes up and starts crawling as
-soon as `make bundle-up` starts the stack, independent of this identity pass.
-
-## 3. Provision the standard service records
-
-Run this on the VM:
-
-~~~sh
-cd /opt/ncc-server
-sudo make bundle-provision-services
-~~~
-
-The provisioner creates the web profile first (sidecar record ID 2) and relay
+The first-start provisioner creates the web profile first (sidecar record ID 2) and relay
 second (ID 3), followed by Npanel, Ditto Web, and ncc-search. The first two
 IDs are fixed because Caddy reads their generated certificate files from
 matching paths. All five records use the operator identity -- including
@@ -164,24 +125,14 @@ The bundle's default publication relays are wss://relay.primal.net/ and
 wss://relay.ditto.pub/. The manager profile does not create its own onion
 service; Tor is enabled for the web profile.
 
-After provisioning, run the identity helper again from the workstation:
-
-~~~sh
-cd ~/ncc-server
-NCC_SSH_TARGET=operator@192.168.1.50 \
-NCC_REMOTE_PROJECT_DIR=/opt/ncc-server \
-make first-run-identity
-~~~
-
-This pass aligns the new profiles, republishes active locators, and starts
-Caddy and Ditto Relay. Wait for the health checks before testing clients.
-
-## 4. Deploy web content
+## 2. Deploy web content
 
 To serve the included MKStack test app, build and deploy from the workstation:
 
 ~~~sh
 cd ~/ncc-server
+npm --prefix test-app ci
+make init-test-identity
 make build-test-app
 make bundle-deploy-test-app TARGET=operator@192.168.1.50
 ~~~
@@ -193,10 +144,11 @@ NCC_CONTENT_ROOT for a non-default remote path. A regular SSH account needs
 sudo access on the VM; root SSH does not.
 
 You can deploy your own static site instead. Keep the content directory
-readable by Caddy. The test app's browser publisher uses the workstation
-operator identity after first-run setup.
+readable by Caddy. The test app's locator publisher uses its own Git-ignored
+test identity on the workstation; it is separate from the server operator
+identity.
 
-## 5. Verify the install
+## 3. Verify the install
 
 Put the test app or your own page in the configured content directory before
 running the full health check. On the VM, it checks the web route, dashboard,
@@ -208,8 +160,9 @@ cd /opt/ncc-server
 sudo make bundle-health
 ~~~
 
-The nsite checks are skipped unless you pass SITE_NPUB. The dashboard and Ditto
-Web checks use their dedicated HTTPS ports and require their service profiles.
+The nsite checks are skipped unless you pass SITE_NPUB. Npanel and Ditto Web
+share port 8443; the health check sends their NCC routing headers. ncc-search
+uses port 8447 for its UI and API.
 
 If you already host an nsite, include its npub to check its HTTPS route and
 root-relative JavaScript asset:
@@ -246,7 +199,7 @@ should verify the relay fingerprint published in its locator.
 
 The expected NCC Browser addresses have the form
 ncc://<npub>/<service-id>/, for example ncc://<npub>/web/ or
-ncc://<npub>/relay/. Use the npub printed by the first-run helper.
+ncc://<npub>/relay/. Use the npub printed by the installer.
 
 To check the onion endpoint from the VM, use the address printed by service
 provisioning:
@@ -283,10 +236,10 @@ admin directly to the internet.
 
 ## Recovery and upgrades
 
-The workstation keypair is the source of truth for the operator identity.
-Keep a protected offline backup. Server-side identity migration backups under
-/var/backups/ncc-server also contain signer material and must remain
-root-only.
+The root-only host file `/etc/ncc-server/operator-identity.json` is the source
+of truth for the operator identity. Keep an encrypted offline backup. The
+server-side identity migration backups under `/var/backups/ncc-server` also
+contain signer material and must remain root-only.
 
 Before changing the service identity, the first-run helper creates a backup.
 If migration fails, it attempts to restore the matching sidecar database and

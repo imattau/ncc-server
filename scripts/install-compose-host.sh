@@ -8,8 +8,7 @@ command -v apt-get >/dev/null || die 'automated host installation supports Debia
 
 if [[ ! -f "$PROJECT_DIR/.env" ]]; then
   install -m 0600 "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
-  echo 'Created .env from .env.example. Set PUBLIC_IPV4, then run this script again.'
-  exit 2
+  echo 'Created .env from .env.example.'
 fi
 
 set -a
@@ -18,20 +17,18 @@ source "$PROJECT_DIR/.env"
 set +a
 DITTO_RELAY_REV="${DITTO_RELAY_REV:-e8974053dcf99ac952d1951deaffec105aeb08f1}"
 
-ask_value() {
-  local name="$1" label="$2" value="${!1:-}"
-  if [[ -z "$value" ]]; then
-    read -r -p "$label: " value
-    [[ -n "$value" ]] || die "$name is required"
-    python3 - "$PROJECT_DIR/.env" "$name" "$value" <<'PY'
+write_env_value() {
+  local name="$1" value="$2"
+  python3 - "$PROJECT_DIR/.env" "$name" "$value" <<'PY'
 import os, pathlib, sys, tempfile
 path, name, value = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 lines = path.read_text().splitlines()
 out, replaced = [], False
 for line in lines:
     if line.startswith(name + '='):
-        out.append(name + '=' + value)
-        replaced = True
+        if not replaced:
+            out.append(name + '=' + value)
+            replaced = True
     else:
         out.append(line)
 if not replaced:
@@ -42,12 +39,39 @@ with os.fdopen(fd, 'w') as handle:
 os.chmod(tmp, 0o600)
 os.replace(tmp, path)
 PY
+}
+
+ask_value() {
+  local name="$1" label="$2" value="${!1:-}"
+  if [[ -z "$value" ]]; then
+    read -r -p "$label: " value
+    [[ -n "$value" ]] || die "$name is required"
+    write_env_value "$name" "$value"
   fi
   printf -v "$name" '%s' "$value"
   export "$name"
 }
 
+ensure_env_default() {
+  local name="$1" default="$2" value="${!1:-}"
+  if [[ -z "$value" ]]; then
+    value="$default"
+    write_env_value "$name" "$value"
+  fi
+  printf -v "$name" '%s' "$value"
+  export "$name"
+}
+
+if [[ -z "${PUBLIC_IPV4:-}" && -n "${PUBLIC_ENDPOINT_HOST:-}" ]]; then
+  PUBLIC_IPV4="$PUBLIC_ENDPOINT_HOST"
+  write_env_value PUBLIC_IPV4 "$PUBLIC_IPV4"
+  export PUBLIC_IPV4
+fi
 ask_value PUBLIC_IPV4 'Server public IPv4 address (no DNS name, scheme, or port)'
+ensure_env_default CONTENT_PORT 8080
+ensure_env_default CONTENT_TLS_PORT 8443
+ensure_env_default SEARCH_TLS_PORT 8447
+ensure_env_default NCC_OPERATOR_PUBKEY ''
 python3 - "$PUBLIC_IPV4" <<'PY'
 import ipaddress, sys
 try:
@@ -59,7 +83,7 @@ PY
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  ca-certificates curl git python3 rsync docker.io docker-compose
+  ca-certificates curl git openssl python3 rsync docker.io docker-compose
 systemctl enable --now docker.service
 
 install -d -m 0755 /etc/ncc-server
@@ -105,12 +129,8 @@ fi
 docker volume inspect "$OPENSEARCH_VOLUME" >/dev/null 2>&1 || docker volume create "$OPENSEARCH_VOLUME" >/dev/null
 "${COMPOSE[@]}" config >/dev/null
 "${COMPOSE[@]}" build
-# Start everything needed by first-run provisioning. ncc-search needs no
-# identity of its own (see docs/deployment-compose.md step 2), so it starts
-# here with the other identity-independent services. Ditto Relay and Caddy
-# remain stopped until the shared key is installed by the operator workstation.
+# Start the identity-independent services. The bootstrap then generates or
+# reuses the root-only host identity, initializes the sidecar, provisions the
+# service records, and starts the full stack.
 "${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web search search-ui
-
-echo 'Base Compose services are running. From the operator workstation, run:'
-echo '  NCC_SSH_TARGET=user@<host> make first-run-identity'
-echo 'Set NCC_REMOTE_PROJECT_DIR if the remote checkout is not at /opt/ncc-server.'
+bash "$PROJECT_DIR/scripts/bootstrap-compose-host.sh"

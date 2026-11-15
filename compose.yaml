@@ -111,6 +111,16 @@ services:
       opensearch:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:13131/', { headers: { Accept: 'application/nostr+json' } }).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     logging: *bounded-logs
 
   npanel:
@@ -183,8 +193,8 @@ services:
       # No Nostr identity of any kind -- this process only subscribes to
       # relays (read) and serves its own SQLite/FTS5 index over plain HTTP.
       # It never signs or publishes an event, unlike sidecar/relay/npanel/
-      # ditto-web, which all share the operator identity from step 2 of
-      # docs/deployment-compose.md. See container/search/Containerfile's
+      # ditto-web, which all use the operator identity created by the
+      # first-start bootstrap. See container/search/Containerfile's
       # comment and ncc-search/README.md.
       NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
       NCC_SEARCH_CORS_ORIGIN: "${SEARCH_CORS_ORIGIN}"

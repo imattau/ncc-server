@@ -2,7 +2,8 @@
 """Apply an operator-owned Nostr identity to an NCC Compose deployment.
 
 The identity is read from stdin so the nsec is never part of argv or a log.
-Run this over SSH from first-run-identity.mjs.
+It is used by both the Compose first-start bootstrap and the workstation identity
+migration helper.
 """
 import argparse
 import json
@@ -20,7 +21,8 @@ from datetime import datetime, timezone
 
 
 API = 'http://127.0.0.1:3000'
-IDENTITY_PATH = pathlib.Path('/etc/ncc-server/operator-identity.json')
+IDENTITY_PATH = pathlib.Path(os.environ.get(
+    'NCC_IDENTITY_FILE', '/etc/ncc-server/operator-identity.json'))
 DEFAULT_RELAYS = [
     'wss://relay.primal.net/',
     'wss://relay.ditto.pub/',
@@ -227,6 +229,7 @@ def main():
     project_env_original = env_path.read_text()
     set_env_value(env_path, 'NCC_OPERATOR_PUBKEY', pubkey)
     env['NCC_OPERATOR_PUBKEY'] = pubkey
+    os.environ['NCC_OPERATOR_PUBKEY'] = pubkey
     try:
         subprocess.run(compose + ['config'], cwd=project, check=True,
                        stdout=subprocess.DEVNULL)

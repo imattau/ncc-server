@@ -12,10 +12,28 @@
 # the document itself, leaving the page blank. This answers the preflight
 # before it ever reaches a backend, for every port that serves a
 # browser-facing page.
+#
+# Also sets Vary on X-NCC-Pubkey/X-NCC-Service: npanel and ditto are routed
+# by those request headers alone, both landing on the exact same URL
+# (https://{$PUBLIC_IPV4}:{$CONTENT_TLS_PORT}/). Without declaring that the
+# response depends on them, nothing stops the browser's own HTTP cache from
+# reusing whatever it cached for one service's request on a later request
+# for the other, since the URL never changed -- found live: switching from
+# one ncc:// address to another kept showing the previous service's page
+# until a hard reload bypassed the cache.
 (cors_preflight) {
+	# ncc-browser's protocol handler fetches the upstream resource and then
+	# returns it under the ncc:// origin. The preflight alone is insufficient:
+	# Chromium also requires ACAO on the actual GET/HEAD response. Without it,
+	# the upstream can log HTTP 200 while the browser's fetch rejects and the
+	# NCC protocol reports its generic 502 endpoint-unreachable page.
+	header Access-Control-Allow-Origin "*"
+	# `+Vary` appends rather than replacing -- npanel's own backend already
+	# sets `Vary: Accept-Encoding` for gzip negotiation, and overwriting
+	# that would be its own cache-correctness bug.
+	header +Vary "X-NCC-Pubkey, X-NCC-Service"
 	@cors_preflight method OPTIONS
 	handle @cors_preflight {
-		header Access-Control-Allow-Origin "*"
 		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
 		header Access-Control-Allow-Headers "*"
 		respond 204
@@ -81,7 +99,6 @@
 
 :{$SEARCH_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
-	import cors_preflight
 	# The UI and its API share this one origin on purpose -- a browser's
 	# own JS only gets the special NCC-02 "k"-pin trust an ncc:// client
 	# extends to the host it actually resolved. A second hostname/port for
@@ -92,11 +109,20 @@
 	# the page load itself. Keeping both under one port is what makes the
 	# trust the client already established actually cover the API too.
 	handle /search* {
+		# No `import cors_preflight` here, deliberately: the backend's own
+		# @fastify/cors already answers preflights and sets a correct,
+		# origin-reflecting Access-Control-Allow-Origin on every response.
+		# Caddy's own blanket "*" would land on top of that, producing TWO
+		# ACAO values on one response -- which the Fetch spec treats as an
+		# outright failure, not a redundant-but-harmless duplicate. Found
+		# live: "contains multiple values '*, ncc://npub...'" in the
+		# console, once this port started serving both UI and API.
 		reverse_proxy 127.0.0.1:3230 {
 			header_up Host {$PUBLIC_IPV4}
 		}
 	}
 	handle {
+		import cors_preflight
 		reverse_proxy 127.0.0.1:3220 {
 			header_up Host {$PUBLIC_IPV4}
 		}

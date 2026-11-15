@@ -16,6 +16,12 @@ RUN git init \
 COPY ncc-router-basename.mjs /tmp/ncc-router-basename.mjs
 RUN node /tmp/ncc-router-basename.mjs /src/src/AppRouter.tsx \
     && rm /tmp/ncc-router-basename.mjs
+COPY ncc-fetch-compat.mjs /tmp/ncc-fetch-compat.mjs
+RUN node /tmp/ncc-fetch-compat.mjs /src/src/components/AppProvider.tsx \
+    && rm /tmp/ncc-fetch-compat.mjs
+COPY ncc-sync-timeout.mjs /tmp/ncc-sync-timeout.mjs
+RUN node /tmp/ncc-sync-timeout.mjs /src/src/hooks/useInitialSync.ts \
+    && rm /tmp/ncc-sync-timeout.mjs
 RUN npm ci --no-audit --no-fund \
     && npm run build
 
