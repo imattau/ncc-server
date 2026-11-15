@@ -12,8 +12,10 @@ fi
 BASE_HTTP="${BASE_HTTP:-http://127.0.0.1:8080}"
 BASE_HTTPS="${BASE_HTTPS:-https://127.0.0.1:8443}"
 RELAY_HTTPS="${RELAY_HTTPS:-https://127.0.0.1:8443/relay/}"
+# Same origin/port for both -- see container/Caddyfile's comment on the
+# search block for why the API can't be a separate host/port.
 SEARCH_UI_HTTPS="${SEARCH_UI_HTTPS:-https://127.0.0.1:8447}"
-SEARCH_API_HTTPS="${SEARCH_API_HTTPS:-https://127.0.0.1:8448}"
+SEARCH_API_HTTPS="${SEARCH_API_HTTPS:-$SEARCH_UI_HTTPS}"
 SITE_NPUB="${SITE_NPUB:-}"
 PUBLIC_IPV4="${PUBLIC_IPV4:-127.0.0.1}"
 NCC_OPERATOR_PUBKEY="${NCC_OPERATOR_PUBKEY:-}"

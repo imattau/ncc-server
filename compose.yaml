@@ -221,7 +221,10 @@ services:
         # Vite bakes these in at image build time (see the Containerfile's
         # comment) -- an absolute, separately-TLS'd origin, not a relative
         # path, so this keeps working regardless of where Caddy mounts it.
-        VITE_NCC_SEARCH_API_BASE: "https://${PUBLIC_IPV4}:${SEARCH_API_TLS_PORT}"
+        # Same origin as the UI itself (see container/Caddyfile) -- this
+        # must stay that way, not a separate host/port, for ncc:// clients'
+        # cert trust to actually cover the API calls too.
+        VITE_NCC_SEARCH_API_BASE: "https://${PUBLIC_IPV4}:${SEARCH_TLS_PORT}"
         VITE_NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
     image: ncc-bundle-search-ui:0.1.0
     ports:
@@ -255,7 +258,6 @@ services:
       CONTENT_PORT: "${CONTENT_PORT}"
       CONTENT_TLS_PORT: "${CONTENT_TLS_PORT}"
       SEARCH_TLS_PORT: "${SEARCH_TLS_PORT}"
-      SEARCH_API_TLS_PORT: "${SEARCH_API_TLS_PORT}"
       CONTENT_ROOT: /srv/ncc-server/public
       WEB_CERT: /opt/ncc-sidecar/certs/2/server.crt
       WEB_KEY: /opt/ncc-sidecar/certs/2/server.key

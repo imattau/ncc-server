@@ -60,18 +60,24 @@
 
 :{$SEARCH_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
-	reverse_proxy 127.0.0.1:3220 {
-		header_up Host {$PUBLIC_IPV4}
+	# The UI and its API share this one origin on purpose -- a browser's
+	# own JS only gets the special NCC-02 "k"-pin trust an ncc:// client
+	# extends to the host it actually resolved. A second hostname/port for
+	# the API would be a genuinely different origin that was never itself
+	# resolved via ncc://, so the page's own `fetch()` to it falls back to
+	# ordinary CA trust and rejects this self-signed cert outright -- found
+	# live as ERR_CERT_AUTHORITY_INVALID only on the API calls, never on
+	# the page load itself. Keeping both under one port is what makes the
+	# trust the client already established actually cover the API too.
+	handle /search* {
+		reverse_proxy 127.0.0.1:3230 {
+			header_up Host {$PUBLIC_IPV4}
+		}
 	}
-	log {
-		output stdout
-	}
-}
-
-:{$SEARCH_API_TLS_PORT} {
-	tls {$WEB_CERT} {$WEB_KEY}
-	reverse_proxy 127.0.0.1:3230 {
-		header_up Host {$PUBLIC_IPV4}
+	handle {
+		reverse_proxy 127.0.0.1:3220 {
+			header_up Host {$PUBLIC_IPV4}
+		}
 	}
 	log {
 		output stdout
