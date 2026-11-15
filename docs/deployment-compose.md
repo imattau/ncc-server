@@ -44,13 +44,19 @@ Forward and allow these TCP ports:
 | --- | --- | --- |
 | 8080 | VM port 8080 | Optional HTTP; local Tor onion target |
 | 8443 | VM port 8443 | Pinned HTTPS and WSS for core NCC services |
+| 8445 | VM port 8445 | Pinned HTTPS npanel |
 | 8447 | VM port 8447 | Pinned HTTPS ncc-search (UI and API, same origin) |
 
 Only 8443 is required for the core NCC services. Forward 8447 only if you
 want ncc-search reachable from outside. Its API shares this same port/origin
 as its UI on purpose -- see container/Caddyfile's comment on the search
 block for why a separate port for the API broke browser certificate trust
-for ncc:// clients.
+for ncc:// clients. Forward 8445 only if you want to open npanel directly
+as a plain https:// address (not via its ncc:// address) -- its own
+frontend can't detect it's running embedded when opened via ncc:// (see
+container/Caddyfile's comment on the npanel block), so it always falls
+back to asking for a manually-typed dashboard address there; opening this
+port directly gives it a real origin where that self-detection works.
 
 Do not forward ports 3000, 3200, 3201, 3220, 3230, 9050, 9051, 9200, or 13131.
 The sidecar admin port, Npanel backends, ncc-search's own containers, Tor,

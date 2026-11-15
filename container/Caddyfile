@@ -97,6 +97,32 @@
 	}
 }
 
+:{$NPANEL_TLS_PORT} {
+	tls {$WEB_CERT} {$WEB_KEY}
+	import cors_preflight
+	# A dedicated port, bypassing the X-NCC-Pubkey/X-NCC-Service header
+	# routing above, on purpose: npanel's own frontend probes
+	# `fetch(window.location.origin + '/api/instance')` on load to detect
+	# it's running embedded, and only shows its "Connect to npanel --
+	# enter the dashboard address" prompt when that probe fails. Under
+	# ncc://, `window.location.origin` is the ncc:// address itself --
+	# confirmed directly in npanel's own compiled JS -- and ncc-browser's
+	# Fetch API doesn't support that scheme (the same limitation
+	# ditto-web's ncc-fetch-compat.mjs patch works around for its own
+	# favicon load), so the probe always fails there, no matter how Caddy
+	# routes the underlying request. npanel ships as a precompiled binary
+	# with no source we can patch the same way, so this is the other half
+	# of the fix: a real https:// address the probe actually works from,
+	# reached by opening this port directly rather than resolving
+	# npanel's ncc:// address.
+	reverse_proxy 127.0.0.1:3200 {
+		header_up Host {$PUBLIC_IPV4}
+	}
+	log {
+		output stdout
+	}
+}
+
 :{$SEARCH_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
 	# The UI and its API share this one origin on purpose -- a browser's
