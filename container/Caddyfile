@@ -13,14 +13,18 @@
 # before it ever reaches a backend, for every port that serves a
 # browser-facing page.
 #
-# Also sets Vary on X-NCC-Pubkey/X-NCC-Service: npanel and ditto are routed
-# by those request headers alone, both landing on the exact same URL
-# (https://{$PUBLIC_IPV4}:{$CONTENT_TLS_PORT}/). Without declaring that the
-# response depends on them, nothing stops the browser's own HTTP cache from
-# reusing whatever it cached for one service's request on a later request
-# for the other, since the URL never changed -- found live: switching from
-# one ncc:// address to another kept showing the previous service's page
-# until a hard reload bypassed the cache.
+# Every browser-facing service gets its own dedicated port rather than
+# sharing one origin via a custom X-NCC-Pubkey/X-NCC-Service request
+# header: that scheme broke in several different ways for services we
+# don't control the source of (npanel, ditto-web) -- WebSocket handshakes
+# can't carry custom headers at all, a page's own
+# `fetch(window.location.origin)` self-detection breaks under ncc://, and
+# ncc-browser's own subresource routing for root-relative asset paths is a
+# best-effort Referer/active-tab heuristic (its own documented limitation)
+# that can misroute one service's assets to another once more than one
+# tab is open under the same npub. A dedicated port sidesteps all of that
+# at once: there's only one possible destination, so none of those
+# ambiguity-dependent failure modes exist on it.
 (cors_preflight) {
 	# ncc-browser's protocol handler fetches the upstream resource and then
 	# returns it under the ncc:// origin. The preflight alone is insufficient:
@@ -28,10 +32,6 @@
 	# the upstream can log HTTP 200 while the browser's fetch rejects and the
 	# NCC protocol reports its generic 502 endpoint-unreachable page.
 	header Access-Control-Allow-Origin "*"
-	# `+Vary` appends rather than replacing -- npanel's own backend already
-	# sets `Vary: Accept-Encoding` for gzip negotiation, and overwriting
-	# that would be its own cache-correctness bug.
-	header +Vary "X-NCC-Pubkey, X-NCC-Service"
 	@cors_preflight method OPTIONS
 	handle @cors_preflight {
 		header Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
@@ -54,33 +54,6 @@
 :{$CONTENT_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_preflight
-	@npanel {
-		header X-NCC-Pubkey {$NCC_OPERATOR_PUBKEY}
-		header X-NCC-Service npanel
-	}
-	@ditto {
-		header X-NCC-Pubkey {$NCC_OPERATOR_PUBKEY}
-		header X-NCC-Service ditto
-	}
-	handle @npanel {
-		reverse_proxy 127.0.0.1:3200 {
-			header_up Host {$PUBLIC_IPV4}
-			header_up -X-NCC-Pubkey
-			header_up -X-NCC-Service
-		}
-	}
-	handle @ditto {
-		reverse_proxy 127.0.0.1:3210 {
-			header_up Host {$PUBLIC_IPV4}
-			header_up -X-NCC-Pubkey
-			header_up -X-NCC-Service
-		}
-	}
-	handle_path /relay/* {
-		reverse_proxy 127.0.0.1:13131 {
-			header_up X-Real-IP {remote_host}
-		}
-	}
 	handle /nsite/* {
 		reverse_proxy 127.0.0.1:3200 {
 			header_up Host {$PUBLIC_IPV4}
@@ -91,6 +64,45 @@
 		encode gzip
 		try_files {path} /index.html
 		file_server
+	}
+	log {
+		output stdout
+	}
+}
+
+:{$RELAY_TLS_PORT} {
+	tls {$RELAY_CERT} {$RELAY_KEY}
+	# Its own cert (sidecar record id 3), not WEB_CERT -- the relay profile
+	# has always been provisioned with a separate certificate from web/
+	# npanel/ditto/search's shared one. Moving the relay under a shared
+	# port+cert (as a /relay/* path on CONTENT_TLS_PORT) left its NCC-02
+	# locator record pinned to this cert while Caddy was actually serving
+	# WEB_CERT for that path -- a genuine pin mismatch, found live by
+	# comparing the published "k" against the TLS handshake.
+	reverse_proxy 127.0.0.1:13131 {
+		header_up X-Real-IP {remote_host}
+	}
+	log {
+		output stdout
+	}
+}
+
+:{$DITTO_WEB_TLS_PORT} {
+	tls {$WEB_CERT} {$WEB_KEY}
+	import cors_preflight
+	# A dedicated port, not X-NCC-Pubkey/X-NCC-Service header routing, for
+	# the same reason as npanel further down: ditto-web is a generic third-party
+	# Nostr client whose own JS does normal same-origin things (relative
+	# fetches, asset loads) with no idea a custom header convention
+	# exists. Sharing one origin with another header-matched service also
+	# means ncc-browser's own subresource routing (a best-effort
+	# Referer/active-tab heuristic for root-relative asset paths, by its
+	# own documented admission) can misroute one service's assets to
+	# another when more than one tab is open under the same npub -- found
+	# live as every one of ditto's JS/CSS assets coming back as the
+	# wrong page (MIME-type errors), not just a CORS failure.
+	reverse_proxy 127.0.0.1:3210 {
+		header_up Host {$PUBLIC_IPV4}
 	}
 	log {
 		output stdout

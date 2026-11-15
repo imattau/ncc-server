@@ -267,11 +267,15 @@ services:
       NCC_OPERATOR_PUBKEY: "${NCC_OPERATOR_PUBKEY}"
       CONTENT_PORT: "${CONTENT_PORT}"
       CONTENT_TLS_PORT: "${CONTENT_TLS_PORT}"
+      RELAY_TLS_PORT: "${RELAY_TLS_PORT}"
+      DITTO_WEB_TLS_PORT: "${DITTO_WEB_TLS_PORT}"
       SEARCH_TLS_PORT: "${SEARCH_TLS_PORT}"
       NPANEL_TLS_PORT: "${NPANEL_TLS_PORT}"
       CONTENT_ROOT: /srv/ncc-server/public
       WEB_CERT: /opt/ncc-sidecar/certs/2/server.crt
       WEB_KEY: /opt/ncc-sidecar/certs/2/server.key
+      RELAY_CERT: /opt/ncc-sidecar/certs/3/server.crt
+      RELAY_KEY: /opt/ncc-sidecar/certs/3/server.key
     volumes:
       - ./container/Caddyfile:/etc/caddy/Caddyfile:ro
       - "${CONTENT_ROOT}:/srv/ncc-server/public:ro"
