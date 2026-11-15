@@ -14,7 +14,7 @@ const WORDMARK = (
   </span>
 );
 
-type KindFilter = 'all' | 'ncc-service' | 'nsite';
+type KindFilter = 'all' | 'ncc-service' | 'nsite' | 'article' | 'image' | 'video';
 
 function matchesFilter(result: SearchResult, filter: KindFilter) {
   if (filter === 'all') return true;
@@ -40,6 +40,9 @@ export function SearchPage() {
       all: results.length,
       'ncc-service': results.filter((r) => r.kind === 'ncc-service').length,
       nsite: results.filter((r) => r.kind.startsWith('nsite')).length,
+      article: results.filter((r) => r.kind === 'article').length,
+      image: results.filter((r) => r.kind === 'image').length,
+      video: results.filter((r) => r.kind === 'video').length,
     }),
     [results],
   );
@@ -152,6 +155,9 @@ function KindTabs({
     { value: 'all', label: 'All' },
     { value: 'ncc-service', label: 'NCC services' },
     { value: 'nsite', label: 'Sites' },
+    { value: 'article', label: 'Articles' },
+    { value: 'image', label: 'Images' },
+    { value: 'video', label: 'Videos' },
   ];
 
   return (

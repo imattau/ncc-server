@@ -23,6 +23,11 @@ export const config = {
   fetchTimeoutMs: Number(process.env.NCC_SEARCH_FETCH_TIMEOUT_MS || 10000),
   fetchMaxBytes: Number(process.env.NCC_SEARCH_FETCH_MAX_BYTES || 1_000_000),
   enableNsite: process.env.NCC_SEARCH_ENABLE_NSITE !== 'false',
+  // Also discover NIP-23 articles and NIP-68/71 pictures/videos. Unlike
+  // nsite/NCC-02, these need no fetch/verify step at all (the indexable
+  // content is already inline in the event), so there's no reachability or
+  // integrity check to disable independently -- one flag covers all three.
+  enableContent: process.env.NCC_SEARCH_ENABLE_CONTENT !== 'false',
   // Live-query configured relays that advertise NIP-50 at search time, in
   // addition to serving from the local index. On by default like nsite:
   // if none of the configured relays support it (the common case today),

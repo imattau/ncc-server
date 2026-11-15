@@ -18,6 +18,9 @@ import { nip19 } from 'nostr-tools';
 export const KIND_NCC_SERVICE = 'ncc-service';
 export const KIND_NSITE_ROOT = 'nsite-root';
 export const KIND_NSITE_NAMED = 'nsite-named';
+export const KIND_ARTICLE = 'article';
+export const KIND_IMAGE = 'image';
+export const KIND_VIDEO = 'video';
 
 export function openStore(dbPath) {
   const db = new Database(dbPath);
@@ -45,6 +48,21 @@ export function openStore(dbPath) {
       title TEXT,
       description TEXT,
       body TEXT,
+      -- image/video only: the actual media URL, never fetched by this
+      -- backend -- the browser loads it directly (see src/adapters/media.js
+      -- and ui/src/components/ResultRow.tsx). endpoint keeps meaning "the
+      -- page to visit" for ncc-service/nsite rows; media rows use these
+      -- instead so the UI can tell the two apart by kind.
+      media_url TEXT,
+      media_type TEXT,
+      thumbnail_url TEXT,
+      -- image/video only: an instant, tiny placeholder (NIP-68/71 imeta
+      -- fields). blurhash is actually decoded by the UI today
+      -- (ui/src/hooks/useBlurhashPlaceholder.ts); thumbhash is stored for
+      -- forward compatibility but has no decoder implemented yet -- it uses
+      -- a different binary encoding than blurhash's string format.
+      blurhash TEXT,
+      thumbhash TEXT,
       PRIMARY KEY (pubkey, item_id)
     );
 
@@ -63,12 +81,14 @@ export function openStore(dbPath) {
       pubkey, item_id, kind, npub, nip05, endpoint, fingerprint, family,
       anchored, used_fallback, attestation_count, is_revoked, ttl_seconds,
       last_resolved_at, last_reachable_at, last_status, last_error,
-      title, description, body
+      title, description, body, media_url, media_type, thumbnail_url,
+      blurhash, thumbhash
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
-      @title, @description, @body
+      @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
+      @blurhash, @thumbhash
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -88,7 +108,12 @@ export function openStore(dbPath) {
       last_error = excluded.last_error,
       title = COALESCE(excluded.title, services.title),
       description = COALESCE(excluded.description, services.description),
-      body = COALESCE(excluded.body, services.body)
+      body = COALESCE(excluded.body, services.body),
+      media_url = COALESCE(excluded.media_url, services.media_url),
+      media_type = COALESCE(excluded.media_type, services.media_type),
+      thumbnail_url = COALESCE(excluded.thumbnail_url, services.thumbnail_url),
+      blurhash = COALESCE(excluded.blurhash, services.blurhash),
+      thumbhash = COALESCE(excluded.thumbhash, services.thumbhash)
   `);
 
   // Partial updates (e.g. attaching a NIP-05 handle without re-fetching
@@ -104,10 +129,9 @@ export function openStore(dbPath) {
     VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  const upsertTxn = db.transaction((row) => {
-    upsertServiceStmt.run(row);
-    const merged = selectMergedStmt.get(row.pubkey, row.itemId);
-    deleteFtsStmt.run(row.pubkey, row.itemId);
+  function syncFts(pubkey, itemId) {
+    const merged = selectMergedStmt.get(pubkey, itemId);
+    deleteFtsStmt.run(pubkey, itemId);
     if (merged.title || merged.description || merged.body || merged.nip05) {
       insertFtsStmt.run(
         merged.pubkey,
@@ -118,11 +142,23 @@ export function openStore(dbPath) {
         merged.body || '',
       );
     }
+  }
+
+  const upsertTxn = db.transaction((row) => {
+    upsertServiceStmt.run(row);
+    syncFts(row.pubkey, row.itemId);
   });
 
   /** Shared by every adapter; adapter-specific wrappers below shape their own result into this row. */
   function upsertRow(row) {
-    upsertTxn(row);
+    upsertTxn({
+      mediaUrl: null,
+      mediaType: null,
+      thumbnailUrl: null,
+      blurhash: null,
+      thumbhash: null,
+      ...row,
+    });
   }
 
   /**
@@ -196,6 +232,75 @@ export function openStore(dbPath) {
     });
   }
 
+  /**
+   * Articles (NIP-23), pictures (NIP-68) and videos (NIP-71) -- unlike
+   * NCC-02/nsite, the indexable content (markdown body, caption, imeta alt
+   * text) is already inline in the event, so there is no separate
+   * fetch/verify step and no `fetched` argument: `resolved` already IS the
+   * final record. `lastStatus`/`lastReachableAt` are deliberately left null
+   * here, not "200/now" -- this backend never fetches the media bytes
+   * themselves (see src/adapters/media.js), so it has no reachability claim
+   * to make; the browser checks that client-side (see ui/'s media worker).
+   *
+   * @param {import('./adapters/article.js').ResolvedArticle | import('./adapters/media.js').ResolvedMedia} resolved
+   * @param {string|null} [nip05] verified `name@domain`, or null if absent/unverifiable
+   */
+  function upsertContent(resolved, nip05 = null) {
+    const now = Math.floor(Date.now() / 1000);
+    upsertRow({
+      pubkey: resolved.pubkey,
+      itemId: resolved.itemId,
+      kind: resolved.kind,
+      npub: safeNpub(resolved.pubkey),
+      nip05,
+      endpoint: resolved.endpoint ?? null,
+      fingerprint: null,
+      family: null,
+      anchored: 0,
+      usedFallback: 0,
+      attestationCount: 0,
+      isRevoked: 0,
+      ttlSeconds: null,
+      lastResolvedAt: now,
+      lastReachableAt: null,
+      lastStatus: null,
+      lastError: null,
+      title: resolved.title ?? null,
+      description: resolved.description ?? null,
+      body: resolved.body ?? null,
+      mediaUrl: resolved.mediaUrl ?? null,
+      mediaType: resolved.mediaType ?? null,
+      thumbnailUrl: resolved.thumbnailUrl ?? null,
+      blurhash: resolved.blurhash ?? null,
+      thumbhash: resolved.thumbhash ?? null,
+    });
+  }
+
+  const setNip05ForPubkeyStmt = db.prepare(
+    `UPDATE services SET nip05 = ? WHERE pubkey = ? AND (nip05 IS NULL OR nip05 != ?)`,
+  );
+  const itemIdsForPubkeyStmt = db.prepare(`SELECT item_id AS "itemId" FROM services WHERE pubkey = ?`);
+
+  /**
+   * Attaches a verified NIP-05 handle to every row already indexed for a
+   * pubkey, across every adapter (NCC service, nsite, article, image,
+   * video) -- there's nothing content-type-specific about whose NIP-05
+   * claim is whose. Used by content-crawl.js; nsite-crawl.js currently
+   * does this itself by iterating its own in-memory event map, but could
+   * be simplified to call this instead.
+   * @param {string} pubkey
+   * @param {string} nip05
+   */
+  const attachNip05Txn = db.transaction((pubkey, nip05) => {
+    setNip05ForPubkeyStmt.run(nip05, pubkey, nip05);
+    for (const { itemId } of itemIdsForPubkeyStmt.all(pubkey)) {
+      syncFts(pubkey, itemId);
+    }
+  });
+  function attachNip05(pubkey, nip05) {
+    attachNip05Txn(pubkey, nip05);
+  }
+
   function search(query, limit = 20) {
     return db
       .prepare(
@@ -203,6 +308,9 @@ export function openStore(dbPath) {
                 s.anchored, s.attestation_count AS "attestationCount",
                 s.last_reachable_at AS "lastReachableAt", s.last_status AS "lastStatus",
                 s.title, s.description,
+                s.media_url AS "mediaUrl", s.media_type AS "mediaType",
+                s.thumbnail_url AS "thumbnailUrl",
+                s.blurhash, s.thumbhash,
                 snippet(services_fts, 5, '[', ']', '…', 12) AS snippet
          FROM services_fts f
          JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
@@ -224,7 +332,16 @@ export function openStore(dbPath) {
       .all(cutoff);
   }
 
-  return { db, upsertService, upsertNsite, search, getService, listStale };
+  return {
+    db,
+    upsertService,
+    upsertNsite,
+    upsertContent,
+    attachNip05,
+    search,
+    getService,
+    listStale,
+  };
 }
 
 function safeNpub(hexPubkey) {

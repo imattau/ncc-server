@@ -10,8 +10,34 @@
         <title>NCC Search</title>
         <!-- connect-src includes http: for the ncc-search backend during local dev
              (http://127.0.0.1:7780, a different origin than this page's own dev
-             server); tighten to https-only once both are deployed behind Caddy TLS. -->
-        <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'self'; connect-src 'self' http: https: wss:; img-src 'self' data: https:">
+             server); tighten to https-only once both are deployed behind Caddy TLS.
+             media-src is required for NIP-68/71 image/video results -- without it,
+             <video>/<source> is silently blocked (falls back to default-src 'none')
+             while <img> happens to keep working via img-src; caught live when a
+             seeded demo video rendered nothing and the console showed the CSP
+             violation instead of a network error. worker-src needs 'blob:'
+             in addition to 'self': Vite's DEV server bootstraps a module
+             worker via `new Worker(URL.createObjectURL(...))`, a blob: URL,
+             which the worker-src fallback (script-src) doesn't allow --
+             without this, mediaProbe.worker.ts/imageResize.worker.ts fail
+             to construct at all in dev, silently leaving every image stuck
+             on "checking…" forever (caught live: the resize worker's own
+             console error was explicit, but the probe worker's identical
+             failure had been masquerading as a stuck status instead).
+             Production builds emit a same-origin file and don't need
+             blob:, but keeping it doesn't meaningfully widen the attack
+             surface -- it only allows worker scripts from blob URLs this
+             same-origin page itself created. img-src needs 'blob:' too, for
+             a different reason: useResizedImage's worker hands back a
+             re-encoded image as a Blob, rendered via
+             `URL.createObjectURL(blob)` -- without 'blob:' here, that
+             `<img src="blob:...">` is blocked exactly like the worker
+             construction was, and the image silently renders as broken
+             (alt text, no icon) with the real cause only visible in the
+             console. Caught live: a correctly fetched/decoded/resized WebP
+             blob (verified by hand, RIFF...WEBP signature intact) still
+             failed to display until this was added. -->
+        <meta http-equiv="content-security-policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'self'; connect-src 'self' http: https: wss:; img-src 'self' data: blob: https:; media-src https:; worker-src 'self' blob:">
     </head>
     <body>
         <div id="root"></div>

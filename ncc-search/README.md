@@ -1,9 +1,9 @@
 # ncc-search
 
 A separate, standalone process that discovers public Nostr-native content —
-NCC-02/NCC-05 service records and nsites (NIP-5A) today — resolves each per
-its own normative contract, fetches the content it points to, and serves
-unified full-text search over the result.
+NCC-02/NCC-05 service records, nsites (NIP-5A), NIP-23 articles, and NIP-68/71
+pictures and videos — resolves each per its own normative contract, and
+serves unified full-text search over the result.
 
 This is not a feature of `ncc-server` or the `ncc-sidecar`: it runs as its own
 process/service (`ncc-search.service`), reads from the same relay list, and
@@ -80,6 +80,26 @@ nsite (src/adapters/nsite.js + nsite-crawl.js)   -- NIP-5A static sites
                     to every nsite row for that pubkey, or nothing at all
                     if unverifiable (never shown as if confirmed)
   re-crawl on a fixed interval (NIP-5A defines no TTL field)
+
+content (src/adapters/article.js + media.js + content-crawl.js)
+  -- NIP-23 articles, NIP-68 pictures, NIP-71 videos
+  discoverArticles/discoverMedia -- broad REQ for kind:30023 (articles) and
+                    kind:20/21/22/34235/34236 (pictures/videos)
+  resolveArticle -- the event's own `content` IS the article (Markdown);
+                    stripMarkdown() turns it into FTS-indexable plain text.
+                    No fetch step at all -- discovery hands over the full
+                    record already resolved.
+  resolveMedia   -- parses `imeta` tags (NIP-92, extended by NIP-68/71) for
+                    url/m/dim/alt/image/duration. This backend NEVER fetches
+                    the media bytes themselves: the browser loads images/
+                    video directly from their original host (see ui/), so
+                    there is nothing here to verify server-side either --
+                    reachability for these two kinds is checked client-side
+                    (ui/'s Web Worker), not by this process.
+  content-crawl.js -- discover -> resolve -> store immediately (no fetch
+                    means no pending/schedule queue at all), plus the same
+                    periodic NIP-05 enrichment pass nsite-crawl.js uses,
+                    reusing nsite.js's resolveNip05() directly
 
 NIP-50 (src/nip11.js + adapters/nip50.js)   -- live search, not a crawl adapter
   Nip11Prober    -- fetches each relay's NIP-11 document (wss:// -> https://,
@@ -178,6 +198,29 @@ server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
   resolution). `server.js` keeps this distinction load-bearing: it never
   lets a live hit overwrite a verified index row with the same
   `(pubkey, itemId)`, only adds live hits for identities not already indexed.
+- **Articles/images/videos have no server-checked reachability, by design,
+  not omission.** `lastStatus`/`lastReachableAt` are always `null` for these
+  three kinds (see `store.upsertContent`'s doc comment) -- this backend
+  never fetches media bytes or re-renders article pages, so it has nothing
+  truthful to report there. `ui/`'s `useMediaProbe` Web Worker checks image/
+  video reachability client-side instead; there is currently no equivalent
+  check for whether an article's publishing relays are still up, since an
+  article's content is already fully in hand once discovered regardless.
+- **Media legacy kind (34125/1063, NIP-94 generic file metadata) is not
+  discovered.** Only kind 20 (NIP-68 pictures) and 21/22/34235/34236
+  (NIP-71 videos) are indexed. A file shared only as a bare NIP-94 event (no
+  NIP-68/71 wrapper) won't be indexed; add it as a fourth media discovery
+  filter if that turns out to matter.
+- **`ui/`'s CSP needed three separate fixes to actually render media**,
+  each caught live, not by reading the spec first: `media-src` for
+  `<video>` (`<img>` works via `img-src` alone, which makes this one easy
+  to miss), `worker-src 'self' blob:` for the two Web Workers (missing this
+  silently stuck every image/video on "checking..." forever in dev, since
+  Vite's dev server bootstraps workers via a `blob:` URL), and `img-src
+  ...blob:` for the resize worker's `URL.createObjectURL(blob)` result
+  (missing this rendered a verified-correct, successfully fetched/decoded/
+  resized WebP as a plain broken-image icon). See `ui/README.md`'s "What's
+  implemented vs. not" for the full detail on each.
 
 ## Running it
 
