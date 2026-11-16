@@ -39,7 +39,16 @@ through CGNAT without an external tunnel.
 
 ### 1. Install the Compose bundle on the server
 
-Run on the Debian/Ubuntu server:
+Run on the Debian/Ubuntu server as a single command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/imattau/ncc-server/main/scripts/quick-install.sh | sudo bash
+```
+
+This clones the project to `/opt/ncc-server` (or updates it, if already present)
+and runs the same installer as the manual steps below. Review the script
+before piping it into `sudo bash` on a host you care about, or clone the repo
+yourself and run it locally:
 
 ```sh
 sudo apt-get update
