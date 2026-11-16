@@ -244,19 +244,6 @@ services:
       - "${SIDECAR_CERT_DIR}:/opt/ncc-sidecar/certs:ro"
       - caddy-data:/data
       - caddy-config:/config
-    depends_on:
-      sidecar:
-        condition: service_healthy
-      relay:
-        condition: service_healthy
-      npanel:
-        condition: service_healthy
-      ditto-web:
-        condition: service_healthy
-      search:
-        condition: service_healthy
-      search-ui:
-        condition: service_healthy
     restart: unless-stopped
     cap_add:
       - NET_BIND_SERVICE
