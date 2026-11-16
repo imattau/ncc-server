@@ -21,14 +21,17 @@ through their managed runtime configuration.
 - For the optional test page: a workstation with Git, SSH, Node.js 22 or newer,
   and npm.
 
-Forward TCP 8443 to the server for NCC services. Forward 8447 only when
-exposing the optional ncc-search UI and API. Port 8080 is optional for
-plain HTTP web access; Tor's onion service reaches it locally.
+Forward TCP 8443–8447 to expose the NCC services. Port 8080 is optional for
+plain HTTP web access; Tor's onion service reaches it locally. You can leave
+individual service ports closed if that service should not be reachable.
 
 | Port | Purpose |
 | --- | --- |
 | 8080 | HTTP web content and local Tor onion target |
-| 8443 | Pinned HTTPS and WSS for web, Npanel, Ditto Web, and Ditto Relay |
+| 8443 | Pinned HTTPS web content |
+| 8444 | Pinned WSS Ditto Relay |
+| 8445 | Pinned HTTPS Npanel dashboard |
+| 8446 | Pinned HTTPS Ditto Web |
 | 8447 | Pinned HTTPS ncc-search UI and API (optional, same origin) |
 
 Do not forward the internal service ports. Onion access uses Tor and needs no
@@ -70,8 +73,9 @@ the sidecar, creates and publishes the `web`, `relay`, `npanel`, `ditto`, and
 follow-up provisioning commands are required. Keep an encrypted backup of the
 identity file outside the server; it is needed to recover service control.
 
-NCC Browser identifies each service with its signed npub/service locator and
-sends routing metadata to Caddy; Npanel and Ditto Web share HTTPS port 8443.
+NCC Browser identifies each service with its signed npub/service locator.
+Caddy serves web, relay, Npanel, Ditto Web, and search on ports 8443 through
+8447 respectively.
 
 The installer also writes a placeholder `index.html` into `CONTENT_ROOT` if
 it's empty, so `make bundle-health` sees HTTP 200 on the web root even

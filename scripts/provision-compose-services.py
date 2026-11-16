@@ -162,6 +162,9 @@ def main():
         raise RuntimeError('set PUBLIC_IPV4 in .env')
     http_port = int(env.get('CONTENT_PORT', '8080'))
     https_port = int(env.get('CONTENT_TLS_PORT', '8443'))
+    relay_port = int(env.get('RELAY_TLS_PORT', '8444'))
+    ditto_port = int(env.get('DITTO_WEB_TLS_PORT', '8446'))
+    npanel_port = int(env.get('NPANEL_TLS_PORT', '8445'))
     search_port = int(env.get('SEARCH_TLS_PORT', '8447'))
     cert_dir = pathlib.Path(env.get('SIDECAR_CERT_DIR', '/opt/ncc-sidecar/certs'))
     project = pathlib.Path(__file__).parents[1]
@@ -192,7 +195,7 @@ def main():
     if relay_existing and relay_existing.get('type') != 'relay':
         raise RuntimeError('service ID relay already exists with a non-relay type; inspect the sidecar before proceeding')
     relay_config = service_config(
-        public_ip, https_port, 'wss', self_signed=True, path='/relay/',
+        public_ip, relay_port, 'wss', self_signed=True, path='/relay/',
         # Probe the relay backend directly during first-run provisioning; Caddy
         # depends on the certificate and profiles created by this script.
         probe_url='http://127.0.0.1:13131/',
@@ -215,7 +218,7 @@ def main():
         raise RuntimeError(f'relay self-signed certificate was not generated: {relay_cert_path}')
     relay_pin = spki_pin(relay_cert_path)
     relay_config = service_config(
-        public_ip, https_port, 'wss', self_signed=True, pin=relay_pin, path='/relay/',
+        public_ip, relay_port, 'wss', self_signed=True, pin=relay_pin, path='/relay/',
         probe_url='http://127.0.0.1:13131/',
     )
     relay_config.update({
@@ -233,14 +236,14 @@ def main():
     npanel = ensure_service(
         services, identity, service_id='npanel', name='Npanel Dashboard',
         config=service_config(
-            public_ip, https_port, 'https', self_signed=False, pin=pin,
+            public_ip, npanel_port, 'https', self_signed=False, pin=pin,
             probe_url='http://127.0.0.1:3200/api/instance',
         ),
     )
     ditto = ensure_service(
         services, identity, service_id='ditto', name='Ditto Web',
         config=service_config(
-            public_ip, https_port, 'https', self_signed=False, pin=pin,
+            public_ip, ditto_port, 'https', self_signed=False, pin=pin,
             probe_url='http://127.0.0.1:3210/',
         ),
     )

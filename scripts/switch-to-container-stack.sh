@@ -65,10 +65,10 @@ while (( SECONDS < deadline )); do
   if [[ "$healthy" == true ]] \
     && curl -fsS --max-time 5 http://127.0.0.1:3000/ >/dev/null \
     && curl -fsS --max-time 5 "http://127.0.0.1:${CONTENT_PORT:-8080}/" >/dev/null \
-    && curl -fsSk --max-time 5 -H "X-NCC-Pubkey: ${NCC_OPERATOR_PUBKEY}" -H 'X-NCC-Service: npanel' "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/api/instance" | grep -Fq "${PUBLIC_IPV4}" \
-    && curl -fsSk --max-time 5 -H "X-NCC-Pubkey: ${NCC_OPERATOR_PUBKEY}" -H 'X-NCC-Service: ditto' "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/" | grep -qi 'ditto' \
+    && curl -fsSk --max-time 5 "https://127.0.0.1:${NPANEL_TLS_PORT:-8445}/api/instance" | grep -Fq "${PUBLIC_IPV4}" \
+    && curl -fsSk --max-time 5 "https://127.0.0.1:${DITTO_WEB_TLS_PORT:-8446}/" | grep -qi 'ditto' \
     && curl -fsSk --max-time 5 "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/nsite/${SITE_NPUB:-npub1asy6ca3ppxa70e6z7lpm2d4tuh09sh3x5cg4485f0juwgvxm77kq6pl8fr}/" | grep -q 'NCC nsite served' \
-    && curl -fsSk --max-time 5 -H 'Accept: application/nostr+json' "https://127.0.0.1:${CONTENT_TLS_PORT:-8443}/relay/" | grep -q '"name"' \
+    && curl -fsSk --max-time 5 -H 'Accept: application/nostr+json' "https://127.0.0.1:${RELAY_TLS_PORT:-8444}/relay/" | grep -q '"name"' \
     && ss -lnt | grep -q '127.0.0.1:9051'; then
     break
   fi

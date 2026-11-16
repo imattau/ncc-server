@@ -12,7 +12,7 @@ fi
 BASE_HTTP="${BASE_HTTP:-http://127.0.0.1:8080}"
 PUBLIC_IPV4="${PUBLIC_IPV4:-127.0.0.1}"
 BASE_HTTPS="${BASE_HTTPS:-https://localhost:8443}"
-RELAY_HTTPS="${RELAY_HTTPS:-https://localhost:${RELAY_TLS_PORT:-8444}/}"
+RELAY_HTTPS="${RELAY_HTTPS:-https://localhost:${RELAY_TLS_PORT:-8444}/relay/}"
 NPANEL_HTTPS="${NPANEL_HTTPS:-https://localhost:${NPANEL_TLS_PORT:-8445}}"
 DITTO_HTTPS="${DITTO_HTTPS:-https://localhost:${DITTO_WEB_TLS_PORT:-8446}}"
 # Same origin/port for both -- see container/Caddyfile's comment on the

@@ -207,7 +207,7 @@ def main():
     db_path = sidecar_dir / 'sidecar.db'
     relay_env = pathlib.Path(env.get('DITTO_ENV_FILE', '/etc/ncc-server/ditto-relay.env'))
     public_ip = env.get('PUBLIC_IPV4')
-    relay_public_url = (f'wss://{public_ip}:{env.get("CONTENT_TLS_PORT", "8443")}/relay/'
+    relay_public_url = (f'wss://{public_ip}:{env.get("RELAY_TLS_PORT", "8444")}/relay/'
                         if public_ip else None)
     compose = compose_command(project)
     relay_env_existed = relay_env.exists()

@@ -24,7 +24,9 @@ preflight_checks() {
   fi
 
   if command -v ss >/dev/null 2>&1; then
-    for port in "${CONTENT_PORT:-8080}" "${CONTENT_TLS_PORT:-8443}" "${SEARCH_TLS_PORT:-8447}"; do
+    for port in "${CONTENT_PORT:-8080}" "${CONTENT_TLS_PORT:-8443}" \
+      "${RELAY_TLS_PORT:-8444}" "${NPANEL_TLS_PORT:-8445}" \
+      "${DITTO_WEB_TLS_PORT:-8446}" "${SEARCH_TLS_PORT:-8447}"; do
       ss -Htln "( sport = :$port )" 2>/dev/null | grep -q . || continue
       if command -v docker >/dev/null 2>&1 \
         && docker ps --filter 'label=com.docker.compose.project=ncc-bundle' --format '{{.Ports}}' 2>/dev/null \
@@ -136,6 +138,9 @@ ask_public_ipv4() {
 ask_public_ipv4
 ensure_env_default CONTENT_PORT 8080
 ensure_env_default CONTENT_TLS_PORT 8443
+ensure_env_default RELAY_TLS_PORT 8444
+ensure_env_default NPANEL_TLS_PORT 8445
+ensure_env_default DITTO_WEB_TLS_PORT 8446
 ensure_env_default SEARCH_TLS_PORT 8447
 ensure_env_default NCC_OPERATOR_PUBKEY ''
 python3 - "$PUBLIC_IPV4" <<'PY'
@@ -194,7 +199,7 @@ if [[ ! -e "$DITTO_ENV_FILE" ]]; then
   umask 077
   cat > "$DITTO_ENV_FILE" <<EOF
 # First-run placeholder. Replaced by the operator identity setup before relay start.
-RELAY_URL=wss://$PUBLIC_IPV4:${CONTENT_TLS_PORT}/relay/
+RELAY_URL=wss://$PUBLIC_IPV4:${RELAY_TLS_PORT}/relay/
 NOSTR_SECRET_KEY=setup-pending
 RELAY_PORT=127.0.0.1:13131
 IP_HEADER=X-Real-IP

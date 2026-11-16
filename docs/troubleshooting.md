@@ -38,17 +38,15 @@ Check the listeners from the VM:
 curl -I http://127.0.0.1:8080/
 set -a; . /opt/ncc-server/.env; set +a
 curl --insecure -I https://127.0.0.1:8443/
-curl --insecure -I -H "X-NCC-Pubkey: $NCC_OPERATOR_PUBKEY" \
-  -H 'X-NCC-Service: npanel' https://127.0.0.1:8443/api/instance
-curl --insecure -I -H "X-NCC-Pubkey: $NCC_OPERATOR_PUBKEY" \
-  -H 'X-NCC-Service: ditto' https://127.0.0.1:8443/
-curl --insecure -I https://127.0.0.1:8443/relay/
+curl --insecure -I https://127.0.0.1:8444/relay/
+curl --insecure -I https://127.0.0.1:8445/api/instance
+curl --insecure -I https://127.0.0.1:8446/
+curl --insecure -I https://127.0.0.1:8447/
 ~~~
 
-NCC Browser supplies the pubkey and service headers for Npanel and Ditto Web.
-Ditto Relay uses the `/relay/` path so ordinary WebSocket clients can connect
-without NCC-specific headers. Requests use the server IP directly; no DNS
-names are needed.
+Each service has its own listener: web 8443, relay 8444, Npanel 8445, Ditto
+Web 8446, and search 8447. Requests use the server IP directly; no DNS names
+are needed.
 
 For an empty web root, install the MKStack test page or place your own files in
 the CONTENT_ROOT directory from .env. Check that files are readable by the
@@ -115,17 +113,17 @@ detect a router or ISP port-forwarding problem.
 From the VM, check relay NIP-11:
 
 ~~~sh
-curl --insecure -H 'Accept: application/nostr+json' https://127.0.0.1:8443/relay/
+curl --insecure -H 'Accept: application/nostr+json' https://127.0.0.1:8444/relay/
 ~~~
 
-Then check Caddy and relay logs. Verify that TCP 8443 reaches the VM, Caddy is
-using the shared pinned certificate, and the relay backend is healthy on
+Then check Caddy and relay logs. Verify that TCP 8444 reaches the VM, Caddy is
+using the relay's pinned certificate, and the relay backend is healthy on
 loopback port 13131. Do not forward 13131.
 
 From a workstation with Node.js 22 or newer, run:
 
 ~~~sh
-make test-ditto-wss RELAY_URL=wss://203.0.113.10:8443/relay/
+make test-ditto-wss RELAY_URL=wss://203.0.113.10:8444/relay/
 ~~~
 
 The smoke script skips certificate verification only for this test. NCC

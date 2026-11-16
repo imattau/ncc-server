@@ -43,20 +43,16 @@ Forward and allow these TCP ports:
 | Port | Destination | Purpose |
 | --- | --- | --- |
 | 8080 | VM port 8080 | Optional HTTP; local Tor onion target |
-| 8443 | VM port 8443 | Pinned HTTPS and WSS for core NCC services |
+| 8443 | VM port 8443 | Pinned HTTPS web content |
+| 8444 | VM port 8444 | Pinned WSS Ditto Relay |
 | 8445 | VM port 8445 | Pinned HTTPS npanel |
+| 8446 | VM port 8446 | Pinned HTTPS Ditto Web |
 | 8447 | VM port 8447 | Pinned HTTPS ncc-search (UI and API, same origin) |
 
-Only 8443 is required for the core NCC services. Forward 8447 only if you
-want ncc-search reachable from outside. Its API shares this same port/origin
-as its UI on purpose -- see container/Caddyfile's comment on the search
-block for why a separate port for the API broke browser certificate trust
-for ncc:// clients. Forward 8445 only if you want to open npanel directly
-as a plain https:// address (not via its ncc:// address) -- its own
-frontend can't detect it's running embedded when opened via ncc:// (see
-container/Caddyfile's comment on the npanel block), so it always falls
-back to asking for a manually-typed dashboard address there; opening this
-port directly gives it a real origin where that self-detection works.
+Forward the ports for the services you want clients to reach. ncc-search's UI
+and API share port 8447 so browser certificate trust covers both. Npanel uses
+its own HTTPS origin on port 8445 because its frontend's instance probe does
+not work under the ncc:// origin.
 
 Do not forward ports 3000, 3200, 3201, 3220, 3230, 9050, 9051, 9200, or 13131.
 The sidecar admin port, Npanel backends, ncc-search's own containers, Tor,
@@ -121,11 +117,10 @@ matching paths. All five records use the operator identity -- including
 ncc-search's, even though that process itself never signs or publishes an
 event; it gets a record purely so it has a discoverable ncc://<npub>/search/
 address, the same reasoning as Npanel/Ditto Web. The web profile advertises
-HTTPS on port 8443 and maps its onion service to local HTTP port 8080. Npanel
-and Ditto Web also use pinned HTTPS on 8443; NCC Browser's routing headers
-select their backends. Ditto Relay advertises WSS at
-`wss://<IP>:8443/relay/`, which Caddy routes by path so ordinary WebSocket
-clients need no custom headers.
+HTTPS on port 8443 and maps its onion service to local HTTP port 8080. Relay,
+Npanel, Ditto Web, and ncc-search advertise ports 8444, 8445, 8446, and 8447
+respectively. Each profile's published port matches its dedicated Caddy
+listener, avoiding cross-service fallback to the web content root.
 
 The bundle's default publication relays are wss://relay.primal.net/ and
 wss://relay.ditto.pub/. The manager profile does not create its own onion
@@ -196,7 +191,7 @@ make verify NPUB=npub1... SERVICE=web RELAYS="wss://relay.example/ wss://relay.o
 To test the relay's WSS protocol from the workstation:
 
 ~~~sh
-make test-ditto-wss RELAY_URL=wss://203.0.113.10:8443/relay/
+make test-ditto-wss RELAY_URL=wss://203.0.113.10:8444/relay/
 ~~~
 
 This test disables TLS verification for the local smoke request because the

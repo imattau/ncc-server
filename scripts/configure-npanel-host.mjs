@@ -5,14 +5,14 @@ import { join } from 'node:path';
 
 const baseUrl = (process.env.SIDECAR_ADMIN_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
 const host = process.env.PUBLIC_IPV4;
-const port = Number(process.env.CONTENT_TLS_PORT ?? 8443);
+const port = Number(process.env.NPANEL_TLS_PORT ?? 8445);
 const certDir = process.env.SIDECAR_CERT_DIR ?? '/opt/ncc-sidecar/certs';
 
 if (!isIPv4(host ?? '')) {
   throw new Error('Set PUBLIC_IPV4 to the server public IPv4 address.');
 }
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error('CONTENT_TLS_PORT must be a valid TCP port.');
+  throw new Error('NPANEL_TLS_PORT must be a valid TCP port.');
 }
 const publicKey = execFileSync('openssl', ['x509', '-in', join(certDir, '2/server.crt'), '-pubkey', '-noout']);
 const der = execFileSync('openssl', ['pkey', '-pubin', '-outform', 'DER'], { input: publicKey });

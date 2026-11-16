@@ -7,14 +7,14 @@ import { join } from 'node:path';
 const baseUrl = (process.env.SIDECAR_ADMIN_URL ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
 const identityPath = process.env.NCC_IDENTITY_FILE ?? '/etc/ncc-server/operator-identity.json';
 const host = process.env.PUBLIC_IPV4;
-const port = Number(process.env.CONTENT_TLS_PORT ?? 8443);
+const port = Number(process.env.DITTO_WEB_TLS_PORT ?? 8446);
 const certDir = process.env.SIDECAR_CERT_DIR ?? '/opt/ncc-sidecar/certs';
 
 if (!isIPv4(host ?? '')) {
   throw new Error('Set PUBLIC_IPV4 to the server public IPv4 address.');
 }
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error('CONTENT_TLS_PORT must be a valid TCP port.');
+  throw new Error('DITTO_WEB_TLS_PORT must be a valid TCP port.');
 }
 const publicKey = execFileSync('openssl', ['x509', '-in', join(certDir, '2/server.crt'), '-pubkey', '-noout']);
 const der = execFileSync('openssl', ['pkey', '-pubin', '-outform', 'DER'], { input: publicKey });

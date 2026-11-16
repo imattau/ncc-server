@@ -13,7 +13,7 @@ Caddy. Set
 the public IP's `nip.io` hostname.
 
 The test locator uses service ID `ditto`, a public endpoint at
-`https://<DITTO_WEB_HOST>:8443/`, and the SPKI pin from the existing Caddy web
+`https://<DITTO_WEB_HOST>:8446/`, and the SPKI pin from the existing Caddy web
 certificate. The web endpoint and HTTPS route are distinct from the primary
 test app and Npanel dashboard.
 
@@ -43,7 +43,7 @@ when it creates the service; it never prints the private key. It republishes
 all active sidecar records because that sidecar version has a service-wide
 manual republish endpoint.
 
-Check `https://<DITTO_WEB_HOST>:8443/` in a browser and resolve
+Check `https://<DITTO_WEB_HOST>:8446/` in a browser and resolve
 `ncc://<ditto-npub>/ditto/` in NCC Browser. Check the signed event's endpoint
 and `k` pin with the project's locator verification tools. The current VM test
 was also loaded in NCC Browser; its Ditto home screen rendered successfully.
