@@ -33,7 +33,7 @@ env:
   REGISTRY: ghcr.io
   SIDECAR_REV: 186c3ad50966a2319c354ace12e0a5a2267b75d9
   DITTO_RELAY_REV: e8974053dcf99ac952d1951deaffec105aeb08f1
-  NPANEL_REV: e4d8bc27738b6c9219d3326c03b3bca85a246667
+  NPANEL_REV: 9bcf347a330351d9876ba7958ce1dbfdac458fa4
   DITTO_WEB_REV: 29709b8b53d68109dfc14af7f3a44563d177e880
 
 jobs:
@@ -67,7 +67,7 @@ jobs:
             build_args: ''
           - component: npanel
             image: ncc-server-npanel
-            context: https://github.com/imattau/npanel.git#e4d8bc27738b6c9219d3326c03b3bca85a246667
+            context: https://github.com/imattau/npanel.git#9bcf347a330351d9876ba7958ce1dbfdac458fa4
             file: Dockerfile
             build_args: ''
           - component: ditto-web
