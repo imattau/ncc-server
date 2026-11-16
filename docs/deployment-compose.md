@@ -236,6 +236,21 @@ ssh -L 3000:127.0.0.1:3000 operator@192.168.1.50
 Then open http://127.0.0.1:3000 on the workstation. Never expose sidecar
 admin directly to the internet.
 
+## Manage administrators
+
+From the server checkout, grant an npub Npanel administrator access and send
+that npub a sidecar invitation:
+
+~~~sh
+sudo make bundle-add-admin NPUB=npub1...
+~~~
+
+Npanel access is granted immediately. The sidecar invitation is pending until
+the recipient accepts it. Sidecar remains bound to localhost; the recipient
+needs SSH access and a tunnel to open its UI. Ditto Relay does not expose an
+additional-admin setting through this Compose bundle, so the command leaves
+its operator identity unchanged.
+
 ## Recovery and upgrades
 
 The root-only host file `/etc/ncc-server/operator-identity.json` is the source

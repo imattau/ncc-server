@@ -144,6 +144,11 @@ sudo make bundle-down
 sudo docker-compose -p ncc-bundle -f compose.yaml up -d
 ```
 
+To grant an npub Npanel administrator access and invite them to manage the
+sidecar, run `sudo make bundle-add-admin NPUB=npub1...`. Sidecar access remains
+localhost-only and is added as a pending invitation. Ditto Relay has no
+additional-admin setting in this Compose bundle.
+
 Service configuration is in `.env`. Persistent service data is stored outside
 the containers. Keep `.env`, the operator key, and persistent data backed up;
 do not use `docker compose down -v` on an installed server. `make bundle-down`
