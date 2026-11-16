@@ -131,7 +131,7 @@ services:
     tmpfs:
       - /tmp
     healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck"]
+      test: ["CMD", "/bin/sh", "/usr/local/bin/healthcheck"]
       interval: 20s
       timeout: 5s
       retries: 5
