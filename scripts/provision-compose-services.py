@@ -192,7 +192,7 @@ def main():
     if relay_existing and relay_existing.get('type') != 'relay':
         raise RuntimeError('service ID relay already exists with a non-relay type; inspect the sidecar before proceeding')
     relay_config = service_config(
-        public_ip, https_port, 'wss', self_signed=False, pin=pin, path='/relay/',
+        public_ip, https_port, 'wss', self_signed=True, path='/relay/',
         # Probe the relay backend directly during first-run provisioning; Caddy
         # depends on the certificate and profiles created by this script.
         probe_url='http://127.0.0.1:13131/',
@@ -208,6 +208,25 @@ def main():
     )
     if not relay or int(relay['id']) != 3:
         raise RuntimeError(f'relay record must have ID 3; got {relay and relay.get("id")}')
+    force_publish(relay)
+
+    relay_cert_path = cert_dir / '3' / 'server.crt'
+    if not relay_cert_path.is_file():
+        raise RuntimeError(f'relay self-signed certificate was not generated: {relay_cert_path}')
+    relay_pin = spki_pin(relay_cert_path)
+    relay_config = service_config(
+        public_ip, https_port, 'wss', self_signed=True, pin=relay_pin, path='/relay/',
+        probe_url='http://127.0.0.1:13131/',
+    )
+    relay_config.update({
+        'ncc05_ttl_hours': 1,
+        'ncc02_expiry_days': 1,
+        'refresh_interval_minutes': 30,
+    })
+    relay = ensure_service(
+        request('/api/services'), identity, service_id='relay', name='Ditto Relay',
+        config=relay_config, service_type='relay',
+    )
     force_publish(relay)
 
     services = request('/api/services')
