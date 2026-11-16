@@ -125,12 +125,13 @@ services:
 
   npanel:
     build:
-      context: ./container/npanel
-      dockerfile: Containerfile
-      args:
-        NPANEL_UID: "${NPANEL_UID}"
-        NPANEL_GID: "${NPANEL_GID}"
-    image: ncc-bundle-npanel:0.7.2
+      # Build the NCC fork so a fresh checkout doesn't need a pre-staged
+      # binary in its build context. The fork's Dockerfile builds the static
+      # binary and embedded dashboard for the target architecture.
+      context: https://github.com/imattau/npanel.git#c372fe22110474fb1bc73768e3874f2a494e66de
+    image: ncc-bundle-npanel:c372fe2
+    user: "${NPANEL_UID}:${NPANEL_GID}"
+    entrypoint: ["/bin/sh", "/usr/local/bin/npanel-entrypoint"]
     environment:
       DASHBOARD_HOST: "${PUBLIC_IPV4}"
       NCC_PUBKEY: "${NCC_OPERATOR_PUBKEY:-}"
@@ -140,6 +141,8 @@ services:
       - "127.0.0.1:3201:3001"
     volumes:
       - "${NPANEL_DATA_DIR}:/data"
+      - ./container/npanel/entrypoint:/usr/local/bin/npanel-entrypoint:ro
+      - ./container/npanel/healthcheck:/usr/local/bin/healthcheck:ro
     restart: unless-stopped
     read_only: true
     cap_drop:

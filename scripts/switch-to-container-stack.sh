@@ -11,7 +11,6 @@ switched=false
 die() { echo "Error: $*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Debian VM'
 [[ -f "$PROJECT_DIR/.env" ]] || die 'copy .env.example to .env and set VM paths first'
-[[ -x "$PROJECT_DIR/container/npanel/npanel" ]] || die 'stage the static npanel binary before switching'
 set -a
 # shellcheck disable=SC1090
 source "$PROJECT_DIR/.env"
@@ -44,7 +43,7 @@ trap rollback ERR INT TERM
 "${COMPOSE[@]}" config >/dev/null
 docker volume inspect "$(awk -F= '/^OPENSEARCH_VOLUME=/{print $2}' "$PROJECT_DIR/.env")" >/dev/null
 "${COMPOSE[@]}" build ditto-web
-for image in ncc-bundle-sidecar:"$(awk -F= '/^SIDECAR_REV=/{print $2}' "$PROJECT_DIR/.env")" ncc-bundle-npanel:0.7.2 ncc-bundle-tor:debian12 ditto-relay:ncc-bundle ncc-bundle-ditto-web:"$(awk -F= '/^DITTO_WEB_REV=/{print $2}' "$PROJECT_DIR/.env")"; do
+for image in ncc-bundle-sidecar:"$(awk -F= '/^SIDECAR_REV=/{print $2}' "$PROJECT_DIR/.env")" ncc-bundle-npanel:c372fe2 ncc-bundle-tor:debian12 ditto-relay:ncc-bundle ncc-bundle-ditto-web:"$(awk -F= '/^DITTO_WEB_REV=/{print $2}' "$PROJECT_DIR/.env")"; do
   docker image inspect "$image" >/dev/null || die "required image is missing: $image"
 done
 
