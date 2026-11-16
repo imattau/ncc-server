@@ -126,6 +126,27 @@ export function openStore(dbPath, opts = {}) {
       cursor INTEGER NOT NULL,
       PRIMARY KEY (source, relay)
     );
+
+    CREATE TABLE IF NOT EXISTS nip65_author_checks (
+      pubkey TEXT PRIMARY KEY,
+      checked_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS nip65_relay_lists (
+      pubkey TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      relays TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS learned_relays (
+      url TEXT PRIMARY KEY,
+      promoted_at INTEGER NOT NULL,
+      last_probe_at INTEGER,
+      last_error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS relay_candidate_probes (
+      url TEXT PRIMARY KEY,
+      last_probe_at INTEGER NOT NULL,
+      last_error TEXT
+    );
   `);
 
   // `CREATE TABLE IF NOT EXISTS` above only creates the table on a brand
@@ -445,6 +466,77 @@ export function openStore(dbPath, opts = {}) {
     return row ? { ...row, hashtags: parseHashtags(row.hashtags) } : row;
   }
 
+  function listNip65AuthorsToCheck(limit = 5, olderThanSeconds = 7 * 24 * 60 * 60) {
+    const cutoff = Math.floor(Date.now() / 1000) - olderThanSeconds;
+    return db.prepare(`SELECT DISTINCT services.pubkey AS pubkey
+      FROM services LEFT JOIN nip65_author_checks USING (pubkey)
+      WHERE nip65_author_checks.checked_at IS NULL OR nip65_author_checks.checked_at < ?
+      ORDER BY COALESCE(nip65_author_checks.checked_at, 0), services.pubkey LIMIT ?`)
+      .all(cutoff, limit).map((row) => row.pubkey);
+  }
+
+  function saveNip65RelayList(pubkey, createdAt, relays) {
+    db.prepare(`INSERT INTO nip65_relay_lists (pubkey, created_at, relays) VALUES (?, ?, ?)
+      ON CONFLICT (pubkey) DO UPDATE SET created_at = excluded.created_at, relays = excluded.relays
+      WHERE excluded.created_at >= nip65_relay_lists.created_at`)
+      .run(pubkey, createdAt, JSON.stringify(relays));
+  }
+
+  function markNip65AuthorChecked(pubkey, checkedAt = Math.floor(Date.now() / 1000)) {
+    db.prepare(`INSERT INTO nip65_author_checks (pubkey, checked_at) VALUES (?, ?)
+      ON CONFLICT (pubkey) DO UPDATE SET checked_at = excluded.checked_at`)
+      .run(pubkey, checkedAt);
+  }
+
+  function listNip65RelayCandidates({ now = Math.floor(Date.now() / 1000), maxAgeSeconds = 90 * 24 * 60 * 60 } = {}) {
+    const rows = db.prepare(`SELECT lists.pubkey AS pubkey, lists.relays AS relays
+      FROM nip65_relay_lists AS lists
+      WHERE lists.created_at >= ? AND EXISTS (
+        SELECT 1 FROM services WHERE services.pubkey = lists.pubkey
+      )`)
+      .all(now - maxAgeSeconds);
+    const authorsByRelay = new Map();
+    for (const row of rows) {
+      let relays;
+      try { relays = JSON.parse(row.relays); } catch { continue; }
+      for (const relay of relays) {
+        if (!authorsByRelay.has(relay)) authorsByRelay.set(relay, new Set());
+        authorsByRelay.get(relay).add(row.pubkey);
+      }
+    }
+    return [...authorsByRelay].map(([url, authors]) => ({ url, authorCount: authors.size }))
+      .sort((a, b) => b.authorCount - a.authorCount || a.url.localeCompare(b.url));
+  }
+
+  function listLearnedRelays() {
+    return db.prepare(`SELECT url, promoted_at AS promotedAt, last_probe_at AS lastProbeAt, last_error AS lastError FROM learned_relays ORDER BY promoted_at`)
+      .all();
+  }
+
+  function saveLearnedRelay(url) {
+    db.prepare(`INSERT OR IGNORE INTO learned_relays (url, promoted_at) VALUES (?, ?)`)
+      .run(url, Math.floor(Date.now() / 1000));
+  }
+
+  function recordLearnedRelayProbe(url, error = null) {
+    db.prepare(`UPDATE learned_relays SET last_probe_at = ?, last_error = ? WHERE url = ?`)
+      .run(Math.floor(Date.now() / 1000), error, url);
+  }
+
+  function removeLearnedRelay(url) {
+    db.prepare(`DELETE FROM learned_relays WHERE url = ?`).run(url);
+  }
+
+  function listRelayCandidateProbes() {
+    return db.prepare(`SELECT url, last_probe_at AS lastProbeAt, last_error AS lastError FROM relay_candidate_probes`).all();
+  }
+
+  function recordRelayCandidateProbe(url, error = null) {
+    db.prepare(`INSERT INTO relay_candidate_probes (url, last_probe_at, last_error) VALUES (?, ?, ?)
+      ON CONFLICT (url) DO UPDATE SET last_probe_at = excluded.last_probe_at, last_error = excluded.last_error`)
+      .run(url, Math.floor(Date.now() / 1000), error);
+  }
+
   function getDiscoveryCursor(source, relay) {
     return db.prepare(`SELECT cursor FROM discovery_cursors WHERE source = ? AND relay = ?`).get(source, relay)?.cursor ?? 0;
   }
@@ -530,6 +622,16 @@ export function openStore(dbPath, opts = {}) {
     attachNip05,
     search,
     getService,
+    listNip65AuthorsToCheck,
+    saveNip65RelayList,
+    markNip65AuthorChecked,
+    listNip65RelayCandidates,
+    listLearnedRelays,
+    saveLearnedRelay,
+    recordLearnedRelayProbe,
+    removeLearnedRelay,
+    listRelayCandidateProbes,
+    recordRelayCandidateProbe,
     getDiscoveryCursor,
     saveDiscoveryCursor,
     getStatus,

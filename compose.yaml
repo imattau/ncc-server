@@ -169,6 +169,7 @@ services:
       # first-start bootstrap. See container/search/Containerfile's
       # comment and ncc-search/README.md.
       NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
+      NCC_SEARCH_LEARN_RELAYS: "${SEARCH_LEARN_RELAYS:-true}"
       NCC_SEARCH_CORS_ORIGIN: "${SEARCH_CORS_ORIGIN}"
       NCC_SEARCH_DB_MAX_BYTES: "${SEARCH_DB_MAX_BYTES}"
     ports:

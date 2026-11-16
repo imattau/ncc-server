@@ -36,7 +36,7 @@ export function startProfileCrawler(config, store, pool) {
     scheduleNip05(resolved.pubkey, 0);
   }
 
-  const profileSub = discoverProfiles(pool, config.relays, ingestProfile, { store, monitor: config.crawlMonitor });
+  const profileSub = discoverProfiles(pool, config.relays, ingestProfile, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
 
   async function processNip05(pubkey) {
     const nip05 = await resolveNip05(pool, config.relays, pubkey, {

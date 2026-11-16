@@ -72,7 +72,7 @@ export function startNsiteCrawler(config, store, pool) {
     schedule(nip05Pending, event.pubkey, 0);
   }
 
-  const discovery = discoverNsites(pool, config.relays, ({ event }) => ingestEvent(event), { store, monitor: config.crawlMonitor });
+  const discovery = discoverNsites(pool, config.relays, ({ event }) => ingestEvent(event), { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
 
   async function processOne(k) {
     const event = eventsByKey.get(k);

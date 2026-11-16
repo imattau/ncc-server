@@ -67,7 +67,7 @@ export function startCrawler(config, store, pool) {
 
   const discovery = discoverServiceRecords(pool, config.relays, ({ pubkey, serviceId }) => {
     schedule(pubkey, serviceId, 0);
-  }, { store, monitor: config.crawlMonitor });
+  }, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
 
   async function processOne(pubkey, serviceId) {
     const resolved = await resolver.resolveService(pubkey, serviceId);

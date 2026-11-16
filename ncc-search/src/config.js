@@ -47,6 +47,9 @@ export const config = {
   // (kind:9900 + their kind:1063 NIP-94 artifact metadata). See
   // adapters/npack.js.
   enableNpack: process.env.NCC_SEARCH_ENABLE_NPACK !== 'false',
+  // Learn additional crawl relays from NIP-65 lists published by authors
+  // already present in the index. Configured relays remain the bootstrap set.
+  learnRelays: process.env.NCC_SEARCH_LEARN_RELAYS !== 'false',
   // Live-query configured relays that advertise NIP-50 at search time, in
   // addition to serving from the local index. On by default like nsite:
   // if none of the configured relays support it (the common case today),

@@ -5,6 +5,8 @@ import { WebSocket } from 'ws';
 import { config } from './config.js';
 import { openStore } from './store.js';
 import { startCrawler } from './crawl.js';
+import { createRelayRegistry } from './relayDiscovery.js';
+import { startRelayLearning } from './relayLearning.js';
 import { startNsiteCrawler } from './adapters/nsite-crawl.js';
 import { startContentCrawler } from './adapters/content-crawl.js';
 import { startProfileCrawler } from './adapters/profile-crawl.js';
@@ -18,6 +20,7 @@ mkdirSync(dirname(config.dbPath), { recursive: true });
 const store = openStore(config.dbPath, { maxBytes: config.dbMaxBytes });
 const crawlMonitor = createCrawlMonitor({ staleAfterMs: config.crawlStaleMs });
 config.crawlMonitor = crawlMonitor;
+config.relayRegistry = createRelayRegistry(config.relays);
 
 // Enforced on the same cadence as everything else's periodic work
 // (config.tickIntervalMs), not its own separate timer -- pruneToFit() is
@@ -66,14 +69,16 @@ const npackCrawler = config.enableNpack ? startNpackCrawler(config, store, pool)
 const nip50Adapter = config.enableNip50
   ? new Nip50Adapter(pool, config, { nccCrawler, nsiteCrawler, contentCrawler })
   : null;
+const relayLearning = startRelayLearning(config, store, pool, config.relayRegistry);
 
-const app = createServer(store, nip50Adapter, { corsOrigin: config.corsOrigin, crawlMonitor });
+const app = createServer(store, nip50Adapter, { corsOrigin: config.corsOrigin, crawlMonitor, relayLearning });
 
 app
   .listen({ host: config.httpHost, port: config.httpPort })
   .then(() => {
     console.log(`ncc-search listening on http://${config.httpHost}:${config.httpPort}`);
     console.log(`ncc-search crawling relays: ${config.relays.join(', ')}`);
+    console.log(`ncc-search NIP-65 relay learning: ${config.learnRelays ? 'enabled (3 authors, max 10 learned relays)' : 'disabled'}`);
     console.log(`ncc-search nsite adapter: ${config.enableNsite ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search article/media adapter: ${config.enableContent ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search profile adapter: ${config.enableProfiles ? 'enabled' : 'disabled'}`);
@@ -91,13 +96,14 @@ app
   });
 
 function shutdown() {
+  relayLearning.stop();
   nccCrawler.stop();
   nsiteCrawler?.stop();
   contentCrawler?.stop();
   profileCrawler?.stop();
   npackCrawler?.stop();
   if (pruneTimer) clearInterval(pruneTimer);
-  pool.close(config.relays);
+  pool.close(config.relayRegistry.allKnown());
   app.close().finally(() => process.exit(0));
 }
 process.on('SIGINT', shutdown);

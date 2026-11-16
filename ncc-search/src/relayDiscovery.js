@@ -69,8 +69,54 @@ export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, 
 }
 
 export function discoverFromRelays(pool, relays, source, filter, onEvent, options = {}) {
-  const subscriptions = relays.map((relay) =>
-    subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, options),
-  );
-  return { close: () => subscriptions.forEach((subscription) => subscription.close()) };
+  const { relayRegistry, ...subscriptionOptions } = options;
+  const subscriptions = new Map();
+  function addRelay(relay) {
+    if (subscriptions.has(relay)) return;
+    subscriptions.set(relay, subscribeRelayWithBackoff(
+      pool, relay, source, filter, onEvent, subscriptionOptions,
+    ));
+  }
+  function removeRelay(relay) {
+    subscriptions.get(relay)?.close();
+    subscriptions.delete(relay);
+  }
+  addRelay.remove = removeRelay;
+  for (const relay of relays) addRelay(relay);
+  const unregister = relayRegistry?.register(addRelay);
+  return {
+    close() {
+      unregister?.();
+      for (const subscription of subscriptions.values()) subscription.close();
+      subscriptions.clear();
+    },
+  };
+}
+
+/** Fans newly promoted relays out to every active discovery subscription. */
+export function createRelayRegistry(initialRelays = []) {
+  const relays = new Set(initialRelays);
+  const usedRelays = new Set(initialRelays);
+  const subscribers = new Set();
+  return {
+    add(relay) {
+      if (relays.has(relay)) return false;
+      relays.add(relay);
+      usedRelays.add(relay);
+      for (const subscribe of subscribers) subscribe(relay);
+      return true;
+    },
+    remove(relay) {
+      if (!relays.delete(relay)) return false;
+      for (const subscribe of subscribers) subscribe.remove?.(relay);
+      return true;
+    },
+    register(subscribe) {
+      subscribers.add(subscribe);
+      for (const relay of relays) subscribe(relay);
+      return () => subscribers.delete(subscribe);
+    },
+    all() { return [...relays]; },
+    allKnown() { return [...usedRelays]; },
+  };
 }

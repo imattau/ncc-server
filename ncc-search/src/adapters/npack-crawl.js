@@ -78,8 +78,8 @@ export function startNpackCrawler(config, store, pool) {
     }
   }
 
-  const releaseSub = discoverNpackReleases(pool, config.relays, ingestRelease, { store, monitor: config.crawlMonitor });
-  const artifactSub = discoverNpackArtifacts(pool, config.relays, ingestArtifact, { store, monitor: config.crawlMonitor });
+  const releaseSub = discoverNpackReleases(pool, config.relays, ingestRelease, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
+  const artifactSub = discoverNpackArtifacts(pool, config.relays, ingestArtifact, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
 
   return {
     ingestRelease,

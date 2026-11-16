@@ -55,8 +55,8 @@ export function startContentCrawler(config, store, pool) {
     scheduleNip05(resolved.pubkey, 0);
   }
 
-  const articleSub = discoverArticles(pool, config.relays, ingestArticle, { store, monitor: config.crawlMonitor });
-  const mediaSub = discoverMedia(pool, config.relays, ingestMedia, { store, monitor: config.crawlMonitor });
+  const articleSub = discoverArticles(pool, config.relays, ingestArticle, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
+  const mediaSub = discoverMedia(pool, config.relays, ingestMedia, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
 
   async function processNip05(pubkey) {
     const nip05 = await resolveNip05(pool, config.relays, pubkey, {

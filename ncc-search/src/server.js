@@ -32,6 +32,7 @@ export function createServer(store, nip50Adapter = null, options = {}) {
     checkedAt: Date.now(),
     index: store.getStatus?.() ?? null,
     crawlers: options.crawlMonitor?.snapshot?.() ?? {},
+    relayLearning: options.relayLearning?.snapshot?.() ?? { enabled: false },
   }));
 
   app.get('/search', async (req, reply) => {

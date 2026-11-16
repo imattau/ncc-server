@@ -185,10 +185,27 @@ closes, it reconnects with exponential backoff capped at five minutes. After
 each successful EOSE, the timestamp is stored in SQLite; reconnects and process
 restarts resume from that cursor with a five-minute overlap, so duplicate
 delivery is safe and recent events are less likely to fall into a gap.
-`GET /status` exposes only aggregate per-adapter connection counts, failure
-counts, last event/sync times, index bytes, free disk bytes, and row counts by
-kind. It omits relay URLs and error text. Relay health is process-local; the
-resume cursors persist in the database.
+`GET /status` exposes per-adapter relay health, learned relay counts and URLs,
+candidate counts, index bytes, free disk bytes, and row counts by kind. Relay
+health is process-local; discovery cursors and relay-learning evidence persist
+in the database.
+
+### Learning additional relays
+
+By default, the crawler looks up NIP-65 kind 10002 lists for authors already
+present in its index. A relay is eligible when at least three distinct indexed
+authors advertise it as read-capable (an unmarked NIP-65 `r` tag counts as
+read-capable). After a successful bounded connection probe, the crawler can
+subscribe to up to ten learned relays in addition to the configured bootstrap
+relays. It prefers candidates with stronger author support when the cap is
+reached. Candidate URLs must use `wss:` and cannot target localhost or private
+IP addresses. Learned relay events still pass through the existing indexing
+and verification paths.
+
+Set `NCC_SEARCH_LEARN_RELAYS=false` to disable learning. For the bundled
+Compose deployment, use `SEARCH_LEARN_RELAYS=false`. `/status` reports the
+candidate and learned counts and the supporting-author count for each learned
+relay.
 
 ## Known caveats / things to verify before relying on this
 
