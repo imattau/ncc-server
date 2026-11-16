@@ -128,8 +128,8 @@ services:
       # Build the NCC fork so a fresh checkout doesn't need a pre-staged
       # binary in its build context. The fork's Dockerfile builds the static
       # binary and embedded dashboard for the target architecture.
-      context: https://github.com/imattau/npanel.git#c372fe22110474fb1bc73768e3874f2a494e66de
-    image: ncc-bundle-npanel:c372fe2
+      context: https://github.com/imattau/npanel.git#e4d8bc27738b6c9219d3326c03b3bca85a246667
+    image: ncc-bundle-npanel:e4d8bc2
     user: "${NPANEL_UID}:${NPANEL_GID}"
     entrypoint: ["/bin/sh", "/usr/local/bin/npanel-entrypoint"]
     environment:

@@ -220,7 +220,7 @@ else
 fi
 docker volume inspect "$OPENSEARCH_VOLUME" >/dev/null 2>&1 || docker volume create "$OPENSEARCH_VOLUME" >/dev/null
 "${COMPOSE[@]}" config >/dev/null
-"${COMPOSE[@]}" build
+DOCKER_BUILDKIT=1 "${COMPOSE[@]}" build
 # Keep public service locators in sync with a changing ISP address. The unit
 # points at this checkout, so timer runs use the same Compose project/config.
 chmod 0755 "$PROJECT_DIR/scripts/reconcile-public-ip.py"

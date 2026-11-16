@@ -89,7 +89,7 @@ bundle-config:
 	docker-compose -p ncc-bundle -f compose.yaml config
 
 bundle-build:
-	docker-compose -p ncc-bundle -f compose.yaml build
+	DOCKER_BUILDKIT=1 docker-compose -p ncc-bundle -f compose.yaml build
 
 bundle-configure-npanel:
 	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-npanel-host.mjs
