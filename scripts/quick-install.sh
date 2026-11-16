@@ -4,9 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/imattau/ncc-server/main/scripts/quick-install.sh | sudo bash
 #
 # This clones (or updates) the project into $NCC_SERVER_DIR and runs the
-# Compose installer. It does not replace the Compose bundle's own installer;
-# it only automates the "git clone && make install-compose-host" steps from
-# the README so they can be run as a single command.
+# root-only Compose installer directly.
 set -Eeuo pipefail
 
 REPO_URL="${NCC_SERVER_REPO:-https://github.com/imattau/ncc-server.git}"
@@ -38,4 +36,4 @@ else
 fi
 
 cd "$INSTALL_DIR"
-exec make install-compose-host
+exec ./scripts/install-compose-host.sh
