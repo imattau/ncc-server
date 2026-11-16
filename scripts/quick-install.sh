@@ -18,9 +18,12 @@ die() { echo "Error: $*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || die 'run as root (e.g. with sudo)'
 command -v apt-get >/dev/null || die 'quick-install supports Debian/Ubuntu hosts only'
 
-if ! command -v git >/dev/null 2>&1; then
+missing_packages=()
+command -v git >/dev/null 2>&1 || missing_packages+=(git)
+command -v make >/dev/null 2>&1 || missing_packages+=(make)
+if (( ${#missing_packages[@]} )); then
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y git
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing_packages[@]}"
 fi
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
