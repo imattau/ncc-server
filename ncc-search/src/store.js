@@ -420,6 +420,15 @@ export function openStore(dbPath, opts = {}) {
   );
 
   function search(query, limit = 20, offset = 0) {
+    // The API accepts natural-language text, not FTS5 syntax. Passing raw
+    // input through makes ordinary addresses and dotted names (for example
+    // `user@host` and `zap.stream`) syntax errors, while strings such as
+    // `title:foo` can be interpreted as column filters. Keep Unicode
+    // letters, numbers and underscores as terms, quote each one, and AND
+    // them together so punctuation becomes a harmless token boundary.
+    const terms = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+    if (terms.length === 0) return [];
+    const ftsQuery = terms.map((term) => `"${term}"`).join(' AND ');
     const rows = db
       .prepare(
         `WITH matches AS MATERIALIZED (
@@ -450,7 +459,7 @@ export function openStore(dbPath, opts = {}) {
          ORDER BY rank, itemId
          LIMIT ? OFFSET ?`,
       )
-      .all(query, limit, offset);
+      .all(ftsQuery, limit, offset);
     return rows.map(({ rank, dupeRank, ...row }) => ({
       ...row,
       hashtags: parseHashtags(row.hashtags),
