@@ -266,6 +266,30 @@ export function ResultRow({
         )}
       </div>
 
+      {result.alternates && result.alternates.length > 0 && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Also published as{' '}
+          {result.alternates.map((alt, i) => {
+            const altHref = alt.kind.startsWith('nsite')
+              ? nsiteHref(result.pubkey, result.npub, alt.itemId)
+              : null;
+            const label = alt.itemId === '_root' ? 'root site' : alt.itemId;
+            return (
+              <span key={alt.itemId}>
+                {i > 0 && ', '}
+                {altHref ? (
+                  <a href={altHref} target="_blank" rel="noopener noreferrer nofollow" className="text-blue-700 hover:underline dark:text-blue-400">
+                    {label}
+                  </a>
+                ) : (
+                  label
+                )}
+              </span>
+            );
+          })}
+        </p>
+      )}
+
       {body && (
         <p className="mt-1 text-sm leading-snug text-foreground/80">
           <Snippet text={body} />

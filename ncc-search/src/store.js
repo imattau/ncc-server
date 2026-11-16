@@ -385,27 +385,57 @@ export function openStore(dbPath, opts = {}) {
     attachNip05Txn(pubkey, nip05);
   }
 
+  // Records from one publisher with the same kind, title and description
+  // (e.g. an nsite published under two site names) are the same thing to a
+  // searcher. search() keeps the best-ranked one and lists the others as
+  // `alternates` so they stay reachable. Rows with neither title nor
+  // description are never merged -- there is nothing to say they match.
+  const alternatesStmt = db.prepare(
+    `SELECT item_id AS "itemId", kind FROM services
+     WHERE pubkey = ? AND kind = ? AND title IS ? AND description IS ? AND item_id != ?
+     ORDER BY item_id`,
+  );
+
   function search(query, limit = 20, offset = 0) {
     const rows = db
       .prepare(
-        `SELECT s.pubkey, s.npub, s.nip05, s.item_id AS "itemId", s.kind, s.endpoint,
-                s.anchored, s.attestation_count AS "attestationCount",
-                s.last_reachable_at AS "lastReachableAt", s.last_status AS "lastStatus",
-                s.title, s.description,
-                s.last_resolved_at * 1000 AS "indexedAt",
-                s.media_url AS "mediaUrl", s.media_type AS "mediaType",
-                s.thumbnail_url AS "thumbnailUrl",
-                s.blurhash, s.thumbhash, s.hashtags,
-                s.content_warning AS "contentWarning",
-                snippet(services_fts, 5, '[', ']', '…', 12) AS snippet
-         FROM services_fts f
-         JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
-         WHERE services_fts MATCH ?
-         ORDER BY bm25(services_fts, 0, 0, 30.0, 8.0, 5.0, 1.0)
+        `WITH matches AS MATERIALIZED (
+           SELECT s.pubkey, s.npub, s.nip05, s.item_id AS "itemId", s.kind, s.endpoint,
+                  s.anchored, s.attestation_count AS "attestationCount",
+                  s.last_reachable_at AS "lastReachableAt", s.last_status AS "lastStatus",
+                  s.title, s.description,
+                  s.last_resolved_at * 1000 AS "indexedAt",
+                  s.media_url AS "mediaUrl", s.media_type AS "mediaType",
+                  s.thumbnail_url AS "thumbnailUrl",
+                  s.blurhash, s.thumbhash, s.hashtags,
+                  s.content_warning AS "contentWarning",
+                  snippet(services_fts, 5, '[', ']', '…', 12) AS snippet,
+                  bm25(services_fts, 0, 0, 30.0, 8.0, 5.0, 1.0) AS rank
+           FROM services_fts f
+           JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
+           WHERE services_fts MATCH ?
+         ), ranked AS (
+           SELECT *, ROW_NUMBER() OVER (
+             PARTITION BY pubkey, kind,
+               CASE WHEN title IS NULL AND description IS NULL THEN itemId ELSE '' END,
+               title, description
+             ORDER BY rank, itemId
+           ) AS dupeRank
+           FROM matches
+         )
+         SELECT * FROM ranked WHERE dupeRank = 1
+         ORDER BY rank, itemId
          LIMIT ? OFFSET ?`,
       )
       .all(query, limit, offset);
-    return rows.map((row) => ({ ...row, hashtags: parseHashtags(row.hashtags) }));
+    return rows.map(({ rank, dupeRank, ...row }) => ({
+      ...row,
+      hashtags: parseHashtags(row.hashtags),
+      alternates:
+        row.title == null && row.description == null
+          ? []
+          : alternatesStmt.all(row.pubkey, row.kind, row.title, row.description, row.itemId),
+    }));
   }
 
   function getService(pubkey, itemId) {

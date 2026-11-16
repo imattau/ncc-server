@@ -36,11 +36,11 @@ export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, 
             console.warn(`[ncc-search] ${source} checkpoint could not be saved`);
           }
         },
-        onclose() {
+        onclose(reasons) {
           if (stopped) return;
           subscription = null;
           failures += 1;
-          monitor?.failed(source, relay);
+          monitor?.failed(source, relay, reasons);
           const base = Math.min(INITIAL_BACKOFF_MS * (2 ** Math.min(failures - 1, 9)), MAX_BACKOFF_MS);
           const delay = Math.round(base * (0.8 + Math.random() * 0.4));
           timer = setTimeout(connect, delay);
@@ -49,7 +49,7 @@ export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, 
     } catch (error) {
       if (stopped) return;
       failures += 1;
-      monitor?.failed(source, relay);
+      monitor?.failed(source, relay, error);
       const base = Math.min(INITIAL_BACKOFF_MS * (2 ** Math.min(failures - 1, 9)), MAX_BACKOFF_MS);
       timer = setTimeout(connect, Math.round(base * (0.8 + Math.random() * 0.4)));
       console.warn(`[ncc-search] ${source} relay subscription failed; retry scheduled`);

@@ -58,6 +58,8 @@ export interface SearchResult {
   // construction".
   source: 'index' | 'live';
   eventId?: string;
+  /** Other records from the same publisher with identical kind/title/description, collapsed into this one. */
+  alternates?: Array<{ itemId: string; kind: ResultKind }>;
 }
 
 export interface SearchResponse {
@@ -81,6 +83,15 @@ export interface CrawlerStatus {
   lastSuccessfulSyncAt: number | null;
   lastFailureAt: number | null;
   state: 'starting' | 'healthy' | 'degraded' | 'unavailable';
+  /** True only when no relay is connected or the last sync is stale; drives the "incomplete" notice. */
+  incomplete?: boolean;
+  stale?: boolean;
+  relays?: Array<{
+    url: string;
+    connected: boolean | null;
+    failureCount: number;
+    lastError: string | null;
+  }>;
 }
 
 export interface SearchStatus {

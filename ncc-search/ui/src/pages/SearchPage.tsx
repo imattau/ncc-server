@@ -284,7 +284,7 @@ export function SearchPage() {
 
 function SearchHealthNotice({ status }: { status: NonNullable<ReturnType<typeof useSearchStatus>['data']> }) {
   const availability = Object.values(status.crawlers).filter((crawler) =>
-    crawler.state === 'unavailable' || crawler.state === 'degraded',
+    crawler.incomplete ?? crawler.state === 'unavailable',
   );
   const storage = status.index?.storage;
   const nearLimit = Boolean(storage?.limitBytes && storage.databaseBytes >= storage.limitBytes * 0.8);

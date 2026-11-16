@@ -14,6 +14,10 @@ export const config = {
     'wss://relay.primal.net',
     'wss://relay.damus.io',
   ]),
+  // A crawler is flagged `incomplete` (the UI's "results may be incomplete"
+  // banner) only when no relay is connected or it has not synced within this
+  // many ms. A single dead relay among several is diagnostic only.
+  crawlStaleMs: Number(process.env.NCC_SEARCH_CRAWL_STALE_MS || 6 * 60 * 60_000),
   dbPath: process.env.NCC_SEARCH_DB_PATH || './data/ncc-search.db',
   // A disk-space ceiling for the index (store.js's `pruneToFit`), in bytes.
   // 0/unset (the default) means unbounded, unchanged from before this

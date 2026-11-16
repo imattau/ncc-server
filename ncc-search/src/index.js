@@ -14,7 +14,7 @@ import { createCrawlMonitor } from './crawlMonitor.js';
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
 const store = openStore(config.dbPath, { maxBytes: config.dbMaxBytes });
-const crawlMonitor = createCrawlMonitor();
+const crawlMonitor = createCrawlMonitor({ staleAfterMs: config.crawlStaleMs });
 config.crawlMonitor = crawlMonitor;
 
 // Enforced on the same cadence as everything else's periodic work

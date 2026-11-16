@@ -18,6 +18,17 @@ const NIP05_RECHECK_MS = 6 * 60 * 60_000; // verified handles change rarely
 // backfill can hand either queue dozens of due items in the same tick.
 const MAX_CONCURRENT_PER_TICK = 5;
 
+/** Buckets a fetchAndExtract() error string so /status shows why fetches fail. */
+export function classifyNsiteError(message) {
+  const m = String(message);
+  if (m.includes('no usable entry path')) return 'manifest-no-entry-path';
+  if (m.includes('no Blossom servers')) return 'no-blossom-servers';
+  if (m.includes('sha256 mismatch')) return 'sha256-mismatch';
+  if (/HTTP \d{3}/.test(m)) return 'blossom-http-error';
+  if (/timed? ?out|timeout/i.test(m)) return 'blossom-timeout';
+  return 'blossom-fetch-error';
+}
+
 /**
  * @param {import('../config.js').config} config
  * @param {ReturnType<typeof import('../store.js').openStore>} store
@@ -69,7 +80,9 @@ export function startNsiteCrawler(config, store, pool) {
 
     const resolved = adapter.resolveSite(event);
     const fetched = await adapter.fetchAndExtract(resolved);
-    if (fetched.error) config.crawlMonitor?.processingFailed('nsites');
+    // Not a crawler bug: the site's manifest was indexed (title/description
+    // kept) but its entry page couldn't be fetched/verified. Record why.
+    if (fetched.error) config.crawlMonitor?.processingFailed('nsites', classifyNsiteError(fetched.error));
     const existing = store.getService(resolved.pubkey, resolved.siteId);
     const seenRelays = takeSeenRelays(pool, event.id);
     store.upsertNsite(resolved, fetched, existing?.nip05 ?? null, seenRelays);
