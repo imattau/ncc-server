@@ -6,9 +6,16 @@ const MAX_REASON_KEYS = 20;
 
 // Relay-supplied close reasons are untrusted text: strip control characters
 // and bound the length before exposing them on /status.
+function describeError(error) {
+  if (error == null) return '';
+  if (typeof error === 'string') return error;
+  if (Array.isArray(error)) return error.map(describeError).filter(Boolean).join('; ');
+  const detail = error.message ?? error.reason ?? error.error?.message ?? error.code ?? error.type;
+  return detail != null ? String(detail) : (error.constructor?.name ?? 'error');
+}
+
 function sanitizeError(error) {
-  if (error == null) return null;
-  const text = Array.isArray(error) ? error.join('; ') : String(error?.message ?? error);
+  const text = describeError(error);
   return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, MAX_ERROR_LENGTH) || null;
 }
 

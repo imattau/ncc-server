@@ -36,6 +36,15 @@ test('status names each relay with its state, failure count and sanitized last e
   assert.equal(monitor.snapshot().media.relays[1].lastError.length, 200);
 });
 
+test('non-string close reasons are described, never "[object Object]"', () => {
+  const monitor = createCrawlMonitor();
+  monitor.failed('media', 'wss://a.example', [{ type: 'error' }]);
+  monitor.failed('media', 'wss://b.example', [{ message: 'connection refused' }]);
+  const [a, b] = monitor.snapshot().media.relays;
+  assert.equal(a.lastError, 'error');
+  assert.equal(b.lastError, 'connection refused');
+});
+
 test('all relays down is unavailable and incomplete', () => {
   const monitor = createCrawlMonitor();
   monitor.failed('nsites', 'wss://a.example');
