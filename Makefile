@@ -12,7 +12,7 @@ first-run-identity:
 	node ./test-app/scripts/first-run-identity.mjs $(NCC_SETUP_ARGS)
 
 bundle-provision-services:
-	sudo ./scripts/provision-compose-services.py
+	sudo python3 ./scripts/provision-compose-services.py
 
 bundle-reconcile-public-ip:
 	sudo ./scripts/reconcile-public-ip.py
