@@ -61,9 +61,9 @@ sudo make install-compose-host
 The installer creates a private `.env` from `.env.example`, checks the host
 has enough RAM/disk and that the required ports are free, tries to
 auto-detect the server's public IPv4 address (confirm or type a different one
-when prompted), builds the images, and starts the full stack. During first
-startup, choose to import an existing identity JSON file or generate a new
-keypair. The bootstrap saves it at
+when prompted), pulls the published component images, and starts the full
+stack. During first startup, choose to import an existing identity JSON file
+or generate a new keypair. The bootstrap saves it at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), initializes
 the sidecar, creates and publishes the `web`, `relay`, `npanel`, `ditto`, and
 `search` records, then brings up Caddy and Ditto Relay. No DNS names or
@@ -76,6 +76,13 @@ sends routing metadata to Caddy; Npanel and Ditto Web share HTTPS port 8443.
 The installer also writes a placeholder `index.html` into `CONTENT_ROOT` if
 it's empty, so `make bundle-health` sees HTTP 200 on the web root even
 before you deploy a real site or the test app.
+
+The custom services use separate public GHCR images. Set their `*_IMAGE`
+values in `.env` to pin or upgrade components independently. The
+`Publish component images` GitHub Actions workflow publishes multi-platform
+images on `v*` tags, or one selected component from its manual dispatch form.
+Make each GHCR package public after its first publish so VPS installs can pull
+without credentials.
 
 ### Unattended / scripted installs
 

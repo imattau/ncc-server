@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-reconcile-public-ip uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-reconcile-public-ip uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
 
 install:
 	sudo ./scripts/install.sh
@@ -89,7 +89,11 @@ bundle-config:
 	docker-compose -p ncc-bundle -f compose.yaml config
 
 bundle-build:
-	DOCKER_BUILDKIT=1 docker-compose -p ncc-bundle -f compose.yaml build
+	@echo 'Local image builds are no longer used by the host installer; pulling the published component images.'
+	$(MAKE) bundle-pull
+
+bundle-pull:
+	docker-compose -p ncc-bundle -f compose.yaml pull
 
 bundle-configure-npanel:
 	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-npanel-host.mjs
@@ -97,7 +101,7 @@ bundle-configure-npanel:
 bundle-configure-ditto-web:
 	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-ditto-web.mjs
 
-bundle-up: bundle-configure-npanel bundle-configure-ditto-web bundle-config
+bundle-up: bundle-pull bundle-configure-npanel bundle-configure-ditto-web bundle-config
 	docker-compose -p ncc-bundle -f compose.yaml up -d
 
 bundle-down:

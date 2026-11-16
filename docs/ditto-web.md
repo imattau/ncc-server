@@ -1,8 +1,8 @@
 # Ditto web client test
 
-The Compose bundle builds the `imattau/ditto` fork at the pinned revision in
-`.env` (`DITTO_WEB_REV`) and serves its Vite output from an unprivileged Nginx
-container. At build time it uses
+The Compose bundle uses the published `ncc-server-ditto-web` image, built from
+the `imattau/ditto` fork at the revision pinned by the release workflow. It
+serves the Vite output from an unprivileged Nginx container. The build uses
 [`ncc-router-basename.mjs`](../container/ditto-web/ncc-router-basename.mjs) to
 apply a fail-closed compatibility edit: NCC Browser preserves `/_/<service>` in
 the secure page path, and Ditto's React router needs that prefix as its basename
@@ -25,7 +25,7 @@ contains the expected HTTPS endpoint and SPKI pin.
 ## Build and run
 
 ```sh
-docker-compose -p ncc-bundle -f compose.yaml build ditto-web
+docker-compose -p ncc-bundle -f compose.yaml pull ditto-web
 docker-compose -p ncc-bundle -f compose.yaml up -d ditto-web caddy
 ```
 

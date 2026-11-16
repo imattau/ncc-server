@@ -42,10 +42,7 @@ trap rollback ERR INT TERM
 
 "${COMPOSE[@]}" config >/dev/null
 docker volume inspect "$(awk -F= '/^OPENSEARCH_VOLUME=/{print $2}' "$PROJECT_DIR/.env")" >/dev/null
-"${COMPOSE[@]}" build ditto-web
-for image in ncc-bundle-sidecar:"$(awk -F= '/^SIDECAR_REV=/{print $2}' "$PROJECT_DIR/.env")" ncc-bundle-npanel:e4d8bc2 ncc-bundle-tor:debian12 ditto-relay:ncc-bundle ncc-bundle-ditto-web:"$(awk -F= '/^DITTO_WEB_REV=/{print $2}' "$PROJECT_DIR/.env")"; do
-  docker image inspect "$image" >/dev/null || die "required image is missing: $image"
-done
+"${COMPOSE[@]}" pull
 
 SIDECAR_NODE="${SIDECAR_NODE:-/opt/ncc-sidecar/.node/bin/node}"
 [[ -x "$SIDECAR_NODE" ]] || die 'the existing sidecar Node runtime is missing'

@@ -3,20 +3,14 @@ WORKDIR /src
 COPY ncc-search/ui/package.json ncc-search/ui/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY ncc-search/ui/ ./
-# Vite inlines import.meta.env.VITE_* at build time, not read at container
-# startup -- these have to be real env vars during `npm run build`, so the
-# image is built once per deployment's public address/ports (see
-# compose.yaml's `search-ui` build.args), the same way the test app's
-# browser publisher is built on the workstation per-deployment rather than
-# shipped as one portable artifact.
-ARG VITE_NCC_SEARCH_API_BASE
-ARG VITE_NCC_SEARCH_RELAYS
-ENV VITE_NCC_SEARCH_API_BASE=${VITE_NCC_SEARCH_API_BASE} \
-    VITE_NCC_SEARCH_RELAYS=${VITE_NCC_SEARCH_RELAYS}
+# The generated UI uses same-origin API requests; relay configuration is
+# written at container startup so the image can be reused across deployments.
 RUN npm run build
 
 FROM nginx:1.29-alpine
 COPY container/search-ui/nginx.conf /etc/nginx/nginx.conf
 COPY --from=build /src/dist/ /srv/ncc-search-ui/
+COPY container/search-ui/40-ncc-search-runtime-config.sh /docker-entrypoint.d/40-ncc-search-runtime-config.sh
+RUN chmod 0755 /docker-entrypoint.d/40-ncc-search-runtime-config.sh
 EXPOSE 8080
 USER 101:101

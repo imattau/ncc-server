@@ -1,8 +1,15 @@
 import { NPool, NRelay1, type NostrFilter } from '@nostrify/nostrify';
 
-const RELAYS = (
-  import.meta.env.VITE_NCC_SEARCH_RELAYS ?? 'wss://relay.primal.net,wss://relay.damus.io'
-)
+declare global {
+  interface Window {
+    NCC_SEARCH_RELAYS_B64?: string;
+  }
+}
+
+const configuredRelays = window.NCC_SEARCH_RELAYS_B64
+  ? atob(window.NCC_SEARCH_RELAYS_B64)
+  : import.meta.env.VITE_NCC_SEARCH_RELAYS ?? '';
+const RELAYS = (configuredRelays || 'wss://relay.primal.net,wss://relay.damus.io')
   .split(',')
   .map((s: string) => s.trim())
   .filter(Boolean);

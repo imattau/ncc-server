@@ -19,7 +19,7 @@ preflight_checks() {
   avail_kib="$(df --output=avail -k "$PROJECT_DIR" | tail -n1 | tr -d ' ')"
   avail_gib=$(( avail_kib / 1024 / 1024 ))
   if (( avail_kib < 10 * 1024 * 1024 )); then
-    echo "Pre-flight: only ${avail_gib} GiB free on $(df --output=target "$PROJECT_DIR" | tail -n1 | tr -d ' '); building the images and OpenSearch's data can need more than that." >&2
+    echo "Pre-flight: only ${avail_gib} GiB free on $(df --output=target "$PROJECT_DIR" | tail -n1 | tr -d ' '); image pulls and OpenSearch data can need more than that." >&2
     problems=1
   fi
 
@@ -57,7 +57,9 @@ set -a
 # shellcheck disable=SC1090
 source "$PROJECT_DIR/.env"
 set +a
-DITTO_RELAY_REV="${DITTO_RELAY_REV:-e8974053dcf99ac952d1951deaffec105aeb08f1}"
+
+[[ "${TOR_UID:-102}" == 102 && "${TOR_GID:-109}" == 109 ]] \
+  || die 'the published Tor image uses UID 102 and GID 109; restore those values in .env before installing'
 
 preflight_checks
 
@@ -201,14 +203,6 @@ EOF
   chmod 0600 "$DITTO_ENV_FILE"
 fi
 
-if [[ ! -d "$DITTO_SOURCE_DIR/.git" ]]; then
-  install -d -o root -g root -m 0755 "$(dirname "$DITTO_SOURCE_DIR")"
-  git clone --filter=blob:none --no-checkout https://gitlab.com/soapbox-pub/ditto-relay.git "$DITTO_SOURCE_DIR"
-fi
-git -C "$DITTO_SOURCE_DIR" fetch --depth 1 origin "$DITTO_RELAY_REV"
-git -C "$DITTO_SOURCE_DIR" checkout --force --detach FETCH_HEAD
-[[ -f "$DITTO_SOURCE_DIR/Dockerfile" ]] || die "Ditto Relay source is incomplete: $DITTO_SOURCE_DIR"
-sed -i '/^name: ditto-relay$/d' "$DITTO_SOURCE_DIR/docker-compose.yml"
 sysctl -w vm.max_map_count=262144 >/dev/null
 install -d -o root -g root -m 0755 /etc/sysctl.d
 echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-ncc-server-opensearch.conf
@@ -220,7 +214,7 @@ else
 fi
 docker volume inspect "$OPENSEARCH_VOLUME" >/dev/null 2>&1 || docker volume create "$OPENSEARCH_VOLUME" >/dev/null
 "${COMPOSE[@]}" config >/dev/null
-DOCKER_BUILDKIT=1 "${COMPOSE[@]}" build
+"${COMPOSE[@]}" pull
 # Keep public service locators in sync with a changing ISP address. The unit
 # points at this checkout, so timer runs use the same Compose project/config.
 chmod 0755 "$PROJECT_DIR/scripts/reconcile-public-ip.py"

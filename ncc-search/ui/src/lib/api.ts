@@ -110,7 +110,8 @@ export interface SearchStatus {
   crawlers: Record<string, CrawlerStatus>;
 }
 
-const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE ?? 'http://127.0.0.1:7780';
+const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE
+  ?? (import.meta.env.DEV ? 'http://127.0.0.1:7780' : window.location.origin);
 
 export async function search(
   query: string,

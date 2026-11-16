@@ -2,13 +2,7 @@ version: "3.8"
 
 services:
   tor:
-    build:
-      context: .
-      dockerfile: container/tor/Containerfile
-      args:
-        TOR_UID: "${TOR_UID}"
-        TOR_GID: "${TOR_GID}"
-    image: ncc-bundle-tor:debian12
+    image: "${TOR_IMAGE:-ghcr.io/imattau/ncc-server-tor:latest}"
     network_mode: host
     read_only: true
     restart: unless-stopped
@@ -24,15 +18,7 @@ services:
         max-file: "3"
 
   sidecar:
-    build:
-      context: .
-      dockerfile: container/sidecar/Containerfile
-      args:
-        SIDECAR_REPO: "${SIDECAR_REPO}"
-        SIDECAR_REV: "${SIDECAR_REV}"
-        SIDECAR_UID: "${SIDECAR_UID}"
-        SIDECAR_GID: "${SIDECAR_GID}"
-    image: ncc-bundle-sidecar:${SIDECAR_REV}
+    image: "${SIDECAR_IMAGE:-ghcr.io/imattau/ncc-server-sidecar:latest}"
     network_mode: host
     user: "${SIDECAR_UID}:${SIDECAR_GID}"
     environment:
@@ -95,9 +81,7 @@ services:
     logging: *bounded-logs
 
   relay:
-    build:
-      context: "${DITTO_SOURCE_DIR}"
-    image: ditto-relay:ncc-bundle
+    image: "${RELAY_IMAGE:-ghcr.io/imattau/ncc-server-relay:latest}"
     env_file:
       - "${DITTO_ENV_FILE}"
     environment:
@@ -124,12 +108,7 @@ services:
     logging: *bounded-logs
 
   npanel:
-    build:
-      # Build the NCC fork so a fresh checkout doesn't need a pre-staged
-      # binary in its build context. The fork's Dockerfile builds the static
-      # binary and embedded dashboard for the target architecture.
-      context: https://github.com/imattau/npanel.git#e4d8bc27738b6c9219d3326c03b3bca85a246667
-    image: ncc-bundle-npanel:e4d8bc2
+    image: "${NPANEL_IMAGE:-ghcr.io/imattau/ncc-server-npanel:latest}"
     user: "${NPANEL_UID}:${NPANEL_GID}"
     entrypoint: ["/bin/sh", "/usr/local/bin/npanel-entrypoint"]
     environment:
@@ -160,13 +139,7 @@ services:
     logging: *bounded-logs
 
   ditto-web:
-    build:
-      context: ./container/ditto-web
-      dockerfile: Containerfile
-      args:
-        DITTO_REPO: "${DITTO_WEB_REPO}"
-        DITTO_REV: "${DITTO_WEB_REV}"
-    image: ncc-bundle-ditto-web:${DITTO_WEB_REV}
+    image: "${DITTO_WEB_IMAGE:-ghcr.io/imattau/ncc-server-ditto-web:latest}"
     ports:
       - "127.0.0.1:3210:8080"
     restart: unless-stopped
@@ -186,13 +159,8 @@ services:
     logging: *bounded-logs
 
   search:
-    build:
-      context: .
-      dockerfile: container/search/Containerfile
-      args:
-        SEARCH_UID: "${SEARCH_UID}"
-        SEARCH_GID: "${SEARCH_GID}"
-    image: ncc-bundle-search:0.1.0
+    image: "${SEARCH_IMAGE:-ghcr.io/imattau/ncc-server-search:latest}"
+    user: "${SEARCH_UID}:${SEARCH_GID}"
     environment:
       # No Nostr identity of any kind -- this process only subscribes to
       # relays (read) and serves its own SQLite/FTS5 index over plain HTTP.
@@ -228,19 +196,9 @@ services:
     logging: *bounded-logs
 
   search-ui:
-    build:
-      context: .
-      dockerfile: container/search-ui/Containerfile
-      args:
-        # Vite bakes these in at image build time (see the Containerfile's
-        # comment) -- an absolute, separately-TLS'd origin, not a relative
-        # path, so this keeps working regardless of where Caddy mounts it.
-        # Same origin as the UI itself (see container/Caddyfile) -- this
-        # must stay that way, not a separate host/port, for ncc:// clients'
-        # cert trust to actually cover the API calls too.
-        VITE_NCC_SEARCH_API_BASE: "https://${PUBLIC_IPV4}:${SEARCH_TLS_PORT}"
-        VITE_NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
-    image: ncc-bundle-search-ui:0.1.0
+    image: "${SEARCH_UI_IMAGE:-ghcr.io/imattau/ncc-server-search-ui:latest}"
+    environment:
+      NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
     ports:
       - "127.0.0.1:3220:8080"
     depends_on:

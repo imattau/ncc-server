@@ -82,8 +82,8 @@ sudo make install-compose-host
 
 The installer creates a private `.env` from `.env.example`, prompts for the
 server's public IPv4 address, and saves it in `.env`. It installs Docker Engine
-and Compose, prepares persistent directories,
-stages the pinned Ditto Relay source, builds the images, and starts the stack.
+and Compose, prepares persistent directories, pulls the published component
+images, and starts the stack.
 On first startup, choose to import an existing operator identity JSON file or
 generate a new keypair. The bootstrap validates imported `nsec`, `npub`, and
 `pubkey` values, saves the key at `/etc/ncc-server/operator-identity.json`,
@@ -254,12 +254,15 @@ Ditto Relay environment automatically. For manual recovery, stop the Compose
 stack and restore files from one matching timestamped backup before starting
 it again.
 
-The bundle pins sidecar, Npanel, Ditto Relay, and Ditto Web revisions.
-ncc-search and its UI build from this repository's own `ncc-search/`
-directory instead of a pinned external revision, so they rebuild from
-whatever is checked out when you run `make bundle-build`/`bundle-up`. Review
-the release notes and back up persistent data before changing a pin or
-upgrading images.
+Each service has its own image and image tag in `.env` (`TOR_IMAGE`,
+`SIDECAR_IMAGE`, `RELAY_IMAGE`, `NPANEL_IMAGE`, `DITTO_WEB_IMAGE`,
+`SEARCH_IMAGE`, and `SEARCH_UI_IMAGE`). The `Publish component images`
+workflow builds and publishes linux/amd64 and linux/arm64 images. A `v*` Git
+tag publishes a coordinated set; `workflow_dispatch` can publish one
+component at a time. The default tags are `latest`; for controlled upgrades,
+pin images to version tags in `.env`, then pull and recreate only the service
+you changed. `make bundle-pull` refreshes all configured images, and
+`make bundle-up` pulls before starting the stack.
 
 The legacy systemd installer and its TLS/Tor scripts are separate. Do not run
 them against a Compose deployment.

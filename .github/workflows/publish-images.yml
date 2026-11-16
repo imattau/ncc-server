@@ -1,0 +1,139 @@
+name: Publish component images
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Image to publish (choose all for a coordinated release)
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - tor
+          - sidecar
+          - relay
+          - npanel
+          - ditto-web
+          - search
+          - search-ui
+      version:
+        description: Image tag, for example 0.2.0 or sidecar-2026-11-16
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  SIDECAR_REV: 186c3ad50966a2319c354ace12e0a5a2267b75d9
+  DITTO_RELAY_REV: e8974053dcf99ac952d1951deaffec105aeb08f1
+  NPANEL_REV: e4d8bc27738b6c9219d3326c03b3bca85a246667
+  DITTO_WEB_REV: 29709b8b53d68109dfc14af7f3a44563d177e880
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: tor
+            image: ncc-server-tor
+            context: .
+            file: container/tor/Containerfile
+            build_args: |
+              TOR_UID=102
+              TOR_GID=109
+          - component: sidecar
+            image: ncc-server-sidecar
+            context: .
+            file: container/sidecar/Containerfile
+            build_args: |
+              SIDECAR_REPO=https://github.com/imattau/nostr-community-conventions.git
+              SIDECAR_REV=186c3ad50966a2319c354ace12e0a5a2267b75d9
+              SIDECAR_UID=996
+              SIDECAR_GID=995
+          - component: relay
+            image: ncc-server-relay
+            context: https://gitlab.com/soapbox-pub/ditto-relay.git#e8974053dcf99ac952d1951deaffec105aeb08f1
+            file: Dockerfile
+            build_args: ''
+          - component: npanel
+            image: ncc-server-npanel
+            context: https://github.com/imattau/npanel.git#e4d8bc27738b6c9219d3326c03b3bca85a246667
+            file: Dockerfile
+            build_args: ''
+          - component: ditto-web
+            image: ncc-server-ditto-web
+            context: ./container/ditto-web
+            file: ./container/ditto-web/Containerfile
+            build_args: |
+              DITTO_REPO=https://gitlab.com/imattau/ditto.git
+              DITTO_REV=29709b8b53d68109dfc14af7f3a44563d177e880
+          - component: search
+            image: ncc-server-search
+            context: .
+            file: container/search/Containerfile
+            build_args: |
+              SEARCH_UID=997
+              SEARCH_GID=997
+          - component: search-ui
+            image: ncc-server-search-ui
+            context: .
+            file: container/search-ui/Containerfile
+            build_args: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select and validate image tag
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="$INPUT_VERSION"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          [[ "$version" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || {
+            echo "Invalid image tag: $version" >&2
+            exit 1
+          }
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        if: >-
+          github.event_name == 'push' ||
+          inputs.component == 'all' ||
+          inputs.component == matrix.component
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.version.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: ${{ matrix.build_args }}
