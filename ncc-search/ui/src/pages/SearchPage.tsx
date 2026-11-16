@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SearchBar } from '@/components/SearchBar';
 import { ResultRow } from '@/components/ResultRow';
 import { MediaGridCard } from '@/components/MediaGridCard';
+import { ProfileGridCard } from '@/components/ProfileGridCard';
 import { LoginButton } from '@/components/LoginButton';
 import { SafeSearchToggle } from '@/components/SafeSearchToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -38,7 +39,7 @@ const WORDMARK = (
   </span>
 );
 
-type KindFilter = 'all' | 'ncc-service' | 'nsite' | 'article' | 'image' | 'video';
+type KindFilter = 'all' | 'ncc-service' | 'nsite' | 'article' | 'image' | 'video' | 'profile' | 'npack';
 
 function matchesFilter(result: SearchResult, filter: KindFilter) {
   if (filter === 'all') return true;
@@ -121,11 +122,14 @@ export function SearchPage() {
       article: results.filter((r) => r.kind === 'article').length,
       image: results.filter((r) => r.kind === 'image').length,
       video: results.filter((r) => r.kind === 'video').length,
+      profile: results.filter((r) => r.kind === 'profile').length,
+      npack: results.filter((r) => r.kind === 'npack').length,
     }),
     [results],
   );
   const filtered = results.filter((r) => matchesFilter(r, filter));
-  const isGridView = filter === 'image' || filter === 'video';
+  const isGridView = filter === 'image' || filter === 'video' || filter === 'profile';
+  const GridCard = filter === 'profile' ? ProfileGridCard : MediaGridCard;
 
   function handleSubmit(value: string) {
     setQuery(value);
@@ -239,7 +243,7 @@ export function SearchPage() {
                 ) : isGridView ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                     {filtered.map((r) => (
-                      <MediaGridCard
+                      <GridCard
                         key={`${r.pubkey}:${r.itemId}:${r.source}`}
                         result={r}
                         isFollowed={isFollowed(r, personalization)}
@@ -314,6 +318,8 @@ function KindTabs({
     { value: 'article', label: 'Articles' },
     { value: 'image', label: 'Images' },
     { value: 'video', label: 'Videos' },
+    { value: 'profile', label: 'Profiles' },
+    { value: 'npack', label: 'Packages' },
   ];
 
   return (

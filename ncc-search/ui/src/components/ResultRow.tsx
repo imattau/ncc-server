@@ -14,6 +14,8 @@ const KIND_LABEL: Record<ResultKind, string> = {
   article: 'article',
   image: 'image',
   video: 'video',
+  profile: 'profile',
+  npack: 'package',
 };
 
 const MEDIA_KINDS = new Set<ResultKind>(['image', 'video']);
@@ -187,7 +189,8 @@ export function ResultRow({
   // thumbnail concept at all, and an nsite with no og:image just falls
   // through to the plain text row, same as always.
   const hasOptionalThumbnail =
-    (result.kind === 'article' || result.kind.startsWith('nsite')) && !!result.thumbnailUrl;
+    (result.kind === 'article' || result.kind === 'profile' || result.kind.startsWith('nsite')) &&
+    !!result.thumbnailUrl;
   const useCompactThumbnail = isMedia || hasOptionalThumbnail;
 
   // An nsite's `endpoint` (the manifest's resolved entry path, e.g.
@@ -200,7 +203,8 @@ export function ResultRow({
   // there is for an ncc-service/nsite result.
   const href = result.kind.startsWith('nsite')
     ? nsiteHref(result.pubkey, result.npub, result.itemId)
-    : (sanitizeHref(result.endpoint) ?? (isMedia ? sanitizeHref(result.mediaUrl) : null));
+    : (sanitizeHref(result.endpoint) ??
+        (isMedia || result.kind === 'npack' ? sanitizeHref(result.mediaUrl) : null));
   const title = result.title?.trim() || identity;
   const body = result.snippet || result.description || '';
   const status = useResultStatus(result);

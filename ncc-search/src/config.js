@@ -38,6 +38,15 @@ export const config = {
   // content is already inline in the event), so there's no reachability or
   // integrity check to disable independently -- one flag covers all three.
   enableContent: process.env.NCC_SEARCH_ENABLE_CONTENT !== 'false',
+  // Also discover kind:0 Nostr profiles, surfaced in ui/'s dedicated
+  // "Profiles" grid tab. No fetch/verify step either (see
+  // adapters/profile.js); only the NIP-05 enrichment pass costs anything
+  // extra, same as nsite/article/media already pay.
+  enableProfiles: process.env.NCC_SEARCH_ENABLE_PROFILES !== 'false',
+  // Also discover npack (github.com/imattau/npack) package releases
+  // (kind:9900 + their kind:1063 NIP-94 artifact metadata). See
+  // adapters/npack.js.
+  enableNpack: process.env.NCC_SEARCH_ENABLE_NPACK !== 'false',
   // Live-query configured relays that advertise NIP-50 at search time, in
   // addition to serving from the local index. On by default like nsite:
   // if none of the configured relays support it (the common case today),

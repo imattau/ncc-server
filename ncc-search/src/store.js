@@ -23,6 +23,8 @@ export const KIND_NSITE_NAMED = 'nsite-named';
 export const KIND_ARTICLE = 'article';
 export const KIND_IMAGE = 'image';
 export const KIND_VIDEO = 'video';
+export const KIND_PROFILE = 'profile';
+export const KIND_NPACK = 'npack';
 
 /**
  * @param {string} dbPath

@@ -4,7 +4,9 @@ export type ResultKind =
   | 'nsite-named'
   | 'article'
   | 'image'
-  | 'video';
+  | 'video'
+  | 'profile'
+  | 'npack';
 
 export interface SearchResult {
   pubkey: string;
@@ -29,10 +31,13 @@ export interface SearchResult {
   snippet?: string;
   // image/video only -- the actual media URL and MIME type. Never fetched
   // by the backend; the browser loads it directly (see ResultRow.tsx).
+  // npack: the artifact's download URL/MIME type (its kind:1063 NIP-94
+  // event), null until that event has been seen -- see
+  // src/adapters/npack-crawl.js.
   mediaUrl?: string | null;
   mediaType?: string | null;
   // image/video: a poster/preview image. For articles, the NIP-23 `image`
-  // (cover) tag.
+  // (cover) tag. For profiles, the kind:0 `picture` field.
   thumbnailUrl?: string | null;
   // image/video only -- NIP-68/71 imeta placeholder fields. `blurhash` is
   // decoded client-side into an instant low-res preview (see

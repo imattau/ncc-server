@@ -7,6 +7,8 @@ import { openStore } from './store.js';
 import { startCrawler } from './crawl.js';
 import { startNsiteCrawler } from './adapters/nsite-crawl.js';
 import { startContentCrawler } from './adapters/content-crawl.js';
+import { startProfileCrawler } from './adapters/profile-crawl.js';
+import { startNpackCrawler } from './adapters/npack-crawl.js';
 import { Nip50Adapter } from './adapters/nip50.js';
 import { createServer } from './server.js';
 import { createCrawlMonitor } from './crawlMonitor.js';
@@ -59,6 +61,8 @@ pool.trackRelays = true;
 const nccCrawler = startCrawler(config, store, pool);
 const nsiteCrawler = config.enableNsite ? startNsiteCrawler(config, store, pool) : null;
 const contentCrawler = config.enableContent ? startContentCrawler(config, store, pool) : null;
+const profileCrawler = config.enableProfiles ? startProfileCrawler(config, store, pool) : null;
+const npackCrawler = config.enableNpack ? startNpackCrawler(config, store, pool) : null;
 const nip50Adapter = config.enableNip50
   ? new Nip50Adapter(pool, config, { nccCrawler, nsiteCrawler, contentCrawler })
   : null;
@@ -72,6 +76,8 @@ app
     console.log(`ncc-search crawling relays: ${config.relays.join(', ')}`);
     console.log(`ncc-search nsite adapter: ${config.enableNsite ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search article/media adapter: ${config.enableContent ? 'enabled' : 'disabled'}`);
+    console.log(`ncc-search profile adapter: ${config.enableProfiles ? 'enabled' : 'disabled'}`);
+    console.log(`ncc-search npack adapter: ${config.enableNpack ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search NIP-50 live search: ${config.enableNip50 ? 'enabled' : 'disabled'}`);
     console.log(
       config.dbMaxBytes > 0
@@ -88,6 +94,8 @@ function shutdown() {
   nccCrawler.stop();
   nsiteCrawler?.stop();
   contentCrawler?.stop();
+  profileCrawler?.stop();
+  npackCrawler?.stop();
   if (pruneTimer) clearInterval(pruneTimer);
   pool.close(config.relays);
   app.close().finally(() => process.exit(0));

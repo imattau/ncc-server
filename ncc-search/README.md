@@ -1,9 +1,10 @@
 # ncc-search
 
 A separate, standalone process that discovers public Nostr-native content —
-NCC-02/NCC-05 service records, nsites (NIP-5A), NIP-23 articles, and NIP-68/71
-pictures and videos — resolves each per its own normative contract, and
-serves unified full-text search over the result.
+NCC-02/NCC-05 service records, nsites (NIP-5A), NIP-23 articles, NIP-68/71
+pictures and videos, Nostr profiles (kind:0), and npack
+(github.com/imattau/npack) package releases — resolves each per its own
+normative contract, and serves unified full-text search over the result.
 
 This is not a feature of `ncc-server` or the `ncc-sidecar`: it runs as its own
 process/service (`ncc-search.service`), reads from the same relay list, and
@@ -114,6 +115,42 @@ content (src/adapters/article.js + media.js + content-crawl.js)
                     publisher tagged; ui/'s safe-search toggle is what
                     actually filters/labels on it (see ui/README.md
                     "Safe search")
+
+profiles (src/adapters/profile.js + profile-crawl.js)  -- Nostr kind:0 metadata
+  discoverProfiles -- broad REQ for kind:0; replaceable, so `itemId` is the
+                    fixed sentinel `_profile` (same pattern as nsite's
+                    `_root`), not derived from anything that could repeat
+  resolveProfile -- display_name/name -> title, about -> description,
+                    picture -> thumbnailUrl, website -> endpoint. The raw
+                    `nip05` field is deliberately NOT read off the event
+                    directly -- verified the same way nsite.js's
+                    resolveNip05() verifies every other kind's NIP-05 claim,
+                    via the same periodic enrichment pass content-crawl.js
+                    uses
+  -- surfaced in ui/ as a dedicated "Profiles" grid tab (avatars, not
+     thumbnails -- see ui/src/components/ProfileGridCard.tsx)
+
+npack (src/adapters/npack.js + npack-crawl.js)   -- github.com/imattau/npack
+  package releases (project protocol, not yet a registered NIP; source:
+  imattau/npack docs/package-protocol-v1.md, read directly)
+  discoverNpackReleases/discoverNpackArtifacts -- broad REQ for kind:9900
+                    (a signed release: d/v/name/version/os/arch/format/x/
+                    artifact tags, plus optional summary/description/
+                    homepage/license/category store-listing tags) and
+                    kind:1063 (NIP-94 artifact metadata, carrying the actual
+                    download `url`/MIME type) -- two separate events from
+                    the same publisher that can arrive in either order
+  resolveNpackRelease/resolveNpackArtifact/toSearchRow -- a release is
+                    stored as soon as it's seen, searchable by name/summary/
+                    description immediately; if its artifact (kind:1063)
+                    hasn't arrived yet, npack-crawl.js keeps it pending and
+                    re-upserts the row with the download URL/MIME type once
+                    the artifact shows up -- store.js's COALESCE semantics
+                    mean that second upsert only fills in media_url/
+                    media_type, never blanks anything already indexed
+  -- this backend never fetches/verifies the `.npk` bytes themselves, same
+     stance media.js takes on image/video bytes: a package manager client
+     does that, this is a search index, not an installer
 
 NIP-50 (src/nip11.js + adapters/nip50.js)   -- live search, not a crawl adapter
   Nip11Prober    -- fetches each relay's NIP-11 document (wss:// -> https://,

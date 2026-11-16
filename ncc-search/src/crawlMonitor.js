@@ -1,4 +1,4 @@
-const SOURCES = ['ncc-services', 'nsites', 'articles', 'media'];
+const SOURCES = ['ncc-services', 'nsites', 'articles', 'media', 'profiles', 'npack-releases', 'npack-artifacts'];
 
 const DEFAULT_STALE_MS = 6 * 60 * 60_000;
 const MAX_ERROR_LENGTH = 200;
