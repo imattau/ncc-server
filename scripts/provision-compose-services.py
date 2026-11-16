@@ -261,8 +261,21 @@ def main():
     force_publish(npanel)
     force_publish(ditto)
     force_publish(search)
+    # Bare ncc://<npub>/ resolves the default service `addr`. Keep this as a
+    # distinct NCC-02 profile with its own d=addr locator, but point it at the
+    # same public web endpoint and certificate as the named `web` service.
+    services = request('/api/services')
+    root = ensure_service(
+        services, identity, service_id='addr', name='NCC Web Root',
+        config={
+            **service_config(public_ip, https_port, 'https', self_signed=False, pin=pin),
+            'locator_id': 'addr',
+        },
+    )
+    force_publish(root)
     print(f'Provisioned shared-identity locators: web={web["id"]}, relay={relay["id"]}, '
-          f'npanel={npanel["id"]}, ditto={ditto["id"]}, search={search["id"]}.')
+          f'npanel={npanel["id"]}, ditto={ditto["id"]}, search={search["id"]}, '
+          f'addr={root["id"]}.')
     print(f'Web SPKI pin: {pin}')
     current_web = next((item for item in request('/api/services')
                         if item.get('service_id') == 'web'), {})

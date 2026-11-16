@@ -150,6 +150,13 @@ chown root:root "$IDENTITY_FILE"
 operator_pubkey="$(container_pubkey_for_identity < "$IDENTITY_FILE")" \
   || die 'the saved operator identity is invalid or its keys do not match'
 
+# The welcome page reads this public config at runtime so its NCC links follow
+# the operator identity generated or imported during this setup.
+python3 "$PROJECT_DIR/scripts/publish-web-config.py" \
+  --identity-file "$IDENTITY_FILE" \
+  --output "${CONTENT_ROOT:-/srv/ncc-server/public}/ncc-config.json" \
+  --group-id "${CADDY_GID:-996}"
+
 configured_pubkey="$(python3 - "$ENV_FILE" <<'PY'
 import pathlib, sys
 for line in pathlib.Path(sys.argv[1]).read_text().splitlines():

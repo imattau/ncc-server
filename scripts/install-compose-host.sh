@@ -170,22 +170,47 @@ systemctl enable --now docker.service
 
 install -d -m 0755 /etc/ncc-server
 install -d -m 0755 "$CONTENT_ROOT"
-if [[ -z "$(find "$CONTENT_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null)" ]]; then
-  cat > "$CONTENT_ROOT/index.html" <<'HTML'
+CONTENT_EMPTY=false
+[[ -z "$(find "$CONTENT_ROOT" -mindepth 1 -maxdepth 1 ! -name ncc-config.json -print -quit 2>/dev/null)" ]] \
+  && CONTENT_EMPTY=true
+CONTENT_IS_PLACEHOLDER=false
+CONTENT_IS_MANAGED_WELCOME=false
+CONTENT_IS_LEGACY_NCC_TEST=false
+if [[ -f "$CONTENT_ROOT/index.html" ]]; then
+  grep -q 'This is a placeholder page served from CONTENT_ROOT' "$CONTENT_ROOT/index.html" \
+    && CONTENT_IS_PLACEHOLDER=true
+  grep -q 'name="ncc-page" content="welcome"' "$CONTENT_ROOT/index.html" \
+    && CONTENT_IS_MANAGED_WELCOME=true
+  grep -q 'property="og:title" content="NCC Server Test"' "$CONTENT_ROOT/index.html" \
+    && CONTENT_IS_LEGACY_NCC_TEST=true
+fi
+
+if [[ "$CONTENT_EMPTY" == true || "$CONTENT_IS_PLACEHOLDER" == true || \
+  "$CONTENT_IS_MANAGED_WELCOME" == true || "$CONTENT_IS_LEGACY_NCC_TEST" == true ]]; then
+  if [[ -f "$PROJECT_DIR/public/index.html" ]] \
+    && grep -q 'name="ncc-page" content="welcome"' "$PROJECT_DIR/public/index.html"; then
+    rsync -a --delete --chown="root:$CADDY_GID" "$PROJECT_DIR/public/" "$CONTENT_ROOT/"
+    chown -R "root:$CADDY_GID" "$CONTENT_ROOT"
+    find "$CONTENT_ROOT" -type d -exec chmod 0755 {} +
+    find "$CONTENT_ROOT" -type f -exec chmod 0644 {} +
+    echo "Installed the bundled MKStack welcome page in $CONTENT_ROOT."
+  elif [[ "$CONTENT_EMPTY" == true ]]; then
+    cat > "$CONTENT_ROOT/index.html" <<'HTML'
 <!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>NCC-Server</title></head>
 <body>
 <h1>NCC-Server is running</h1>
 <p>This is a placeholder page served from CONTENT_ROOT. Replace it with your
-own site, or deploy the included MKStack test app (see
+own site, or deploy the included MKStack welcome page (see
 docs/deployment-compose.md).</p>
 </body>
 </html>
 HTML
-  chown root:root "$CONTENT_ROOT/index.html"
-  chmod 0644 "$CONTENT_ROOT/index.html"
-  echo "Wrote a placeholder page to $CONTENT_ROOT/index.html so the web root serves HTTP 200 before you deploy real content."
+    chown root:root "$CONTENT_ROOT/index.html"
+    chmod 0644 "$CONTENT_ROOT/index.html"
+    echo "Wrote a placeholder page to $CONTENT_ROOT/index.html so the web root serves HTTP 200 before you deploy real content."
+  fi
 fi
 install -d -o "$SIDECAR_UID" -g "$SIDECAR_GID" -m 0700 "$SIDECAR_DATA_DIR"
 install -d -o "$SIDECAR_UID" -g "$SIDECAR_CERT_GID" -m 0750 "$SIDECAR_CERT_DIR"

@@ -2,11 +2,11 @@
 
 A search-engine-style results page (compact header + pill search box +
 plain SERP list, not a card grid or chat-style layout) for the `ncc-search`
-backend. React+Vite+TypeScript+Tailwind, in the spirit of
-[MKStack](https://soapbox.pub/tools/mkstack) — same core stack as this
-repo's [`test-app/`](../../test-app) — but trimmed down from the full
-MKStack template: no routing library, no shadcn/ui kit beyond a `Skeleton`
-component, and login is NIP-07-only rather than `test-app`'s full
+backend. React+Vite+TypeScript+Tailwind, based on the same
+[MKStack](https://soapbox.pub/tools/mkstack) scaffold and core stack as this
+repo's [`test-app/`](../../test-app). This focused UI keeps only the
+shadcn-style primitives it uses (`Button`, `Input`, and `Skeleton`) and has
+no routing library. Login is NIP-07-only rather than `test-app`'s full
 nsec/bunker/extension-chooser `LoginArea`, since this app never publishes
 anything -- see "Personalization" below. The generic shadcn card/badge/
 button kit was tried first and dropped in favor of a plain list layout that

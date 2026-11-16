@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SIDECAR_REPO="${NCC_SIDECAR_REPO_URL:-https://github.com/imattau/nostr-community-conventions.git}"
-SIDECAR_REV="${NCC_SIDECAR_REV:-186c3ad50966a2319c354ace12e0a5a2267b75d9}"
+SIDECAR_REV="${NCC_SIDECAR_REV:-d67fa15b40a3461588c96da56710bec6fd670b5b}"
 SIDECAR_SOURCE="${NCC_SIDECAR_SOURCE:-}"
 CONFIG_DIR=/etc/ncc-server
 CONTENT_ROOT=/srv/ncc-server/public

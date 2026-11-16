@@ -1,332 +1,178 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { useSeoMeta } from '@unhead/react';
-import type { NostrEvent } from '@nostrify/nostrify';
-import { nip19, SimplePool, verifyEvent } from 'nostr-tools';
-import { Activity, ArrowUpRight, Check, Copy, Globe2, Radio, Search, Server, ShieldCheck } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { ArrowDownRight, ArrowUpRight, Globe2, LockKeyhole, Radio, Search, Server, Waves } from 'lucide-react';
 
-type HostState = 'checking' | 'online' | 'error';
-
-interface LocatorEndpoint {
-  url?: string;
-  uri?: string;
-  protocol?: string;
-  family?: string;
-  priority?: number;
-}
-
-interface LocatorPayload {
-  ttl: number;
-  updated_at: number;
-  endpoints: LocatorEndpoint[];
-}
-
-interface LocatorResult {
-  event: NostrEvent;
-  payload: LocatorPayload;
-  expiresAt: number;
-}
-
-const relayList = ['wss://relay.primal.net/', 'wss://nos.lol/'];
-const candidateTags = ['web-locator', 'web', 'addr'];
-
-function parseLocator(event: NostrEvent, author: string): LocatorResult | null {
-  if (event.kind !== 30058 || event.pubkey !== author || !verifyEvent(event)) return null;
-
-  const dTag = event.tags.find(([name]) => name === 'd')?.[1];
-  if (!dTag || !candidateTags.includes(dTag)) return null;
-
-  let value: unknown;
-  try {
-    value = JSON.parse(event.content);
-  } catch {
-    return null;
-  }
-
-  if (!value || typeof value !== 'object') return null;
-  const candidate = value as Partial<LocatorPayload>;
-  if (
-    !Array.isArray(candidate.endpoints) ||
-    !Number.isFinite(Number(candidate.ttl)) ||
-    !Number.isFinite(Number(candidate.updated_at))
-  ) return null;
-
-  const expirationTag = Number(event.tags.find(([name]) => name === 'expiration')?.[1]);
-  const expiresAt = Math.min(
-    Number(candidate.updated_at) + Number(candidate.ttl),
-    expirationTag > 0 ? expirationTag : Number.POSITIVE_INFINITY,
-  );
-  if (expiresAt <= Math.floor(Date.now() / 1000)) return null;
-
-  return {
-    event,
-    expiresAt,
-    payload: {
-      ttl: Number(candidate.ttl),
-      updated_at: Number(candidate.updated_at),
-      endpoints: candidate.endpoints as LocatorEndpoint[],
-    },
-  };
-}
-
-function safeEndpoint(value: string | undefined): string | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-function isPrivateNetworkHost(host: string): boolean {
-  return host === 'localhost' || host === '::1' ||
-    /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) || /^169\.254\./.test(host);
-}
+const services = [
+  {
+    id: 'web',
+    number: '01',
+    name: 'Web',
+    type: 'THIS SITE',
+    description: 'A home on the open web, served directly from this community node.',
+    icon: Globe2,
+    theme: 'mint',
+  },
+  {
+    id: 'relay',
+    number: '02',
+    name: 'Nostr Relay',
+    type: 'PUBLIC · READ & WRITE',
+    description: 'A place for Nostr clients to publish and discover community events.',
+    icon: Radio,
+    theme: 'peach',
+  },
+  {
+    id: 'ditto',
+    number: '03',
+    name: 'Ditto',
+    type: 'SOCIAL',
+    description: 'Join the conversation with a community-powered social interface.',
+    icon: Waves,
+    theme: 'blue',
+  },
+  {
+    id: 'search',
+    number: '04',
+    name: 'NCC Search',
+    type: 'PUBLIC DIRECTORY',
+    description: 'Find services and public content across the NCC network.',
+    icon: Search,
+    theme: 'lilac',
+    optional: true,
+  },
+  {
+    id: 'npanel',
+    number: '05',
+    name: 'Npanel',
+    type: 'ADMINISTRATION',
+    description: 'Manage this node and its services. Administrator access is required.',
+    icon: Server,
+    theme: 'gold',
+    restricted: true,
+  },
+];
 
 const Index = () => {
-  const [hostState, setHostState] = useState<HostState>('checking');
-  const [hostLatency, setHostLatency] = useState<number | null>(null);
-  const [npub, setNpub] = useState(import.meta.env.VITE_NCC_TEST_NPUB ?? '');
-  const [lookupState, setLookupState] = useState<'idle' | 'loading' | 'found' | 'empty' | 'error'>('idle');
-  const [locator, setLocator] = useState<LocatorResult | null>(null);
-  const [lookupDetails, setLookupDetails] = useState('');
-  const [lookupError, setLookupError] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [rootNpub, setRootNpub] = useState<string | null>(null);
+  const [identityState, setIdentityState] = useState<'loading' | 'ready' | 'missing'>('loading');
 
   useSeoMeta({
-    title: 'NCC Server Test | Live host & locator check',
-    description: 'Check that this NCC-Server page is reachable and verify its public Nostr locator.',
+    title: 'NCC Server — A home on the open web',
+    description: 'Explore the public services on this NCC community node, built on open protocols and owned by its community.',
   });
 
   useEffect(() => {
     const controller = new AbortController();
-    const startedAt = performance.now();
-
-    fetch(window.location.href, {
-      method: 'HEAD',
-      cache: 'no-store',
-      signal: controller.signal,
-    }).then((response) => {
-      setHostLatency(Math.round(performance.now() - startedAt));
-      setHostState(response.ok ? 'online' : 'error');
-    }).catch(() => {
-      setHostState('error');
-    });
-
+    fetch('/ncc-config.json', { cache: 'no-store', signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('NCC server config unavailable');
+        return response.json() as Promise<{ npub?: unknown }>;
+      })
+      .then((config) => {
+        if (typeof config.npub === 'string' && /^npub1[0-9a-z]{20,}$/i.test(config.npub)) {
+          setRootNpub(config.npub);
+          setIdentityState('ready');
+          return;
+        }
+        setIdentityState('missing');
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setIdentityState('missing');
+      });
     return () => controller.abort();
   }, []);
 
-  const handleLookup = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLocator(null);
-    setLookupDetails('');
-    setLookupError('');
-
-    let author: string;
-    try {
-      const trimmedNpub = npub.trim();
-      if (!/^npub1[0-9a-z]+$/i.test(trimmedNpub)) {
-        throw new Error('Enter an npub that identifies the locator author.');
-      }
-      author = nip19.decode(trimmedNpub as `npub1${string}`).data;
-    } catch (error) {
-      setLookupState('error');
-      setLookupError(error instanceof Error ? error.message : 'That npub could not be decoded.');
-      return;
-    }
-
-    setLookupState('loading');
-    const pool = new SimplePool();
-    try {
-      const filters = [{ kinds: [30058], authors: [author], '#d': candidateTags, limit: 20 }];
-      const relayResults = await Promise.allSettled(
-        relayList.map((relay) => pool.querySync([relay], filters[0], { maxWait: 10000 })),
-      );
-      const successfulQueries = relayResults.filter((result) => result.status === 'fulfilled');
-      if (successfulQueries.length === 0) {
-        throw new Error('All configured relays failed to answer the locator query.');
-      }
-      const events = successfulQueries.flatMap((result) => result.value);
-      const matches = events
-        .map((candidate) => parseLocator(candidate, author))
-        .filter((candidate): candidate is LocatorResult => candidate !== null)
-        .sort((first, second) => second.event.created_at - first.event.created_at);
-      setLookupDetails(`${events.length} event(s) received from ${successfulQueries.length} relay(s); ${matches.length} fresh valid locator(s).`);
-
-      if (matches.length === 0) {
-        setLookupState('empty');
-        return;
-      }
-
-      setLocator(matches[0]);
-      setLookupState('found');
-    } catch (error) {
-      setLookupState('error');
-      setLookupError(error instanceof Error ? error.message : 'Relay lookup failed.');
-    } finally {
-      pool.close(relayList);
-    }
-  };
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.origin);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch {
-      setCopied(false);
-    }
-  };
-
   return (
-    <main className="min-h-screen overflow-hidden bg-[#090e17] text-slate-100 selection:bg-cyan-300/30">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_at_18%_0%,rgba(26,117,128,0.23),transparent_42%),radial-gradient(ellipse_at_100%_44%,rgba(83,74,143,0.16),transparent_37%)]" />
-      <div className="relative mx-auto max-w-6xl px-5 py-7 sm:px-8 sm:py-10">
-        <header className="flex items-center justify-between border-b border-white/10 pb-6">
-          <a href="/" className="flex items-center gap-3 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">
-            <div className="grid size-10 place-items-center rounded-xl border border-cyan-200/20 bg-cyan-300/10 text-cyan-200">
-              <Globe2 size={20} aria-hidden="true" />
-            </div>
-            <span className="text-sm font-semibold tracking-wide text-white">NCC<span className="text-cyan-300">/</span>SERVER</span>
+    <main className="welcome-page min-h-screen overflow-hidden text-[#18211d]">
+      <div className="welcome-wrap mx-auto max-w-[1240px] px-5 sm:px-9 lg:px-14">
+        <header className="flex items-center justify-between border-b border-[#18211d]/15 py-6">
+          <a href="#top" className="flex items-center gap-3" aria-label="NCC Server home">
+            <span className="brand-mark grid size-10 place-items-center rounded-full bg-[#d9f27e] text-[#18211d]"><Globe2 size={20} strokeWidth={1.8} /></span>
+            <span className="font-mono text-xs font-semibold tracking-[0.14em] sm:text-sm">NCC <span className="text-[#819b4b]">/</span> SERVER</span>
           </a>
-          <div className="flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-300/5 px-3 py-1.5 text-xs text-emerald-200">
-            <span className={`size-1.5 rounded-full ${hostState === 'online' ? 'bg-emerald-300' : hostState === 'error' ? 'bg-rose-400' : 'animate-pulse bg-amber-300'}`} />
-            {hostState === 'online' ? 'HOST RESPONDING' : hostState === 'error' ? 'HOST CHECK FAILED' : 'CHECKING HOST'}
-          </div>
+          <a href="#services" className="group flex items-center gap-2 rounded-full border border-[#18211d]/20 px-4 py-2.5 text-xs font-semibold transition-colors hover:bg-[#18211d] hover:text-[#f6f6ef] sm:text-sm">
+            Explore services <ArrowDownRight size={15} className="transition-transform group-hover:translate-y-0.5" />
+          </a>
         </header>
 
-        <section className="grid gap-10 pb-12 pt-12 md:grid-cols-[1.15fr_0.85fr] md:items-end md:pb-16 md:pt-16">
-          <div>
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-200/15 bg-cyan-200/[0.06] px-3 py-1.5 text-xs font-medium tracking-wide text-cyan-100">
-              <Activity size={14} aria-hidden="true" /> HOST-SIDE TEST PAGE
+        <section id="top" className="hero-grid relative grid gap-9 pb-16 pt-14 sm:pb-20 sm:pt-20 md:grid-cols-[1.25fr_0.75fr] md:items-end lg:pb-24 lg:pt-28">
+          <div className="hero-art pointer-events-none absolute right-[3%] top-[12%] hidden h-[315px] w-[315px] md:block" aria-hidden="true">
+            <div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit orbit-three" />
+            <div className="orbit-core"><span>N</span></div>
+            <span className="orbit-dot dot-one" /><span className="orbit-dot dot-two" /><span className="orbit-dot dot-three" />
+          </div>
+          <div className="relative z-10">
+            <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-[#18211d]/15 bg-white/40 px-3.5 py-2 text-[10px] font-semibold tracking-[0.18em] text-[#596351] sm:text-xs">
+              <span className="size-2 rounded-full bg-[#91b64c]" /> A COMMUNITY NODE ON NOSTR
             </div>
-            <h1 className="max-w-2xl text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-5xl md:text-6xl">
-              Your host is on the <span className="text-cyan-200">Nostr map.</span>
+            <h1 className="max-w-[780px] font-serif text-[clamp(3.4rem,9vw,7.6rem)] leading-[0.92] tracking-[-0.065em]">
+              The web works<br />better <span className="hero-italic">together.</span>
             </h1>
-            <p className="mt-5 max-w-xl text-base leading-7 text-slate-300 sm:text-lg">
-              A live check for the NCC-Server stack. Confirm this page is being served, then look up the signed locator that points clients back here.
+            <p className="mt-7 max-w-[520px] text-base leading-7 text-[#59635e] sm:text-lg sm:leading-8">
+              Welcome to this corner of the open web. Explore independent services, connected by Nostr and run for the community.
             </p>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-slate-950/55 p-5 shadow-2xl shadow-black/20 backdrop-blur sm:p-6">
-            <div className="mb-4 flex items-center gap-2 text-xs font-semibold tracking-[0.16em] text-slate-400">
-              <Server size={15} aria-hidden="true" /> THIS PAGE IS SERVED FROM
+          <div className="relative z-10 max-w-[330px] md:ml-auto md:mb-1">
+            <div className="mb-4 flex items-center gap-2 font-mono text-[10px] font-semibold tracking-[0.16em] text-[#68746c] sm:text-xs">
+              <span className="size-1.5 rounded-full bg-[#91b64c]" /> OPEN PROTOCOLS, COMMUNITY RUN
             </div>
-            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] p-3">
-              <code className="min-w-0 flex-1 truncate text-sm text-cyan-100 sm:text-base">{window.location.origin}</code>
-              <button type="button" onClick={handleCopy} aria-label="Copy this host address" className="grid size-9 shrink-0 place-items-center rounded-lg text-slate-300 transition hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">
-                {copied ? <Check size={17} aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
-              </button>
-            </div>
-            <div className="mt-4 flex items-center justify-between text-sm">
-              <span className="text-slate-400">HTTP response</span>
-              <span className="flex items-center gap-2 text-slate-200">
-                {hostState === 'online' ? <Check size={15} className="text-emerald-300" aria-hidden="true" /> : <span className="size-1.5 rounded-full bg-slate-500" />}
-                {hostState === 'online' ? `200 OK · ${hostLatency ?? '—'} ms` : hostState === 'error' ? 'Unavailable' : 'Waiting for response'}
-              </span>
-            </div>
+            <p className="text-sm leading-6 text-[#69736d] sm:text-base sm:leading-7">No single company in the middle. Your identity stays yours, and each service can be used from NCC Browser.</p>
+            <a href="#services" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold underline decoration-[#95ad65] decoration-2 underline-offset-4 hover:text-[#708a3c]">
+              Find your way around <ArrowDownRight size={16} />
+            </a>
           </div>
         </section>
 
-        <section className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
-          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-6 sm:p-8">
-            <div className="mb-6 flex items-start justify-between gap-4">
-              <div>
-                <div className="mb-3 grid size-10 place-items-center rounded-xl bg-violet-300/10 text-violet-200"><Radio size={19} aria-hidden="true" /></div>
-                <h2 className="text-xl font-semibold text-white">Check the locator</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-400">Query a relay for a fresh, signed Kind 30058 record.</p>
-              </div>
-              <span className="rounded-md border border-white/10 px-2 py-1 font-mono text-[11px] text-slate-400">NCC-05</span>
+        <section id="services" className="services-section border-t border-[#18211d]/15 pb-16 pt-8 sm:pb-24 sm:pt-11">
+          <div className="mb-7 flex flex-wrap items-end justify-between gap-4 sm:mb-9">
+            <div>
+              <p className="mb-2 font-mono text-[10px] font-semibold tracking-[0.2em] text-[#75816d] sm:text-xs">THE NEIGHBOURHOOD</p>
+              <h2 className="font-serif text-3xl tracking-[-0.04em] sm:text-4xl">What’s here</h2>
             </div>
-
-            <form onSubmit={handleLookup} className="space-y-3">
-              <label htmlFor="locator-npub" className="text-xs font-medium tracking-wide text-slate-300">LOCATOR AUTHOR NPUB</label>
-              <Input
-                id="locator-npub"
-                value={npub}
-                onChange={(event) => setNpub(event.target.value)}
-                placeholder="npub1…"
-                autoComplete="off"
-                spellCheck={false}
-                className="h-12 rounded-xl border-white/10 bg-black/20 font-mono text-sm text-white placeholder:text-slate-600 focus-visible:border-cyan-200/60 focus-visible:ring-cyan-200/20"
-              />
-              <Button type="submit" disabled={lookupState === 'loading' || !npub.trim()} className="h-11 w-full rounded-xl bg-cyan-200 font-semibold text-slate-950 hover:bg-cyan-100 disabled:opacity-50">
-                {lookupState === 'loading' ? <><span className="mr-2 size-4 animate-spin rounded-full border-2 border-slate-950/30 border-t-slate-950" />Querying relays</> : <><Search size={16} className="mr-2" aria-hidden="true" />Verify locator</>}
-              </Button>
-            </form>
-
-            <div className="mt-5 flex flex-wrap gap-2" aria-label="Relays queried">
-              {relayList.map((relay) => <span key={relay} className="rounded-full border border-white/10 px-2.5 py-1 font-mono text-[10px] text-slate-400">{relay.replace('wss://', '').replace(/\/$/, '')}</span>)}
-            </div>
-              <p className="mt-4 text-xs leading-5 text-slate-500">Only the public key is used for lookup. Never paste an nsec here. The saved test npub is prefilled when configured.</p>
+            <span className="pb-1 text-xs text-[#788078] sm:text-sm">
+              {identityState === 'ready' ? 'Choose a service to open it in NCC Browser' : identityState === 'loading' ? 'Preparing NCC links…' : 'Service links are temporarily unavailable.'}
+            </span>
           </div>
 
-          <div className="min-h-[310px] rounded-2xl border border-white/10 bg-slate-950/55 p-6 sm:p-8">
-            {lookupState === 'idle' && (
-              <div className="flex h-full min-h-[260px] flex-col items-center justify-center text-center">
-                <div className="mb-4 grid size-14 place-items-center rounded-2xl border border-white/10 bg-white/[0.035] text-slate-400"><ShieldCheck size={23} aria-hidden="true" /></div>
-                <h3 className="text-lg font-medium text-white">Locator verification</h3>
-                <p className="mt-2 max-w-sm text-sm leading-6 text-slate-400">Enter the service owner’s npub to check relay publication, signature, freshness, and advertised endpoint.</p>
-              </div>
-            )}
-            {lookupState === 'loading' && <div className="flex min-h-[260px] items-center justify-center text-sm text-slate-300">Waiting for relay responses…</div>}
-            {lookupState === 'error' && <div role="alert" className="flex min-h-[260px] flex-col items-center justify-center text-center"><span className="mb-3 text-rose-300">Lookup could not complete</span><p className="max-w-md text-sm leading-6 text-slate-400">{lookupError}</p></div>}
-            {lookupState === 'empty' && <div className="flex min-h-[260px] flex-col items-center justify-center text-center"><span className="mb-3 text-amber-200">No fresh locator found</span><p className="max-w-md text-sm leading-6 text-slate-400">The author has no matching public web locator on these relays, or its TTL has expired. Check the sidecar service mode, relay list, and publish logs.</p><p className="mt-3 font-mono text-xs text-slate-500">{lookupDetails}</p></div>}
-            {lookupState === 'found' && locator && (
-              <div>
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-5">
-                  <div className="flex items-center gap-2 text-emerald-200"><span className="grid size-7 place-items-center rounded-full bg-emerald-300/10"><Check size={15} aria-hidden="true" /></span><span className="font-medium">Fresh locator verified</span></div>
-                  <span className="rounded-full border border-emerald-300/20 bg-emerald-300/5 px-2.5 py-1 text-xs text-emerald-100">Kind 30058</span>
+          <div className="service-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {services.map(({ id, number, name, type, description, icon: Icon, theme, optional, restricted }) => (
+              <a
+                key={id}
+                href={rootNpub ? `ncc://${rootNpub}/${id === 'web' ? '' : `${id}/`}` : undefined}
+                aria-disabled={!rootNpub}
+                className={`service-card service-${theme} group relative flex min-h-[225px] flex-col justify-between rounded-[20px] border border-[#18211d]/10 p-5 transition duration-300 hover:-translate-y-1 hover:shadow-[0_16px_40px_rgba(26,39,28,0.10)] aria-disabled:cursor-wait aria-disabled:opacity-60 aria-disabled:hover:translate-y-0 aria-disabled:hover:shadow-none sm:min-h-[244px] sm:p-6`}
+                aria-label={`Open ${name} in NCC Browser${restricted ? ' (administrator access required)' : ''}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="service-icon grid size-11 place-items-center rounded-[14px] bg-white/65"><Icon size={20} strokeWidth={1.7} /></span>
+                  <div className="flex items-center gap-2">
+                    {optional && <span className="rounded-full border border-current/15 px-2 py-1 text-[9px] font-semibold tracking-[0.12em] opacity-70">OPTIONAL</span>}
+                    {restricted && <span className="rounded-full border border-current/15 px-2 py-1 text-[9px] font-semibold tracking-[0.12em] opacity-70">ADMIN</span>}
+                    <span className="font-mono text-[10px] opacity-50">{number}</span>
+                  </div>
                 </div>
-                <div className="grid gap-5 py-5 sm:grid-cols-2">
-                  <div><div className="text-xs tracking-wide text-slate-500">IDENTIFIER</div><code className="mt-1 block text-sm text-slate-200">{locator.event.tags.find(([name]) => name === 'd')?.[1]}</code></div>
-                  <div><div className="text-xs tracking-wide text-slate-500">EXPIRES</div><div className="mt-1 text-sm text-slate-200">{new Date(locator.expiresAt * 1000).toLocaleString()}</div></div>
+                <div>
+                  <p className="mb-2 font-mono text-[9px] font-semibold tracking-[0.16em] opacity-60 sm:text-[10px]">{type}</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="font-serif text-2xl tracking-[-0.035em] sm:text-[1.7rem]">{name}</h3>
+                    <span className="grid size-9 shrink-0 place-items-center rounded-full border border-current/15 transition group-hover:border-[#18211d]/40 group-hover:bg-[#18211d] group-hover:text-[#f7f7f0]"><ArrowUpRight size={17} /></span>
+                  </div>
+                  <p className="mt-2 max-w-[310px] text-xs leading-5 opacity-70 sm:text-sm sm:leading-6">{description}</p>
                 </div>
-                <div className="space-y-3">
-                  {locator.payload.endpoints.map((endpoint, index) => {
-                    const url = safeEndpoint(endpoint.url ?? endpoint.uri);
-                    const matches = url ? new URL(url).host === window.location.host : false;
-                    const privateEndpoint = url ? isPrivateNetworkHost(new URL(url).hostname) : false;
-                    const status = privateEndpoint ? 'Private network test endpoint' : window.location.protocol === 'ncc:' ? 'Resolved through NCC Browser' : matches ? 'Matches this page' : 'Different host';
-                    const statusColor = privateEndpoint ? 'text-amber-200' : matches || window.location.protocol === 'ncc:' ? 'text-emerald-200' : 'text-amber-200';
-                    const statusDot = privateEndpoint ? 'bg-amber-300' : matches || window.location.protocol === 'ncc:' ? 'bg-emerald-300' : 'bg-amber-300';
-                    return (
-                      <div key={`${url ?? 'endpoint'}-${index}`} className="rounded-xl border border-white/10 bg-white/[0.035] p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs text-slate-400">ADVERTISED ENDPOINT</span>
-                          {url && <span className={`flex items-center gap-1.5 text-xs ${statusColor}`}><span className={`size-1.5 rounded-full ${statusDot}`} />{status}</span>}
-                        </div>
-                        {url ? <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex items-center gap-2 break-all text-base font-medium text-cyan-100 underline decoration-cyan-100/20 underline-offset-4 hover:decoration-cyan-100"><span>{url}</span><ArrowUpRight size={15} className="shrink-0" aria-hidden="true" /></a> : <p className="mt-2 text-sm text-slate-400">Endpoint {index + 1} has no valid HTTP URL.</p>}
-                        <div className="mt-2 text-xs text-slate-500">{[endpoint.protocol, endpoint.family, typeof endpoint.priority === 'number' && Number.isFinite(endpoint.priority) ? `priority ${endpoint.priority}` : null].filter(Boolean).join(' · ') || 'Public endpoint'}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-5 break-all font-mono text-[10px] leading-5 text-slate-500">event {locator.event.id}</div>
-              </div>
-            )}
+              </a>
+            ))}
           </div>
+
+          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[#18211d]/10 bg-white/45 px-4 py-4 text-xs leading-5 text-[#69736d] sm:items-center sm:px-5 sm:text-sm">
+            <LockKeyhole size={16} className="mt-0.5 shrink-0 text-[#75884e] sm:mt-0" />
+            <p><span className="font-semibold text-[#364039]">Private by design.</span> Npanel is visible in the directory, but requires an administrator identity to manage this node.</p>
+          </div>
+          <p className="mt-4 text-[11px] leading-5 text-[#858c82]">NCC Search is an optional service and may not be enabled on every installation.</p>
         </section>
 
-        <section className="mt-5 grid gap-4 sm:grid-cols-3">
-          {[
-            { label: 'STATIC CONTENT', value: 'Caddy · file server', detail: 'Served from the host content root' },
-            { label: 'LOCATOR', value: 'Nostr · kind 30058', detail: 'Signed and TTL-checked in browser' },
-            { label: 'HOST RESPONSE', value: hostState === 'online' ? `${hostLatency ?? '—'} ms` : hostState === 'error' ? 'Unreachable' : 'Checking', detail: 'HEAD request to this page origin' },
-          ].map((item) => (
-            <div key={item.label} className="rounded-xl border border-white/10 bg-white/[0.025] px-5 py-4">
-              <div className="text-[10px] font-semibold tracking-[0.16em] text-slate-500">{item.label}</div>
-              <div className="mt-2 text-sm font-medium text-slate-200">{item.value}</div>
-              <div className="mt-1 text-xs text-slate-500">{item.detail}</div>
-            </div>
-          ))}
-        </section>
-
-        <footer className="mt-12 flex flex-col gap-3 border-t border-white/10 pt-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <span>Test page for the NCC-Server host stack.</span>
-          <a href="https://soapbox.pub/mkstack" target="_blank" rel="noreferrer" className="w-fit text-slate-300 underline decoration-white/20 underline-offset-4 hover:text-white">Vibed with MKStack <ArrowUpRight size={12} className="ml-1 inline" aria-hidden="true" /></a>
+        <footer className="flex flex-col gap-4 border-t border-[#18211d]/15 py-6 text-xs text-[#737c73] sm:flex-row sm:items-center sm:justify-between sm:py-7">
+          <div className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-[#d9f27e]"><Globe2 size={14} /></span><span>Independent services, connected by Nostr.</span></div>
+          <a href="https://github.com/imattau/ncc-server" target="_blank" rel="noreferrer" className="group inline-flex w-fit items-center gap-1.5 font-medium text-[#49544b] hover:text-[#718c3d]">Explore the project <ArrowUpRight size={13} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" /></a>
         </footer>
       </div>
     </main>

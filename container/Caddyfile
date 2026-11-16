@@ -170,3 +170,7 @@
 		output stdout
 	}
 }
+
+# Custom services installed with `make service-add` get dedicated TLS ports
+# and use the bundle's pinned web certificate.
+import /etc/caddy/custom/*.caddy

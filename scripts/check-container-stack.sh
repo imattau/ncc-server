@@ -49,4 +49,4 @@ check 'Ditto HTTPS web route' "$DITTO_HTTPS/" --insecure
 check 'ncc-search HTTPS UI route' "$SEARCH_UI_HTTPS/" --insecure -H "Host: $PUBLIC_IPV4"
 check 'ncc-search HTTPS API route' "$SEARCH_API_HTTPS/search?q=a" --insecure -H "Host: $PUBLIC_IPV4"
 check 'Ditto WSS NIP-11 route' "$RELAY_HTTPS" --insecure -H 'Accept: application/nostr+json'
-docker-compose -p ncc-bundle -f compose.yaml ps
+./scripts/compose-bundle.sh ps

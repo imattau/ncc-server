@@ -4,7 +4,7 @@ set -Eeuo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET="${1:-}"
 [[ -n "$TARGET" ]] || { echo 'Usage: scripts/deploy-compose-test-app.sh user@host' >&2; exit 2; }
-[[ -d "$PROJECT_DIR/public" ]] || { echo 'Build the test app first: make build-test-app' >&2; exit 2; }
+[[ -d "$PROJECT_DIR/public" ]] || { echo 'Build the welcome page first: make build-test-app' >&2; exit 2; }
 if [[ -f "$PROJECT_DIR/.env" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -25,5 +25,6 @@ if [[ "$REMOTE_USER" != root ]]; then
 fi
 ssh "$TARGET" "mkdir -p \"\$HOME/$STAGE\""
 rsync -a --delete "$PROJECT_DIR/public/" "$TARGET:$STAGE/"
-ssh "${REMOTE_TTY[@]}" "$TARGET" "${PRIVILEGE}install -d -o root -g '$CADDY_GID' -m 0755 '$CONTENT_ROOT' && ${PRIVILEGE}rsync -a --delete \"\$HOME/$STAGE/\" '$CONTENT_ROOT/' && ${PRIVILEGE}chown -R root:'$CADDY_GID' '$CONTENT_ROOT' && ${PRIVILEGE}find '$CONTENT_ROOT' -type d -exec chmod 0755 {} + && ${PRIVILEGE}find '$CONTENT_ROOT' -type f -exec chmod 0644 {} + && rm -rf \"\$HOME/$STAGE\""
-echo "Deployed the test app to $TARGET:$CONTENT_ROOT"
+scp -q "$PROJECT_DIR/scripts/publish-web-config.py" "$TARGET:$STAGE-config.py"
+ssh "${REMOTE_TTY[@]}" "$TARGET" "${PRIVILEGE}install -d -o root -g '$CADDY_GID' -m 0755 '$CONTENT_ROOT' && ${PRIVILEGE}rsync -a --delete \"\$HOME/$STAGE/\" '$CONTENT_ROOT/' && ${PRIVILEGE}chown -R root:'$CADDY_GID' '$CONTENT_ROOT' && ${PRIVILEGE}find '$CONTENT_ROOT' -type d -exec chmod 0755 {} + && ${PRIVILEGE}find '$CONTENT_ROOT' -type f -exec chmod 0644 {} + && ${PRIVILEGE}python3 \"\$HOME/$STAGE-config.py\" --identity-file /etc/ncc-server/operator-identity.json --output '$CONTENT_ROOT/ncc-config.json' --group-id '$CADDY_GID' && rm -rf \"\$HOME/$STAGE\" \"\$HOME/$STAGE-config.py\""
+echo "Deployed the welcome page to $TARGET:$CONTENT_ROOT"

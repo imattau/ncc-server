@@ -18,7 +18,7 @@ through their managed runtime configuration.
 - A public IPv4 address reachable by clients.
 - Router and firewall access if the services need to be reachable from the
   internet.
-- For the optional test page: a workstation with Git, SSH, Node.js 22 or newer,
+- To build and deploy the welcome page: a workstation with Git, SSH, Node.js 22 or newer,
   and npm.
 
 Forward TCP 8443–8447 to expose the NCC services. Port 8080 is optional for
@@ -68,8 +68,10 @@ when prompted), pulls the published component images, and starts the full
 stack. During first startup, choose to import an existing identity JSON file
 or generate a new keypair. The bootstrap saves it at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), initializes
-the sidecar, creates and publishes the `web`, `relay`, `npanel`, `ditto`, and
-`search` records, then brings up Caddy and Ditto Relay. No DNS names or
+the sidecar, creates and publishes the `addr`, `web`, `relay`, `npanel`,
+`ditto`, and `search` records, then brings up Caddy and Ditto Relay. The
+`addr` locator points to the same web endpoint, so the bare root address opens
+the welcome page. No DNS names or
 follow-up provisioning commands are required. Keep an encrypted backup of the
 identity file outside the server; it is needed to recover service control.
 
@@ -78,8 +80,8 @@ Caddy serves web, relay, Npanel, Ditto Web, and search on ports 8443 through
 8447 respectively.
 
 The installer also writes a placeholder `index.html` into `CONTENT_ROOT` if
-it's empty, so `make bundle-health` sees HTTP 200 on the web root even
-before you deploy a real site or the test app.
+it's empty, so `make bundle-health` sees HTTP 200 on the web root even before
+you deploy the welcome page.
 
 The custom services use separate public GHCR images. Set their `*_IMAGE`
 values in `.env` to pin or upgrade components independently. The
@@ -115,23 +117,25 @@ cd /opt/ncc-server
 sudo make bundle-health
 ```
 
-The installer prints the public npub after setup. NCC Browser can open services using addresses such as
-`ncc://<npub>/web/`, `ncc://<npub>/relay/`, `ncc://<npub>/npanel/`, and
-`ncc://<npub>/ditto/`.
+The installer prints the public npub after setup. The bare address
+`ncc://<npub>/` opens the welcome page. Named service addresses include
+`ncc://<npub>/relay/`, `ncc://<npub>/npanel/`, `ncc://<npub>/ditto/`, and
+`ncc://<npub>/search/` when search is enabled.
 
-## Optional: deploy the test page
+## Build and deploy the welcome page
 
-The included MKStack test app lets you try the web locator. From the
-workstation checkout:
+The root page is built with MKStack and includes NCC links to the node's
+public services. From the workstation checkout:
 
 ```sh
 make build-test-app
 make bundle-deploy-test-app TARGET=operator@192.168.1.50
 ```
 
-Run `npm --prefix test-app ci` and `make init-test-identity` once before the
-build. This test identity is separate from the server operator key. Replace
-the target with the SSH account and server address used above.
+Replace the target with the SSH account and server address used above. During
+first setup, the server writes its public root npub to
+`CONTENT_ROOT/ncc-config.json`; the page reads that config when it loads and
+builds links for the identity created or imported on that server.
 
 ## Operating the bundle
 
@@ -159,6 +163,12 @@ it does not apply to this Compose bundle and should not be run against it.
 HTTPS uses self-signed certificates. NCC-aware clients validate the
 certificate fingerprint published in the service locator; ordinary browsers
 will show a certificate warning.
+
+The quick installer installs the bundled welcome page on a fresh server and
+updates it on later runs while the web root is still managed by NCC-Server.
+Custom site content is left in place. To update the welcome page from a
+workstation without rerunning the host installer, use the build and deploy
+steps below.
 
 For configuration details and recovery steps, see the
 [deployment guide](docs/deployment-compose.md) and

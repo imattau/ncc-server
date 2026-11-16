@@ -48,7 +48,7 @@ Each service has its own listener: web 8443, relay 8444, Npanel 8445, Ditto
 Web 8446, and search 8447. Requests use the server IP directly; no DNS names
 are needed.
 
-For an empty web root, install the MKStack test page or place your own files in
+For an empty web root, deploy the MKStack welcome page or place your own files in
 the CONTENT_ROOT directory from .env. Check that files are readable by the
 Caddy container. A 404 on the web root before content is installed does not
 mean the container failed.

@@ -2,7 +2,7 @@ ARG NODE_IMAGE=node:24.12.0-bookworm-slim
 
 FROM ${NODE_IMAGE} AS build
 ARG SIDECAR_REPO=https://github.com/imattau/nostr-community-conventions.git
-ARG SIDECAR_REV=186c3ad50966a2319c354ace12e0a5a2267b75d9
+ARG SIDECAR_REV=d67fa15b40a3461588c96da56710bec6fd670b5b
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git patch python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 RUN git clone --filter=blob:none --no-checkout "$SIDECAR_REPO" /src \
@@ -16,8 +16,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch --dry-run -p1 < /tmp/ncc-sidecar-tor-auth-log.patch \
   && patch -p1 < /tmp/ncc-sidecar-tor-auth-log.patch \
-  && patch --dry-run -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
-  && patch -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
+  && if ! grep -q 'Tor control connection closed before replying' src/tor-control.js; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
+       && patch -p1 < /tmp/ncc-sidecar-tor-control-close.patch; \
+     fi \
   && npm ci \
   && npm --prefix ui ci \
   && npm --prefix ui run build \

@@ -8,6 +8,7 @@ import { LoginButton } from '@/components/LoginButton';
 import { SafeSearchToggle } from '@/components/SafeSearchToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
 import { useQueryState } from '@/hooks/useQueryState';
 import { useSearch } from '@/hooks/useSearch';
 import { useNip07Login } from '@/hooks/useNip07Login';
@@ -162,7 +163,7 @@ export function SearchPage() {
 
   return (
     <div className="min-h-dvh">
-      <header className="sticky top-0 z-10 flex items-center gap-4 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm sm:gap-6 sm:px-8">
+      <header className="sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-border bg-background/95 px-3 py-3 backdrop-blur-sm sm:flex-nowrap sm:gap-6 sm:px-8">
         <button
           type="button"
           onClick={() => setQuery('')}
@@ -171,15 +172,15 @@ export function SearchPage() {
         >
           {WORDMARK}
         </button>
-        <SearchBar defaultValue={query} onSubmit={handleSubmit} size="compact" className="max-w-xl" />
-        <div className="ml-auto flex items-center gap-3">
+        <SearchBar defaultValue={query} onSubmit={handleSubmit} size="compact" className="order-3 max-w-xl basis-full sm:order-none sm:basis-auto" />
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
           <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
           <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
           <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
         </div>
       </header>
 
-      <main className="px-4 py-5 sm:px-8">
+      <main className="px-3 py-5 sm:px-8">
         {status.data && <SearchHealthNotice status={status.data} />}
         {result.isLoading && <ResultsSkeleton />}
 
@@ -188,13 +189,15 @@ export function SearchPage() {
             <p className="text-sm text-foreground">
               {result.error instanceof Error ? result.error.message : 'Search failed.'}
             </p>
-            <button
+            <Button
               type="button"
+              variant="link"
+              size="sm"
               onClick={() => result.refetch()}
-              className="mt-2 text-sm text-blue-700 hover:underline dark:text-blue-400"
+              className="mt-2 px-0 text-blue-700 dark:text-blue-400"
             >
               Try again
-            </button>
+            </Button>
           </div>
         )}
 
@@ -267,14 +270,15 @@ export function SearchPage() {
                     would fetch rows the filter would just hide again. */}
                 {filter === 'all' && result.hasNextPage && (
                   <div className="mt-6 max-w-2xl">
-                    <button
+                    <Button
                       type="button"
+                      variant="outline"
                       onClick={() => result.fetchNextPage()}
                       disabled={result.isFetchingNextPage}
-                      className="w-full rounded-md border border-border py-2 text-sm text-foreground hover:bg-muted disabled:opacity-60"
+                      className="w-full"
                     >
                       {result.isFetchingNextPage ? 'Loading…' : 'Load more'}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>
@@ -323,7 +327,7 @@ function KindTabs({
   ];
 
   return (
-    <nav className="mb-4 flex gap-5 border-b border-border text-sm" aria-label="Filter by result type">
+    <nav className="mb-4 flex gap-5 overflow-x-auto border-b border-border text-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Filter by result type">
       {tabs.map((tab) => {
         const count = counts[tab.value];
         if (tab.value !== 'all' && count === 0) return null;
@@ -333,7 +337,7 @@ function KindTabs({
             type="button"
             onClick={() => onChange(tab.value)}
             className={cn(
-              '-mb-px border-b-2 pb-2 transition-colors',
+              '-mb-px shrink-0 border-b-2 pb-2 transition-colors',
               filter === tab.value
                 ? 'border-foreground font-medium text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground',

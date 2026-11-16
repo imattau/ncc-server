@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add
 
 install:
 	sudo ./scripts/install.sh
@@ -90,14 +90,14 @@ stage-npanel:
 	./scripts/stage-npanel-binary.sh "$(NPANEL_BINARY)"
 
 bundle-config:
-	docker-compose -p ncc-bundle -f compose.yaml config
+	./scripts/compose-bundle.sh config
 
 bundle-build:
 	@echo 'Local image builds are no longer used by the host installer; pulling the published component images.'
 	$(MAKE) bundle-pull
 
 bundle-pull:
-	docker-compose -p ncc-bundle -f compose.yaml pull
+	./scripts/compose-bundle.sh pull
 
 bundle-configure-npanel:
 	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-npanel-host.mjs
@@ -106,14 +106,18 @@ bundle-configure-ditto-web:
 	@set -a; . ./.env; set +a; /opt/ncc-sidecar/.node/bin/node ./scripts/configure-ditto-web.mjs
 
 bundle-up: bundle-pull bundle-configure-npanel bundle-configure-ditto-web bundle-config
-	docker-compose -p ncc-bundle -f compose.yaml up -d
+	./scripts/compose-bundle.sh up -d
 
 bundle-down:
-	docker-compose -p ncc-bundle -f compose.yaml down
+	./scripts/compose-bundle.sh down
 
 bundle-logs:
-	docker-compose -p ncc-bundle -f compose.yaml logs -f --tail=100
+	./scripts/compose-bundle.sh logs -f --tail=100
 
 bundle-health:
 	./scripts/check-container-stack.sh
+
+service-add:
+	@test -n "$(PACKAGE)" || (echo 'Usage: sudo make service-add PACKAGE=/path/to/service-package' >&2; exit 2)
+	sudo ./scripts/add-compose-service.py "$(PACKAGE)"
 

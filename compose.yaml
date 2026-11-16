@@ -241,6 +241,7 @@ services:
       RELAY_KEY: /opt/ncc-sidecar/certs/3/server.key
     volumes:
       - ./container/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./custom-services/caddy:/etc/caddy/custom:ro
       - "${CONTENT_ROOT}:/srv/ncc-server/public:ro"
       - "${SIDECAR_CERT_DIR}:/opt/ncc-sidecar/certs:ro"
       - caddy-data:/data

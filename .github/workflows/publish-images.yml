@@ -31,7 +31,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  SIDECAR_REV: 186c3ad50966a2319c354ace12e0a5a2267b75d9
+  SIDECAR_REV: d67fa15b40a3461588c96da56710bec6fd670b5b
   DITTO_RELAY_REV: e8974053dcf99ac952d1951deaffec105aeb08f1
   NPANEL_REV: 9bcf347a330351d9876ba7958ce1dbfdac458fa4
   DITTO_WEB_REV: 29709b8b53d68109dfc14af7f3a44563d177e880
@@ -57,7 +57,7 @@ jobs:
             file: container/sidecar/Containerfile
             build_args: |
               SIDECAR_REPO=https://github.com/imattau/nostr-community-conventions.git
-              SIDECAR_REV=186c3ad50966a2319c354ace12e0a5a2267b75d9
+              SIDECAR_REV=d67fa15b40a3461588c96da56710bec6fd670b5b
               SIDECAR_UID=996
               SIDECAR_GID=995
           - component: relay

@@ -18,7 +18,7 @@ STATE_DIR = pathlib.Path('/var/lib/ncc-server')
 PENDING_PATH = STATE_DIR / 'public-ip-reconcile.json'
 LOCK_PATH = pathlib.Path('/run/lock/ncc-public-ip-reconcile.lock')
 API = os.environ.get('SIDECAR_ADMIN_URL', 'http://127.0.0.1:3000').rstrip('/')
-SERVICE_IDS = ('web', 'relay', 'npanel', 'ditto', 'search')
+SERVICE_IDS = ('web', 'relay', 'npanel', 'ditto', 'search', 'addr')
 IP_URL = 'https://api.ipify.org'
 
 

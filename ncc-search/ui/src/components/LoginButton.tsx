@@ -1,5 +1,9 @@
 import { useState } from 'react';
 import { nip19 } from 'nostr-tools';
+import { UserRound } from 'lucide-react';
+
+import { useAuthor } from '@/hooks/useAuthor';
+import { sanitizeHref } from '@/lib/sanitize';
 
 // NIP-07 only -- no nsec/bunker/extension-chooser dialog like test-app's
 // full LoginArea. This app never publishes, so there's nothing for those
@@ -24,6 +28,8 @@ export function LoginButton({
   onSignOut: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [failedPicture, setFailedPicture] = useState<string | null>(null);
+  const author = useAuthor(pubkey ?? undefined);
 
   async function handleSignIn() {
     setError(null);
@@ -41,15 +47,30 @@ export function LoginButton({
     } catch {
       // fall back to the raw hex pubkey if encoding somehow fails
     }
+    const picture = sanitizeHref(author.data?.metadata?.picture);
+    const displayName = author.data?.metadata?.display_name || author.data?.metadata?.name || npub;
     return (
       <button
         type="button"
         onClick={onSignOut}
         title={`Signed in as ${npub} -- click to sign out`}
         aria-label={`Signed in as ${npub}. Click to sign out`}
-        className="shrink-0 whitespace-nowrap text-xs text-muted-foreground hover:text-foreground"
+        className="flex shrink-0 items-center gap-2 rounded-full text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {npub.slice(0, 12)}… · sign out
+        {picture && failedPicture !== picture ? (
+          <img
+            src={picture}
+            alt=""
+            onError={() => setFailedPicture(picture)}
+            className="size-8 rounded-full border border-border object-cover"
+          />
+        ) : (
+          <span aria-hidden="true" className="flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
+            <UserRound className="size-4" />
+          </span>
+        )}
+        <span className="hidden max-w-32 truncate sm:inline">{displayName}</span>
+        <span className="hidden sm:inline">· Sign out</span>
       </button>
     );
   }

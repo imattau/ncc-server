@@ -23,7 +23,7 @@ configuration.
 ### Workstation
 
 - Git and SSH access to the VM. Node.js 22 or newer and npm are only needed
-  when building the optional test app.
+  when building the welcome page.
 
 ### Public addresses
 
@@ -128,12 +128,11 @@ service; Tor is enabled for the web profile.
 
 ## 2. Deploy web content
 
-To serve the included MKStack test app, build and deploy from the workstation:
+To serve the included MKStack welcome page, build and deploy from the workstation:
 
 ~~~sh
 cd ~/ncc-server
 npm --prefix test-app ci
-make init-test-identity
 make build-test-app
 make bundle-deploy-test-app TARGET=operator@192.168.1.50
 ~~~
@@ -144,14 +143,14 @@ to read CONTENT_ROOT, but a workstation .env is not required. Set
 NCC_CONTENT_ROOT for a non-default remote path. A regular SSH account needs
 sudo access on the VM; root SSH does not.
 
-You can deploy your own static site instead. Keep the content directory
-readable by Caddy. The test app's locator publisher uses its own Git-ignored
-test identity on the workstation; it is separate from the server operator
-identity.
+The deployment also republishes the server's public root npub as
+`ncc-config.json`. The welcome page reads it at runtime to build links for the
+identity created or imported during server setup. You can deploy your own
+static site instead. Keep the content directory readable by Caddy.
 
 ## 3. Verify the install
 
-Put the test app or your own page in the configured content directory before
+Put the welcome page or your own page in the configured content directory before
 running the full health check. On the VM, it checks the web route, dashboard,
 Ditto Web, ncc-search's UI and API, relay NIP-11 response, and container
 states:
@@ -199,9 +198,10 @@ relay uses the generated self-signed certificate. It checks a NIP-01
 REQ/EOSE exchange. Do not use this setting for regular clients; clients
 should verify the relay fingerprint published in its locator.
 
-The expected NCC Browser addresses have the form
-ncc://<npub>/<service-id>/, for example ncc://<npub>/web/ or
-ncc://<npub>/relay/. Use the npub printed by the installer.
+Open the welcome page at `ncc://<npub>/`; this is the identity's default
+`addr` service and shares the web endpoint. Named service addresses include
+`ncc://<npub>/web/` and `ncc://<npub>/relay/`. Use the npub printed by the
+installer.
 
 To check the onion endpoint from the VM, use the address printed by service
 provisioning:

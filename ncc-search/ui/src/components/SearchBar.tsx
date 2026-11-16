@@ -1,6 +1,8 @@
 import { useRef, type SubmitEvent } from 'react';
 import { Search } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
 interface SearchBarProps {
@@ -48,7 +50,7 @@ export function SearchBar({
         )}
       >
         <Search className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <input
+        <Input
           name="q"
           type="search"
           key={defaultValue}
@@ -56,7 +58,7 @@ export function SearchBar({
           placeholder="Search npubs, nip05 handles, service and site names…"
           autoFocus={autoFocus}
           className={cn(
-            'h-full w-full min-w-0 bg-transparent text-foreground outline-none placeholder:text-muted-foreground',
+            'h-full rounded-none border-0 bg-transparent px-0 text-foreground shadow-none focus-visible:border-0 focus-visible:ring-0',
             size === 'hero' ? 'text-base' : 'text-sm',
           )}
           aria-label="Search"
@@ -68,13 +70,14 @@ export function SearchBar({
           doesn't try the keyboard first. */}
       {size === 'hero' && (
         <div className="mt-6 flex justify-center">
-          <button
+          <Button
             type="button"
+            variant="secondary"
             onClick={() => formRef.current?.requestSubmit()}
-            className="rounded-md border border-border bg-secondary px-5 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:border-muted-foreground/30"
+            className="border border-border px-5 hover:border-muted-foreground/30"
           >
             Search
-          </button>
+          </Button>
         </div>
       )}
     </div>
