@@ -11,13 +11,13 @@ fi
 
 BASE_HTTP="${BASE_HTTP:-http://127.0.0.1:8080}"
 PUBLIC_IPV4="${PUBLIC_IPV4:-127.0.0.1}"
-BASE_HTTPS="${BASE_HTTPS:-https://${PUBLIC_IPV4}:8443}"
-RELAY_HTTPS="${RELAY_HTTPS:-https://${PUBLIC_IPV4}:${RELAY_TLS_PORT:-8444}/}"
-NPANEL_HTTPS="${NPANEL_HTTPS:-https://${PUBLIC_IPV4}:${NPANEL_TLS_PORT:-8445}}"
-DITTO_HTTPS="${DITTO_HTTPS:-https://${PUBLIC_IPV4}:${DITTO_WEB_TLS_PORT:-8446}}"
+BASE_HTTPS="${BASE_HTTPS:-https://localhost:8443}"
+RELAY_HTTPS="${RELAY_HTTPS:-https://localhost:${RELAY_TLS_PORT:-8444}/}"
+NPANEL_HTTPS="${NPANEL_HTTPS:-https://localhost:${NPANEL_TLS_PORT:-8445}}"
+DITTO_HTTPS="${DITTO_HTTPS:-https://localhost:${DITTO_WEB_TLS_PORT:-8446}}"
 # Same origin/port for both -- see container/Caddyfile's comment on the
 # search block for why the API can't be a separate host/port.
-SEARCH_UI_HTTPS="${SEARCH_UI_HTTPS:-https://${PUBLIC_IPV4}:${SEARCH_TLS_PORT:-8447}}"
+SEARCH_UI_HTTPS="${SEARCH_UI_HTTPS:-https://localhost:${SEARCH_TLS_PORT:-8447}}"
 SEARCH_API_HTTPS="${SEARCH_API_HTTPS:-$SEARCH_UI_HTTPS}"
 SITE_NPUB="${SITE_NPUB:-}"
 
@@ -28,7 +28,7 @@ check() {
   if [[ "$url" =~ ^https://([^/:]+):([0-9]+) ]]; then
     host="${BASH_REMATCH[1]}"
     port="${BASH_REMATCH[2]}"
-    curl_args+=(--resolve "${host}:${port}:127.0.0.1")
+    [[ "$host" != localhost ]] || curl_args+=(--resolve "${host}:${port}:127.0.0.1")
   fi
   code="$(curl "${curl_args[@]}" "$@" "$url")"
   [[ "$code" == 200 ]] || { echo "$label: HTTP $code" >&2; return 1; }
@@ -39,7 +39,7 @@ check 'IP HTTP test app route' "$BASE_HTTP/"
 check 'Npanel HTTPS dashboard route' "$NPANEL_HTTPS/api/instance" --insecure
 dashboard_port="${NPANEL_TLS_PORT:-8445}"
 dashboard_json="$(curl --fail --silent --show-error --insecure --max-time 10 \
-  --resolve "${PUBLIC_IPV4}:${dashboard_port}:127.0.0.1" "$NPANEL_HTTPS/api/instance")"
+  --resolve "localhost:${dashboard_port}:127.0.0.1" "$NPANEL_HTTPS/api/instance")"
 [[ "$dashboard_json" == *"$PUBLIC_IPV4"* ]] || { echo 'Npanel dashboard host did not match.' >&2; exit 1; }
 if [[ -n "$SITE_NPUB" ]]; then
   check 'Nsite HTTPS route' "$BASE_HTTPS/nsite/$SITE_NPUB/" --insecure
