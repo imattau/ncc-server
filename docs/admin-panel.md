@@ -3,11 +3,29 @@
 The static MKStack admin panel is built from `test-app/`. It is the same
 single-page app as the public welcome page, with the panel at `/admin`.
 
-The panel is a UI prototype. Operator-key sign-in, admin changes, container
-installs, and locator publication are demo interactions. Nothing verifies a
-Nostr signer or authorizes an operator yet, so the panel is not a management
-API and it exposes no container control. Connect real signer verification and
-authorization before treating it as one.
+The panel is read-only and operator-gated. It reads the operator npub from
+`ncc-config.json` and queries the publication relays for that key's NCC
+records (kind 30059 anchors and kind 30058 locators), then shows the real
+service list, endpoints, certificate pin, locator freshness, relay delivery
+and record timestamps.
+
+Sign-in requires a real signer: a NIP-07 browser extension or a NIP-46
+`bunker://` remote signer. The panel unlocks only when the signer's pubkey
+matches the operator npub served by the node. A local nsec login shared with
+the welcome page is deliberately rejected; the panel never stores a private
+key. That is a read-only authorization check, not a management API:
+signature verification happens in the signer, and no server-side session or
+capability is issued.
+
+Provisioning, restart, log streaming, republishing, package import and admin
+key invitations remain visible but are marked inactive and disabled. The
+panel cannot change containers or publish records. Host metrics such as CPU
+and storage, and per-service health checks, are not collected; the panel
+shows "not monitored"/"not collected" rather than invented values.
+
+NCC records are public, so gating the panel is a usability and honesty
+measure, not a confidentiality boundary. Do not add management actions here
+without an authenticated, authorized sidecar API.
 
 ## Published NCC service
 
@@ -23,7 +41,7 @@ The listener uses the shared web certificate and SPKI pin, exactly like the
 web/Npanel/Ditto/search listeners. Set `ADMIN_PANEL_TLS_PORT` to change the
 port (default 8448). Re-run `sudo make bundle-provision-services` after
 upgrading to create and publish the record. Forward the port if clients
-should reach it; leave it closed to keep the prototype off the network.
+should reach it; leave it closed to keep the panel off the network.
 
 The service serves the tracked `public/` build, so deploy a build that
 includes the `/admin` route (`make build-test-app` and
@@ -65,3 +83,9 @@ The image build compiles the panel into the Caddy image. The public welcome
 page and the `/admin` route are part of the tracked `public/` build, which is
 deployed separately with `make build-test-app` and
 `make bundle-deploy-test-app`.
+
+The panel reads `/ncc-config.json` from the same content root.
+`scripts/publish-web-config.py` writes `{"npub": …, "relays": [...]}` during
+bootstrap, so re-run the bootstrap step after upgrading (or write the file
+manually) to give the panel the operator key and its relay set. When the
+`relays` field is missing, the panel falls back to its built-in relay list.

@@ -48,7 +48,7 @@ Forward and allow these TCP ports:
 | 8445 | VM port 8445 | Pinned HTTPS npanel |
 | 8446 | VM port 8446 | Pinned HTTPS Ditto Web |
 | 8447 | VM port 8447 | Pinned HTTPS ncc-search (UI and API, same origin) |
-| 8448 | VM port 8448 | Pinned HTTPS admin panel (NCC service; prototype) |
+| 8448 | VM port 8448 | Pinned HTTPS admin panel (NCC service; read-only) |
 
 Forward the ports for the services you want clients to reach. ncc-search's UI
 and API share port 8447 so browser certificate trust covers both. Npanel uses
@@ -133,7 +133,7 @@ Npanel, Ditto Web, ncc-search, and the admin panel advertise ports 8444, 8445,
 8446, 8447, and 8448 respectively. Each profile's published port matches its
 dedicated Caddy listener, avoiding cross-service fallback to the web content
 root. The admin panel service root opens /admin; leave it unreachable
-if you do not want the prototype's UI published.
+if you do not want the panel UI published.
 
 The bundle's default publication relays are wss://relay.primal.net/ and
 wss://relay.ditto.pub/. The manager profile does not create its own onion

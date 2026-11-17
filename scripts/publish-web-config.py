@@ -14,6 +14,11 @@ def main():
     parser.add_argument('--identity-file', default='/etc/ncc-server/operator-identity.json')
     parser.add_argument('--output', default='/srv/ncc-server/public/ncc-config.json')
     parser.add_argument('--group-id', type=int, default=996)
+    parser.add_argument(
+        '--relays',
+        default='wss://relay.primal.net/,wss://relay.ditto.pub/',
+        help='comma-separated publication relays the admin panel reads records from',
+    )
     args = parser.parse_args()
 
     identity = json.loads(pathlib.Path(args.identity_file).read_text())
@@ -21,12 +26,21 @@ def main():
     if not isinstance(npub, str) or not re.fullmatch(r'npub1[023456789acdefghjklmnpqrstuvwxyz]{20,}', npub):
         raise SystemExit('operator identity has no valid public npub')
 
+    relays = [item.strip() for item in args.relays.split(',') if item.strip()]
+    for relay in relays:
+        if not re.fullmatch(r'wss://[^\s]+', relay):
+            raise SystemExit(f'invalid relay URL: {relay!r} (expected wss://…)')
+
+    payload = {'npub': npub}
+    if relays:
+        payload['relays'] = relays
+
     output = pathlib.Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.ncc-config-', dir=output.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump({'npub': npub}, stream)
+            json.dump(payload, stream)
             stream.write('\n')
         os.chmod(temporary, 0o644)
         os.chown(temporary, 0, args.group_id)

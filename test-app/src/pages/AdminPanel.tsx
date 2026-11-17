@@ -1,87 +1,536 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNostrLogin } from '@nostrify/react/login';
 import {
-  Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleHelp,
-  Copy, Cpu, ExternalLink, Globe2, HardDrive, Layers3, LockKeyhole,
-  Menu, MoreHorizontal, Plus, Radio, Search, Server, Settings2, Shield,
-  ShieldCheck, TerminalSquare, Users, Waves, X,
+  Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleAlert,
+  CircleHelp, Copy, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
+  LockKeyhole, LogOut, Menu, MoreHorizontal, Plus, Radio, RefreshCw, Search,
+  Server, Settings2, Shield, ShieldCheck, TerminalSquare, Users, Waves, X,
+  type LucideIcon,
 } from 'lucide-react';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useLoginActions } from '@/hooks/useLoginActions';
+import {
+  copyText,
+  loadPanelConfig,
+  loadPanelSnapshot,
+  operatorPubkeyFromNpub,
+  type PanelActivity,
+  type PanelConfig,
+  type PanelService,
+  type PanelSnapshot,
+} from '@/lib/nccPanel';
 import './admin-panel.css';
 
 type Section = 'Overview' | 'Apps' | 'Installed' | 'Activity' | 'Admins' | 'Settings';
+type Tint = 'blue' | 'violet' | 'amber' | 'green';
+type SignInMethod = 'extension' | 'bunker';
 
-const initialServices = [
-  { name: 'Ditto Relay', id: 'relay', image: 'ghcr.io/imattau/ncc-server-relay', status: 'Running', detail: 'Public relay · Read & write', url: 'ncc://npub1ncc…/relay/', icon: Radio, tint: 'blue', published: true },
-  { name: 'Npanel', id: 'npanel', image: 'ghcr.io/imattau/ncc-server-npanel', status: 'Running', detail: 'Nsite gateway · 18 sites', url: 'ncc://npub1ncc…/npanel/', icon: Layers3, tint: 'violet', published: true },
-  { name: 'NCC Search', id: 'search', image: 'ghcr.io/imattau/ncc-server-search', status: 'Running', detail: 'Search index · Updated 4m ago', url: 'ncc://npub1ncc…/search/', icon: Search, tint: 'amber', published: true },
-];
+interface ServiceMeta {
+  label: string;
+  description: string;
+  route: string;
+  tint: Tint;
+  icon: LucideIcon;
+  order: number;
+}
+
+const SERVICE_META: Record<string, ServiceMeta> = {
+  addr: { label: 'Web (legacy)', description: 'Older welcome-page record', route: '', tint: 'green', icon: Globe2, order: 0 },
+  web: { label: 'Web', description: 'Public welcome page', route: '', tint: 'green', icon: Globe2, order: 0 },
+  relay: { label: 'Nostr Relay', description: 'Public relay · read & write', route: 'relay', tint: 'blue', icon: Radio, order: 1 },
+  ditto: { label: 'Ditto', description: 'Community web client', route: 'ditto', tint: 'violet', icon: Waves, order: 2 },
+  search: { label: 'NCC Search', description: 'Federated search index', route: 'search', tint: 'amber', icon: Search, order: 3 },
+  npanel: { label: 'Npanel', description: 'Nsite gateway', route: 'npanel', tint: 'violet', icon: Layers3, order: 4 },
+  admin: { label: 'Admin Panel', description: 'This read-only panel', route: 'admin', tint: 'green', icon: Shield, order: 5 },
+  manager: { label: 'Manager', description: 'Identity manager', route: 'manager', tint: 'green', icon: Server, order: 6 },
+};
+
+const UNKNOWN_SERVICE: ServiceMeta = {
+  label: 'NCC service',
+  description: 'Published by this node',
+  route: '',
+  tint: 'green',
+  icon: Server,
+  order: 99,
+};
+
+function serviceMeta(id: string): ServiceMeta {
+  return SERVICE_META[id] ?? { ...UNKNOWN_SERVICE, label: id, route: id };
+}
 
 const catalog = [
-  { name: 'Nostr Relay', category: 'NOSTR', description: 'A private or public relay for your community.', image: 'ghcr.io/ditto/ncc-relay', icon: Radio, tint: 'blue', meta: '1 container · 1 port' },
-  { name: 'Nsite Gateway', category: 'PUBLISHING', description: 'Host Nostr websites on your own domains.', image: 'ghcr.io/soapbox/npanel', icon: Globe2, tint: 'violet', meta: '1 container · persistent storage' },
-  { name: 'Community Chat', category: 'SOCIAL', description: 'A Nostr-powered home for your community.', image: 'ghcr.io/soapbox/ditto-web', icon: Waves, tint: 'green', meta: '1 container · 1 port' },
+  { name: 'Nostr Relay', category: 'NOSTR', description: 'A private or public relay for your community.', image: 'ghcr.io/ditto/ncc-relay', icon: Radio, tint: 'blue' as Tint, meta: '1 container · 1 port' },
+  { name: 'Nsite Gateway', category: 'PUBLISHING', description: 'Host Nostr websites on your own domains.', image: 'ghcr.io/soapbox/npanel', icon: Globe2, tint: 'violet' as Tint, meta: '1 container · persistent storage' },
+  { name: 'Community Chat', category: 'SOCIAL', description: 'A Nostr-powered home for your community.', image: 'ghcr.io/soapbox/ditto-web', icon: Waves, tint: 'green' as Tint, meta: '1 container · 1 port' },
 ];
 
-const adminRows = [
-  { name: 'Alex Morgan', npub: 'npub1ncc…4k8x', state: 'You · owner', mark: 'AM', color: 'lime' },
-  { name: 'Riley Chen', npub: 'npub1riley…8m2p', state: 'Active admin', mark: 'RC', color: 'blue' },
-  { name: 'Sam Rivera', npub: 'npub1sam…9x1q', state: 'Invitation pending', mark: 'SR', color: 'peach' },
+const navItems: { label: Section; icon: LucideIcon }[] = [
+  { label: 'Overview', icon: Activity },
+  { label: 'Apps', icon: Layers3 },
+  { label: 'Installed', icon: Server },
+  { label: 'Activity', icon: TerminalSquare },
+  { label: 'Admins', icon: Users },
+  { label: 'Settings', icon: Settings2 },
 ];
 
-function IconBox({ icon: Icon, tint }: { icon: typeof Server; tint: string }) {
-  return <span className={`panel-icon ${tint}`}><Icon size={19} strokeWidth={1.8} /></span>;
+function IconBox({ icon: Icon, tint }: { icon: LucideIcon; tint: string }) {
+  return (
+    <span className={`panel-icon ${tint}`}>
+      <Icon size={19} strokeWidth={1.8} />
+    </span>
+  );
+}
+
+function shortNpub(npub: string): string {
+  return npub.length > 20 ? `${npub.slice(0, 11)}…${npub.slice(-6)}` : npub;
+}
+
+function relativeTime(unixSeconds: number): string {
+  const diff = Math.floor(Date.now() / 1000) - unixSeconds;
+  if (diff < 45) return 'just now';
+  if (diff < 3600) return `${Math.round(diff / 60)} min ago`;
+  if (diff < 86400) return `${Math.round(diff / 3600)} hr ago`;
+  return `${Math.round(diff / 86400)} d ago`;
+}
+
+function durationLabel(seconds: number): string {
+  const value = Math.abs(Math.round(seconds));
+  if (value < 60) return `${value}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  if (value < 86400) return `${Math.round(value / 3600)}h`;
+  return `${Math.round(value / 86400)}d`;
+}
+
+function expiryLabel(service: PanelService): string {
+  if (service.expiresAt === null) return 'No expiry published';
+  const remaining = service.expiresAt - Math.floor(Date.now() / 1000);
+  if (remaining <= 0) return `Expired ${durationLabel(remaining)} ago`;
+  return `Expires in ${durationLabel(remaining)}`;
+}
+
+function statusCopy(service: PanelService): { label: string; tone: string } {
+  switch (service.status) {
+    case 'published':
+      return { label: 'Published', tone: '' };
+    case 'expired':
+      return { label: 'Expired', tone: 'warning' };
+    case 'anchor-only':
+      return { label: 'Anchor only', tone: 'muted' };
+    case 'locator-only':
+      return { label: 'Locator only', tone: 'muted' };
+  }
+}
+
+function endpointHost(endpoint: string | null): string | null {
+  if (!endpoint) return null;
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return null;
+  }
+}
+
+function safeHref(endpoint: string | null): string | null {
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function signerLabel(type: string | undefined): string {
+  switch (type) {
+    case 'extension':
+      return 'NIP-07 signer';
+    case 'bunker':
+      return 'NIP-46 signer';
+    case 'nsec':
+      return 'Local key';
+    default:
+      return 'Operator key';
+  }
+}
+
+function initials(npub: string): string {
+  return npub.slice(-2).toUpperCase();
+}
+
+function activityGroups(activity: PanelActivity[]): { label: string; items: PanelActivity[] }[] {
+  const groups = new Map<string, PanelActivity[]>();
+
+  for (const item of activity) {
+    const label = new Date(item.createdAt * 1000).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    const existing = groups.get(label) ?? [];
+    existing.push(item);
+    groups.set(label, existing);
+  }
+
+  return Array.from(groups.entries()).map(([label, items]) => ({ label, items }));
+}
+
+function ActivityRow({ item }: { item: PanelActivity }) {
+  const meta = serviceMeta(item.serviceId);
+  const locator = item.kind === 30058;
+
+  return (
+    <div className="timeline-item">
+      <span className={`timeline-mark ${locator ? 'purple' : 'blue'}`}>
+        {locator ? <Radio size={13} /> : <Layers3 size={13} />}
+      </span>
+      <div>
+        <strong>{locator ? 'Locator refreshed' : 'Service record published'} · {meta.label}</strong>
+        <small>kind {item.kind} · signed by the operator key</small>
+      </div>
+      <time>{relativeTime(item.createdAt)}</time>
+    </div>
+  );
+}
+
+interface OperatorGateProps {
+  config: PanelConfig | null;
+  operatorNpub: string;
+  signerNpub: string | null;
+  operatorPubkey: string | null;
+  localKeyOnly: boolean;
+  busy: SignInMethod | null;
+  error: string;
+  bunkerUri: string;
+  onBunkerUri: (value: string) => void;
+  onExtension: () => void;
+  onBunker: () => void;
+  onSignOut: () => void;
+  onCopy: (value: string, label: string) => void;
+}
+
+function OperatorGate({
+  config, operatorNpub, signerNpub, operatorPubkey, localKeyOnly, busy, error, bunkerUri,
+  onBunkerUri, onExtension, onBunker, onSignOut, onCopy,
+}: OperatorGateProps) {
+  const mismatch = Boolean(signerNpub && operatorPubkey && signerNpub !== operatorPubkey);
+
+  return (
+    <div className="ncc-panel gate-shell">
+      <main className="gate-main">
+        <section className="gate-card" aria-labelledby="gate-title">
+          <div className="gate-brand">
+            <span className="panel-brand-mark"><Globe2 size={21} /></span>
+            <span>NCC <i>/</i> SERVER</span>
+            <span className="prototype-tag"><i /> READ-ONLY</span>
+          </div>
+
+          <div className="gate-shield"><ShieldCheck size={24} /></div>
+          <h1 id="gate-title">Operator sign-in</h1>
+
+          {config === null && (
+            <>
+              <p className="gate-intro">Reading the node identity before opening the panel.</p>
+              <div className="gate-loading" role="status"><span className="button-spinner dark" /> Reading ncc-config.json…</div>
+            </>
+          )}
+
+          {config !== null && !config.npub && (
+            <>
+              <p className="gate-intro">This build expects the node to publish its operator key at <code>/ncc-config.json</code>.</p>
+              <div className="gate-note error" role="alert">
+                <CircleAlert size={14} />
+                <span>Node identity is not published yet. Deploy the current web build and re-run the host bootstrap, then reload this page.</span>
+              </div>
+            </>
+          )}
+
+          {config !== null && config.npub && (
+            <>
+              <p className="gate-intro">
+                This panel is read-only. It reads the NCC records your node publishes, and it only opens for the
+                node operator key.
+              </p>
+
+              <div className="gate-operator">
+                <span>NODE OPERATOR</span>
+                <strong>{shortNpub(operatorNpub)}</strong>
+              </div>
+
+              {localKeyOnly ? (
+                <>
+                  <div className="gate-note warning" role="alert">
+                    <CircleAlert size={14} />
+                    <span>A local secret key is signed in. This panel only accepts a NIP-07 extension or a NIP-46 remote signer.</span>
+                  </div>
+                  <div className="gate-actions">
+                    <button className="button-secondary" type="button" onClick={onSignOut}>
+                      <LogOut size={14} /> Disconnect this key
+                    </button>
+                    <button className="button-secondary" type="button" onClick={() => onCopy(operatorNpub, 'Operator npub')}>
+                      <Copy size={14} /> Copy operator npub
+                    </button>
+                  </div>
+                </>
+              ) : mismatch && signerNpub ? (
+                <>
+                  <div className="gate-note warning" role="alert">
+                    <CircleAlert size={14} />
+                    <span>A signer is connected, but its key is not the node operator.</span>
+                  </div>
+                  <div className="gate-identity">
+                    <span>YOUR SIGNER</span>
+                    <strong>{shortNpub(signerNpub)}</strong>
+                  </div>
+                  <div className="gate-actions">
+                    <button className="button-secondary" type="button" onClick={onSignOut}>
+                      <LogOut size={14} /> Disconnect this key
+                    </button>
+                    <button className="button-secondary" type="button" onClick={() => onCopy(operatorNpub, 'Operator npub')}>
+                      <Copy size={14} /> Copy operator npub
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button className="button-primary gate-extension" type="button" onClick={onExtension} disabled={busy !== null}>
+                    <KeyRound size={16} />
+                    {busy === 'extension' ? 'Waiting for NIP-07 extension…' : 'Sign in with NIP-07 extension'}
+                  </button>
+
+                  <div className="gate-divider"><span>or a NIP-46 remote signer</span></div>
+
+                  <form onSubmit={(event) => { event.preventDefault(); onBunker(); }}>
+                    <label htmlFor="bunker-uri">BUNKER URI</label>
+                    <div className="invite-input-row">
+                      <input
+                        id="bunker-uri"
+                        value={bunkerUri}
+                        onChange={(event) => onBunkerUri(event.target.value)}
+                        placeholder="bunker://…"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={busy !== null}
+                      />
+                      <button className="button-secondary" type="submit" disabled={busy !== null}>
+                        {busy === 'bunker' ? 'Connecting…' : 'Connect'}
+                      </button>
+                    </div>
+                  </form>
+
+                  {error && (
+                    <div className="gate-note error" role="alert">
+                      <CircleAlert size={14} />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  <p className="gate-foot">
+                    <LockKeyhole size={12} />
+                    Your signer approves this client once. Inside NCC Browser use a NIP-46 signer; extensions
+                    usually load only on http(s) pages. This build only reads public records.
+                  </p>
+                </>
+              )}
+            </>
+          )}
+        </section>
+      </main>
+    </div>
+  );
 }
 
 export default function AdminPanel() {
+  const { user } = useCurrentUser();
+  const { logins } = useNostrLogin();
+  const login = useLoginActions();
+
+  const [config, setConfig] = useState<PanelConfig | null>(null);
+  const [snapshot, setSnapshot] = useState<PanelSnapshot | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [recordsError, setRecordsError] = useState('');
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [renderedAt] = useState(() => Date.now());
+  const [refreshToken, setRefreshToken] = useState(0);
+
   const [section, setSection] = useState<Section>('Overview');
-  const [showInstall, setShowInstall] = useState(false);
-  const [selectedApp, setSelectedApp] = useState(catalog[0]);
-  const [installed, setInstalled] = useState(initialServices);
-  const [installing, setInstalling] = useState(false);
-  const [published, setPublished] = useState(true);
-  const [npub, setNpub] = useState('');
-  const [invited, setInvited] = useState(false);
-  const [connected, setConnected] = useState(true);
   const [mobileNav, setMobileNav] = useState(false);
   const [notice, setNotice] = useState('');
+  const [appQuery, setAppQuery] = useState('');
+  const [selectedApp, setSelectedApp] = useState<typeof catalog[number] | null>(null);
+
+  const [signInBusy, setSignInBusy] = useState<SignInMethod | null>(null);
+  const [signInError, setSignInError] = useState('');
+  const [bunkerUri, setBunkerUri] = useState('');
+
+  const operatorNpub = config?.npub ?? null;
+  const operatorPubkey = useMemo(() => operatorPubkeyFromNpub(operatorNpub), [operatorNpub]);
+  const signerPubkey = user?.pubkey?.toLowerCase() ?? null;
+  const signerType = logins[0]?.type;
+  const supportedSigner = signerType === 'extension' || signerType === 'bunker';
+  const localKeyOnly = Boolean(
+    operatorPubkey && signerPubkey && operatorPubkey === signerPubkey && !supportedSigner,
+  );
+  const authorized = Boolean(
+    operatorPubkey && signerPubkey && operatorPubkey === signerPubkey && supportedSigner,
+  );
 
   const notify = (message: string) => {
     setNotice(message);
     window.setTimeout(() => setNotice(''), 2600);
   };
 
-  const startInstall = (app: typeof catalog[number]) => {
-    setSelectedApp(app);
-    setShowInstall(true);
+  const copy = async (value: string, label: string) => {
+    const copied = await copyText(value);
+    notify(copied ? `${label} copied` : 'Copy failed — select the value manually');
   };
 
-  const confirmInstall = () => {
-    setInstalling(true);
-    window.setTimeout(() => {
-      const service = {
-        name: selectedApp.name,
-        id: selectedApp.name.toLowerCase().replaceAll(' ', '-'),
-        image: selectedApp.image,
-        status: 'Running',
-        detail: 'Just installed · Health check passed',
-        url: `ncc://npub1ncc…/${selectedApp.name.toLowerCase().replaceAll(' ', '-')}/`,
-        icon: selectedApp.icon,
-        tint: selectedApp.tint,
-        published: false,
-      };
-      setInstalled((items) => [service, ...items]);
-      setSection('Installed');
-      setShowInstall(false);
-      setInstalling(false);
-      setPublished(false);
-      notify(`${selectedApp.name} installed and healthy`);
-    }, 1400);
+  useEffect(() => {
+    const controller = new AbortController();
+    loadPanelConfig(controller.signal).then((loaded) => {
+      if (!controller.signal.aborted) setConfig(loaded);
+    });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!config || !operatorPubkey || !authorized) return;
+
+    const controller = new AbortController();
+
+    loadPanelSnapshot(operatorPubkey, config.relays, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setSnapshot(loaded);
+        setLoadedAt(Date.now());
+        setRecordsError('');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setRecordsError(error instanceof Error ? error.message : 'Could not read NCC records');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRefreshing(false);
+      });
+
+    return () => controller.abort();
+  }, [config, operatorPubkey, authorized, refreshToken]);
+
+  const handleExtension = async () => {
+    setSignInError('');
+    setSignInBusy('extension');
+    try {
+      await login.extension();
+    } catch (error) {
+      setSignInError(
+        error instanceof Error && error.message
+          ? `NIP-07 sign-in failed: ${error.message}`
+          : 'No NIP-07 extension answered. Try a NIP-46 remote signer below.',
+      );
+    } finally {
+      setSignInBusy(null);
+    }
   };
 
-  const navItems: { label: Section; icon: typeof Server }[] = [
-    { label: 'Overview', icon: Activity }, { label: 'Apps', icon: Layers3 },
-    { label: 'Installed', icon: Server }, { label: 'Activity', icon: TerminalSquare },
-    { label: 'Admins', icon: Users }, { label: 'Settings', icon: Settings2 },
-  ];
+  const handleBunker = async () => {
+    setSignInError('');
+    const uri = bunkerUri.trim();
+
+    if (!uri.startsWith('bunker://')) {
+      setSignInError('Enter the bunker:// URI from your remote signer.');
+      return;
+    }
+
+    setSignInBusy('bunker');
+    try {
+      await login.bunker(uri);
+      setBunkerUri('');
+    } catch (error) {
+      setSignInError(
+        error instanceof Error && error.message
+          ? `NIP-46 sign-in failed: ${error.message}`
+          : 'The remote signer did not accept this client.',
+      );
+    } finally {
+      setSignInBusy(null);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await login.logout();
+    setSnapshot(null);
+    setRecordsError('');
+    setLoadedAt(null);
+    setSection('Overview');
+  };
+
+  if (!authorized || !operatorNpub) {
+    return (
+      <OperatorGate
+        config={config}
+        operatorNpub={operatorNpub ?? ''}
+        signerNpub={signerPubkey}
+        operatorPubkey={operatorPubkey}
+        localKeyOnly={localKeyOnly}
+        busy={signInBusy}
+        error={signInError}
+        bunkerUri={bunkerUri}
+        onBunkerUri={setBunkerUri}
+        onExtension={handleExtension}
+        onBunker={handleBunker}
+        onSignOut={handleSignOut}
+        onCopy={copy}
+      />
+    );
+  }
+
+  const services = [...(snapshot?.services ?? [])].sort((a, b) => {
+    const left = serviceMeta(a.id);
+    const right = serviceMeta(b.id);
+    return left.order === right.order ? left.label.localeCompare(right.label) : left.order - right.order;
+  });
+  const loadingRecords = refreshing || (snapshot === null && !recordsError);
+  const refresh = () => {
+    setRecordsError('');
+    setRefreshing(true);
+    setRefreshToken((value) => value + 1);
+  };
+  const publishedCount = services.filter((service) => service.status === 'published').length;
+  const expiredCount = services.filter((service) => service.status === 'expired').length;
+  const connectedRelays = snapshot?.relays.filter((relay) => relay.connected).length ?? 0;
+  const relayTotal = config?.relays.length ?? 0;
+  const newestExpiry = services
+    .filter((service) => service.status === 'published' && service.expiresAt !== null)
+    .reduce<number | null>((soonest, service) => {
+      if (service.expiresAt === null) return soonest;
+      return soonest === null || service.expiresAt < soonest ? service.expiresAt : soonest;
+    }, null);
+  const locatorTtl = services.find((service) => service.ttlSeconds !== null)?.ttlSeconds ?? null;
+  const nowSeconds = Math.floor((loadedAt ?? renderedAt) / 1000);
+
+  const connectionSummary = loadingRecords
+    ? 'Reading records…'
+    : recordsError
+      ? 'Records unavailable'
+      : services.length === 0
+        ? 'No records found'
+        : expiredCount > 0
+          ? `${expiredCount} locator${expiredCount === 1 ? '' : 's'} expired`
+          : 'All locators fresh';
+
+  const publicHosts = Array.from(
+    new Set(
+      services
+        .map((service) => endpointHost(service.endpoint))
+        .filter((host): host is string => host !== null),
+    ),
+  );
+
+  const filteredCatalog = catalog.filter((app) =>
+    `${app.name} ${app.category} ${app.description}`.toLowerCase().includes(appQuery.trim().toLowerCase()),
+  );
+
+  const groups = activityGroups(snapshot?.activity ?? []);
+  const recentActivity = snapshot?.activity.slice(0, 3) ?? [];
 
   return (
     <div className="ncc-panel">
@@ -90,84 +539,524 @@ export default function AdminPanel() {
           <span className="panel-brand-mark"><Globe2 size={21} /></span>
           <span>NCC <i>/</i> SERVER</span>
         </a>
-        <div className="panel-node">
+
+        <div className="panel-node" title="Node identity comes from /ncc-config.json">
           <span className="node-avatar"><Server size={17} /></span>
-          <span className="node-copy"><strong>My community node</strong><small><b /> Online · 1.43.63.94</small></span>
+          <span className="node-copy">
+            <strong>NCC node</strong>
+            <small><b /> {shortNpub(operatorNpub)} · {services.length} services</small>
+          </span>
           <ChevronDown size={15} />
         </div>
+
         <div className="nav-caption">MANAGE</div>
         <nav aria-label="Panel navigation">
-          {navItems.map(({ label, icon: Icon }) => <button key={label} className={`panel-nav-item ${section === label ? 'active' : ''}`} onClick={() => { setSection(label); setMobileNav(false); }}>
-            <Icon size={17} strokeWidth={1.8} /><span>{label}</span>
-            {label === 'Installed' && <em>{installed.length}</em>}
-          </button>)}
+          {navItems.map(({ label, icon: Icon }) => (
+            <button
+              key={label}
+              className={`panel-nav-item ${section === label ? 'active' : ''}`}
+              onClick={() => { setSection(label); setMobileNav(false); }}
+            >
+              <Icon size={17} strokeWidth={1.8} /><span>{label}</span>
+              {label === 'Installed' && <em>{services.length}</em>}
+            </button>
+          ))}
         </nav>
+
         <div className="sidebar-bottom">
-          <div className="storage-card"><div className="storage-top"><HardDrive size={15} /><span>Storage</span><span className="storage-value">42%</span></div><div className="storage-track"><i /></div><small>84 GB of 200 GB used</small></div>
-          <button className="help-link" onClick={() => notify('Opening NCC Server operator guide')}><CircleHelp size={16} /> Operator guide <ArrowUpRight size={13} /></button>
-          <div className="sidebar-version">NCC SERVER <span>PROTOTYPE</span></div>
+          <div className="storage-card">
+            <div className="storage-top"><HardDrive size={15} /><span>Storage</span><span className="storage-value">—</span></div>
+            <div className="storage-track"><i style={{ width: '0%' }} /></div>
+            <small>Host metrics are not collected in this build</small>
+          </div>
+          <a
+            className="help-link"
+            href="https://github.com/imattau/ncc-server/blob/main/docs/admin-panel.md"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <CircleHelp size={16} /> Operator guide <ArrowUpRight size={13} />
+          </a>
+          <div className="sidebar-version">NCC SERVER <span>READ-ONLY</span></div>
         </div>
       </aside>
 
       <main className="panel-main">
         <header className="panel-topbar">
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle navigation"><Menu size={20} /></button>
-          <div className="breadcrumbs"><span>My community node</span><b>/</b><strong>{section}</strong></div>
+          <div className="breadcrumbs"><span>NCC node</span><b>/</b><strong>{section}</strong></div>
           <div className="topbar-right">
-            <span className="prototype-tag"><i /> DEMO MODE</span>
-            {connected ? <button className="operator-chip" onClick={() => setConnected(false)}><span className="operator-avatar">AM</span><span><strong>Alex Morgan</strong><small>npub1ncc…4k8x</small></span><ChevronDown size={14} /></button> : <button className="connect-button" onClick={() => setConnected(true)}><LockKeyhole size={15} /> Connect operator key</button>}
+            <span className="prototype-tag"><i /> READ-ONLY</span>
+            <span className="operator-chip" title={`Signed in as ${signerLabel(signerType)}`}>
+              <span className="operator-avatar">{initials(operatorNpub)}</span>
+              <span><strong>{signerLabel(signerType)}</strong><small>{shortNpub(operatorNpub)}</small></span>
+              <button className="icon-quiet" type="button" onClick={handleSignOut} title="Sign out" aria-label="Sign out">
+                <LogOut size={14} />
+              </button>
+            </span>
           </div>
         </header>
 
         <div className="panel-content">
-          {section === 'Overview' && <>
-            <div className="page-heading"><div><div className="eyebrow">MONDAY, NOVEMBER 17, 2026 <span>·</span> SERVER OVERVIEW</div><h1>Your server, at a glance.</h1><p>Everything running on your node, in one place.</p></div><button className="button-primary" onClick={() => { setSection('Apps'); }}><Plus size={16} /> Add a service</button></div>
-            <div className="metric-grid">
-              <div className="metric-card"><div className="metric-label">SERVER STATUS <span className="metric-icon mint"><ShieldCheck size={16} /></span></div><div className="metric-value"><i className="live-dot" /> All systems operational</div><div className="metric-foot">Last checked just now</div></div>
-              <div className="metric-card"><div className="metric-label">RUNNING SERVICES <span className="metric-icon lilac"><Layers3 size={16} /></span></div><div className="metric-value">{installed.length}<small> / 8</small></div><div className="metric-foot">Across 4.2 GB memory</div></div>
-              <div className="metric-card"><div className="metric-label">CPU USAGE <span className="metric-icon blue"><Cpu size={16} /></span></div><div className="metric-value">23<small>%</small></div><div className="mini-chart"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div></div>
-              <div className="metric-card"><div className="metric-label">NOSTR ADMINS <span className="metric-icon peach"><Users size={16} /></span></div><div className="metric-value">3<small> keys</small></div><div className="metric-foot">2 active · 1 invitation pending</div></div>
+          {(loadingRecords || recordsError) && (
+            <div className={`panel-banner ${recordsError ? 'error' : ''}`} role="status">
+              {recordsError ? <CircleAlert size={14} /> : <RefreshCw size={14} className="spin" />}
+              <span>{recordsError ? `Could not read NCC records: ${recordsError}` : 'Reading published NCC records from your relays…'}</span>
             </div>
-            <section className="content-section">
-              <div className="section-heading"><div><h2>Your services</h2><p>Containers running on this node</p></div><button className="text-button" onClick={() => setSection('Installed')}>View all <ArrowUpRight size={14} /></button></div>
-              <div className="service-list">{installed.slice(0, 3).map((service) => <div className="service-row" key={service.id}><IconBox icon={service.icon} tint={service.tint} /><div className="service-name"><strong>{service.name}</strong><small>{service.detail}</small></div><span className="status-pill"><i />{service.status}</span><button className="locator-link" onClick={() => notify('Locator copied to clipboard')}><span>{service.url}</span><Copy size={14} /></button><button className="icon-quiet" onClick={() => notify(`${service.name} actions`)} aria-label={`${service.name} actions`}><MoreHorizontal size={19} /></button></div>)}</div>
-            </section>
-            <div className="overview-bottom">
-              <section className="content-section activity-panel"><div className="section-heading"><div><h2>Recent activity</h2><p>What’s been happening on your node</p></div><button className="text-button" onClick={() => setSection('Activity')}>Activity log <ArrowUpRight size={14} /></button></div>
-                <div className="timeline"><div className="timeline-item"><span className="timeline-mark success"><Check size={13} /></span><div><strong>Npanel is healthy</strong><small>Health check passed · Npanel</small></div><time>2 min ago</time></div><div className="timeline-item"><span className="timeline-mark purple"><Radio size={13} /></span><div><strong>Service locator published</strong><small>Kind 30058 · relay.ditto.pub</small></div><time>2 min ago</time></div><div className="timeline-item"><span className="timeline-mark blue"><Users size={13} /></span><div><strong>Admin invitation sent</strong><small>npub1sam…9x1q · awaiting acceptance</small></div><time>1 hr ago</time></div></div>
+          )}
+
+          {section === 'Overview' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">
+                    {new Date(renderedAt).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                    <span>·</span> SERVER OVERVIEW
+                  </div>
+                  <h1>Your server, at a glance.</h1>
+                  <p>Everything this node publishes, read live from your relays.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="button-secondary" onClick={refresh} disabled={loadingRecords}>
+                    <RefreshCw size={15} className={loadingRecords ? 'spin' : undefined} /> Refresh
+                  </button>
+                  <button className="button-primary" onClick={() => setSection('Apps')}><Plus size={16} /> Add a service</button>
+                </div>
+              </div>
+
+              <div className="metric-grid">
+                <div className="metric-card">
+                  <div className="metric-label">PUBLICATION STATUS <span className="metric-icon mint"><ShieldCheck size={16} /></span></div>
+                  <div className="metric-value"><i className="live-dot" /> {connectionSummary}</div>
+                  <div className="metric-foot">Last checked {loadedAt ? new Date(loadedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">SERVICES PUBLISHED <span className="metric-icon lilac"><Layers3 size={16} /></span></div>
+                  <div className="metric-value">{services.length}<small> records</small></div>
+                  <div className="metric-foot">{publishedCount} fresh locator{publishedCount === 1 ? '' : 's'} · kind 30059</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">RELAY DELIVERY <span className="metric-icon blue"><Radio size={16} /></span></div>
+                  <div className="metric-value">{connectedRelays}<small> / {relayTotal} relays</small></div>
+                  <div className="metric-foot">Queried live from this browser</div>
+                </div>
+                <div className="metric-card">
+                  <div className="metric-label">LOCATOR FRESHNESS <span className="metric-icon peach"><Activity size={16} /></span></div>
+                  <div className="metric-value">
+                    {newestExpiry === null ? '—' : durationLabel(newestExpiry - nowSeconds)}
+                    <small> until expiry</small>
+                  </div>
+                  <div className="metric-foot">{locatorTtl === null ? 'No locator TTL published' : `${durationLabel(locatorTtl)} locator TTL`}</div>
+                </div>
+              </div>
+
+              <section className="content-section">
+                <div className="section-heading">
+                  <div><h2>Your services</h2><p>Published NCC records for this node</p></div>
+                  <button className="text-button" onClick={() => setSection('Installed')}>View all <ArrowUpRight size={14} /></button>
+                </div>
+
+                {loadingRecords && services.length === 0 ? (
+                  <div className="empty-state">Reading published services…</div>
+                ) : services.length === 0 ? (
+                  <div className="empty-state">No NCC service records were found on the configured relays.</div>
+                ) : (
+                  <div className="service-list">
+                    {services.slice(0, 3).map((service) => {
+                      const meta = serviceMeta(service.id);
+                      const status = statusCopy(service);
+                      return (
+                        <div className="service-row" key={service.id}>
+                          <IconBox icon={meta.icon} tint={meta.tint} />
+                          <div className="service-name"><strong>{meta.label}</strong><small>{meta.description}</small></div>
+                          <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
+                          <button
+                            className="locator-link"
+                            onClick={() => service.endpoint && copy(service.endpoint, 'Endpoint')}
+                            disabled={!service.endpoint}
+                            title={service.endpoint ?? 'No endpoint published'}
+                          >
+                            <span>{service.endpoint ?? 'No endpoint'}</span><Copy size={14} />
+                          </button>
+                          <button className="icon-quiet" disabled aria-label={`${meta.label} actions (inactive)`} title="Container controls are inactive in this read-only build">
+                            <MoreHorizontal size={19} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
-              <section className="publish-card"><div className="publish-orbit"><Radio size={21} /></div><div className="eyebrow">YOUR NODE ON NOSTR</div><h3>Discoverable by design.</h3><p>Your services are shared as signed NCC locators. You own the identity and control what gets published.</p><button className="publish-link" onClick={() => { setPublished(true); notify('All service locators are up to date'); }}>Review publications <ArrowUpRight size={14} /></button></section>
-            </div>
-          </>}
 
-          {section === 'Apps' && <>
-            <div className="page-heading"><div><div className="eyebrow">APP CATALOG <span>·</span> CURATED FOR NCC</div><h1>Give your server a new purpose.</h1><p>Choose a service. We’ll handle the containers, health checks, routing, and Nostr locator.</p></div><span className="catalog-count">{catalog.length} READY TO INSTALL</span></div>
-            <div className="catalog-toolbar"><div className="catalog-search"><Search size={16} /><input aria-label="Search apps" placeholder="Find an app…" /></div><button className="filter-button">All categories <ChevronDown size={14} /></button><button className="package-button" onClick={() => notify('Package upload is planned for a later prototype')}><ArrowDownToLine size={15} /> Import package</button></div>
-            <div className="catalog-grid">{catalog.map((app) => { const Icon = app.icon; return <article className="catalog-card" key={app.name}><div className="catalog-card-top"><IconBox icon={Icon} tint={app.tint} /><span className="category-tag">{app.category}</span></div><h3>{app.name}</h3><p>{app.description}</p><div className="catalog-meta"><span>{app.meta}</span><button onClick={() => notify(`${app.name}: package details`)}>Details <ArrowUpRight size={12} /></button></div><button className="catalog-install" onClick={() => startInstall(app)}><Plus size={15} /> Install service</button></article>; })}</div>
-            <div className="catalog-note"><Shield size={17} /><span><strong>Reviewed packages.</strong> Catalog entries are curated and pinned to a specific image version. You’ll review ports, storage, and permissions before installing.</span><button onClick={() => notify('Package submission guide')}>How packages work <ArrowUpRight size={13} /></button></div>
-          </>}
+              <div className="overview-bottom">
+                <section className="content-section activity-panel">
+                  <div className="section-heading">
+                    <div><h2>Recent activity</h2><p>Record timestamps published on your relays</p></div>
+                    <button className="text-button" onClick={() => setSection('Activity')}>Activity log <ArrowUpRight size={14} /></button>
+                  </div>
+                  {recentActivity.length === 0 ? (
+                    <p className="empty-note">
+                      {loadingRecords ? 'Reading publication history…' : 'No publication history found on the configured relays.'}
+                    </p>
+                  ) : (
+                    <div className="timeline">
+                      {recentActivity.map((item) => <ActivityRow key={`${item.kind}-${item.serviceId}`} item={item} />)}
+                    </div>
+                  )}
+                </section>
 
-          {section === 'Installed' && <>
-            <div className="page-heading"><div><div className="eyebrow">CONTAINER MANAGEMENT</div><h1>Installed services</h1><p>Monitor, manage, and publish the services on your node.</p></div><button className="button-primary" onClick={() => setSection('Apps')}><Plus size={16} /> Add a service</button></div>
-            <div className="installed-list">{installed.map((service) => <article className="installed-card" key={service.id}><div className="installed-main"><IconBox icon={service.icon} tint={service.tint} /><div className="service-name"><div className="installed-title"><strong>{service.name}</strong><span className="status-pill"><i />{service.status}</span></div><small>{service.image}:stable</small></div><button className="icon-quiet" onClick={() => notify(`${service.name} actions`)} aria-label={`${service.name} actions`}><MoreHorizontal size={19} /></button></div><div className="installed-details"><div><span>PUBLIC ENDPOINT</span><strong>{service.url}</strong></div><div><span>HEALTH</span><strong className="health-good"><i /> Passing · checked 30s ago</strong></div><div><span>PUBLICATION</span><strong>{service.published && published ? 'Locator published' : 'Needs publishing'}</strong></div></div><div className="installed-actions"><button onClick={() => notify(`Showing ${service.name} logs`)}><TerminalSquare size={14} /> Logs</button><button onClick={() => notify(`${service.name} restarted`)}><Activity size={14} /> Restart</button><button onClick={() => { setPublished(true); notify(`${service.name} locator published`); }}><Radio size={14} /> {service.published && published ? 'Republish locator' : 'Publish locator'}</button><button className="external-action" onClick={() => notify('Endpoint copied')}><ExternalLink size={14} /> Open endpoint</button></div></article>)}</div>
-          </>}
+                <section className="publish-card">
+                  <div className="publish-orbit"><Radio size={21} /></div>
+                  <div className="eyebrow">YOUR NODE ON NOSTR</div>
+                  <h3>Discoverable by design.</h3>
+                  <p>
+                    {loadingRecords
+                      ? 'Reading published records from your relays…'
+                      : services.length === 0
+                        ? 'No NCC records were found on the configured relays.'
+                        : `${publishedCount} of ${services.length} services publish a fresh locator, signed by the operator key.`}
+                  </p>
+                  <button className="publish-link" onClick={() => setSection('Installed')}>Review publications <ArrowUpRight size={14} /></button>
+                </section>
+              </div>
+            </>
+          )}
 
-          {section === 'Admins' && <>
-            <div className="page-heading"><div><div className="eyebrow">ACCESS CONTROL <span>·</span> NOSTR KEYS</div><h1>People who run this node.</h1><p>Admins sign in with their Nostr key. No passwords, no separate accounts.</p></div></div>
-            <div className="admin-callout"><div className="callout-shield"><ShieldCheck size={20} /></div><div><strong>Access follows the operator key.</strong><p>Only npubs approved by an existing admin can manage containers, settings, or service publications.</p></div><span>KEY-BASED ACCESS</span></div>
-            <section className="admin-section"><div className="section-heading"><div><h2>Node administrators <span className="count-chip">3</span></h2><p>Manage which Nostr keys can access this panel.</p></div></div><div className="admin-table"><div className="admin-table-head"><span>OPERATOR</span><span>ACCESS</span><span>ADDED</span><span /></div>{adminRows.map((admin, index) => <div className="admin-table-row" key={admin.npub}><div className="admin-person"><span className={`admin-avatar ${admin.color}`}>{admin.mark}</span><span><strong>{admin.name}</strong><small>{admin.npub} <button aria-label="Copy npub" onClick={() => notify('npub copied')}><Copy size={12} /></button></small></span></div><span className={`admin-state ${index === 2 ? 'pending' : ''}`}><i />{admin.state}</span><span className="admin-added">{index === 0 ? 'Server owner' : index === 1 ? 'Oct 24, 2026' : 'Today'}</span><button className="icon-quiet" aria-label="Admin actions" onClick={() => notify(index === 0 ? 'The owner key cannot be removed here' : 'Admin actions')}><MoreHorizontal size={18} /></button></div>)}</div></section>
-            <section className="invite-card"><div className="invite-heading"><span className="invite-icon"><Plus size={18} /></span><div><h2>Invite an operator</h2><p>Add their public Nostr key. They’ll need to accept the sidecar invitation before managing services.</p></div></div><form onSubmit={(event) => { event.preventDefault(); if (!npub.startsWith('npub1')) { notify('Enter a valid npub1… public key'); return; } setInvited(true); setNpub(''); notify('Invitation sent · awaiting acceptance'); }}><label htmlFor="admin-npub">OPERATOR PUBLIC KEY</label><div className="invite-input-row"><input id="admin-npub" value={npub} onChange={(event) => setNpub(event.target.value)} placeholder="npub1…" /><button className="button-primary" type="submit"><Plus size={15} /> Send invitation</button></div><small><LockKeyhole size={12} /> Public key only. Never enter or share a private key here.</small>{invited && <div className="invite-success"><Check size={14} /> Invitation sent. It will appear as pending until accepted.</div>}</form></section>
-            <div className="admin-footnote"><CircleHelp size={15} /><span>Admins are also provisioned for Npanel. Revoking a key here should remove its access from every supported NCC service.</span><button onClick={() => notify('Opening admin access documentation')}>Access guide <ArrowUpRight size={12} /></button></div>
-          </>}
+          {section === 'Apps' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">APP CATALOG <span>·</span> READ-ONLY PREVIEW</div>
+                  <h1>Give your server a new purpose.</h1>
+                  <p>Provisioning is inactive in this build. You can review what each package would add.</p>
+                </div>
+                <span className="catalog-count">{filteredCatalog.length} READY TO REVIEW</span>
+              </div>
 
-          {section === 'Activity' && <><div className="page-heading"><div><div className="eyebrow">AUDIT TRAIL</div><h1>Activity on your node.</h1><p>Installs, operator access, and Nostr publications.</p></div><button className="filter-button">Last 7 days <ChevronDown size={14} /></button></div><div className="activity-full"><div className="activity-date">TODAY · NOVEMBER 17</div><div className="timeline-item"><span className="timeline-mark success"><Check size={13} /></span><div><strong>Npanel is healthy</strong><small>Health check passed · Npanel</small></div><time>2 min ago</time></div><div className="timeline-item"><span className="timeline-mark purple"><Radio size={13} /></span><div><strong>Service locator published</strong><small>Kind 30058 · relay.ditto.pub, primal.net</small></div><time>2 min ago</time></div><div className="timeline-item"><span className="timeline-mark blue"><Users size={13} /></span><div><strong>Admin invitation sent</strong><small>npub1sam…9x1q · awaiting acceptance</small></div><time>1 hr ago</time></div><div className="activity-date">NOVEMBER 16</div><div className="timeline-item"><span className="timeline-mark green"><Layers3 size={13} /></span><div><strong>NCC Search updated</strong><small>Image pulled · health check passed</small></div><time>Yesterday</time></div></div></>}
+              <div className="catalog-toolbar">
+                <div className="catalog-search">
+                  <Search size={16} />
+                  <input
+                    aria-label="Search apps"
+                    placeholder="Find an app…"
+                    value={appQuery}
+                    onChange={(event) => setAppQuery(event.target.value)}
+                  />
+                </div>
+                <button className="filter-button" disabled title="Category filters are inactive in this build">All categories <ChevronDown size={14} /></button>
+                <button className="package-button" disabled title="Package import is inactive in this build"><ArrowDownToLine size={15} /> Import package</button>
+              </div>
 
-          {section === 'Settings' && <><div className="page-heading"><div><div className="eyebrow">NODE CONFIGURATION</div><h1>Settings for this server.</h1><p>Manage your public identity and service defaults.</p></div></div><div className="settings-grid"><section className="settings-card"><div className="settings-card-title"><Globe2 size={17} /><div><h2>Public identity</h2><p>How clients find this node on Nostr.</p></div></div><label>OPERATOR NPUB</label><div className="settings-readonly">npub1nccserver…4k8x <Copy size={14} /></div><label>PUBLIC ADDRESS</label><div className="settings-readonly">1.43.63.94</div><button className="text-button" onClick={() => notify('Identity is managed by the NCC sidecar')}>Manage identity <ArrowUpRight size={13} /></button></section><section className="settings-card"><div className="settings-card-title"><Radio size={17} /><div><h2>Publication relays</h2><p>Where signed NCC locators are published.</p></div></div><div className="relay-setting"><i className="relay-dot" /><span><strong>relay.ditto.pub</strong><small>wss://relay.ditto.pub</small></span><span className="relay-state">Connected</span></div><div className="relay-setting"><i className="relay-dot" /><span><strong>Primal</strong><small>wss://relay.primal.net</small></span><span className="relay-state">Connected</span></div><button className="text-button" onClick={() => notify('Relay configuration is managed by the NCC sidecar')}>Configure relays <ArrowUpRight size={13} /></button></section><section className="settings-card"><div className="settings-card-title"><Shield size={17} /><div><h2>Admin access</h2><p>Operators sign in with Nostr keys only.</p></div></div><div className="settings-inline"><span>Approved admin keys</span><strong>2 active</strong></div><div className="settings-inline"><span>Pending invitations</span><strong>1 pending</strong></div><button className="text-button" onClick={() => setSection('Admins')}>Manage operators <ArrowUpRight size={13} /></button></section><section className="settings-card"><div className="settings-card-title"><HardDrive size={17} /><div><h2>Container defaults</h2><p>Baseline settings for new installs.</p></div></div><div className="settings-inline"><span>Restart policy</span><strong>Unless stopped</strong></div><div className="settings-inline"><span>Backend binding</span><strong>Loopback only</strong></div><div className="settings-inline"><span>Image versions</span><strong>Pinned releases</strong></div></section></div></>}
+              <div className="catalog-grid">
+                {filteredCatalog.map((app) => {
+                  const Icon = app.icon;
+                  return (
+                    <article className="catalog-card" key={app.name}>
+                      <div className="catalog-card-top">
+                        <IconBox icon={Icon} tint={app.tint} />
+                        <span className="category-tag">{app.category}</span>
+                      </div>
+                      <h3>{app.name}</h3>
+                      <p>{app.description}</p>
+                      <div className="catalog-meta">
+                        <span>{app.meta}</span>
+                        <button onClick={() => setSelectedApp(app)}>Details <ArrowUpRight size={12} /></button>
+                      </div>
+                      <button className="catalog-install" disabled title="Provisioning is inactive in this read-only build">
+                        <Plus size={15} /> Install (inactive)
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="catalog-note">
+                <Shield size={17} />
+                <span>
+                  <strong>Read-only catalog.</strong> Installing a service needs an authenticated provisioning API,
+                  which this build does not include. Catalog entries are shown for review only.
+                </span>
+              </div>
+            </>
+          )}
+
+          {section === 'Installed' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">CONTAINER MANAGEMENT <span>·</span> READ-ONLY</div>
+                  <h1>Installed services</h1>
+                  <p>Published records for this node. Container controls are inactive.</p>
+                </div>
+                <button className="button-primary" onClick={() => setSection('Apps')}><Plus size={16} /> Add a service</button>
+              </div>
+
+              {loadingRecords && services.length === 0 ? (
+                <div className="empty-state">Reading published services…</div>
+              ) : services.length === 0 ? (
+                <div className="empty-state">No NCC service records were found on the configured relays.</div>
+              ) : (
+                <div className="installed-list">
+                  {services.map((service) => {
+                    const meta = serviceMeta(service.id);
+                    const status = statusCopy(service);
+                    const href = safeHref(service.endpoint);
+                    return (
+                      <article className="installed-card" key={service.id}>
+                        <div className="installed-main">
+                          <IconBox icon={meta.icon} tint={meta.tint} />
+                          <div className="service-name">
+                            <div className="installed-title">
+                              <strong>{meta.label}</strong>
+                              <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
+                            </div>
+                            <small>{service.pin ? `pin ${service.pin.slice(0, 16)}…` : 'No certificate pin published'}</small>
+                          </div>
+                          <button className="icon-quiet" disabled aria-label={`${meta.label} actions (inactive)`} title="Container controls are inactive in this read-only build">
+                            <MoreHorizontal size={19} />
+                          </button>
+                        </div>
+                        <div className="installed-details">
+                          <div><span>PUBLIC ENDPOINT</span><strong>{service.endpoint ?? 'Not published'}</strong></div>
+                          <div><span>HEALTH</span><strong className="health-muted">Not monitored in this build</strong></div>
+                          <div><span>PUBLICATION</span><strong>{status.label} · {expiryLabel(service)}</strong></div>
+                        </div>
+                        <div className="installed-actions">
+                          <button disabled title="Log streaming is inactive in this read-only build"><TerminalSquare size={14} /> Logs</button>
+                          <button disabled title="Restart is inactive in this read-only build"><Activity size={14} /> Restart</button>
+                          <button disabled title="Republishing is inactive in this read-only build"><Radio size={14} /> Republish</button>
+                          {href ? (
+                            <a className="external-action" href={href} target="_blank" rel="noreferrer">
+                              <ExternalLink size={14} /> Open endpoint
+                            </a>
+                          ) : (
+                            <button className="external-action" disabled title="No HTTPS endpoint is published">
+                              <ExternalLink size={14} /> Open endpoint
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
+          {section === 'Activity' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">AUDIT TRAIL <span>·</span> FROM RELAYS</div>
+                  <h1>Activity on your node.</h1>
+                  <p>Publication timestamps from the NCC records found on your relays.</p>
+                </div>
+                <button className="filter-button" disabled title="History filtering is inactive in this build">All records <ChevronDown size={14} /></button>
+              </div>
+
+              {groups.length === 0 ? (
+                <div className="empty-state">No publication history was found on the configured relays.</div>
+              ) : (
+                <div className="activity-full">
+                  {groups.map((group) => (
+                    <div key={group.label}>
+                      <div className="activity-date">{group.label.toUpperCase()}</div>
+                      {group.items.map((item) => <ActivityRow key={`${item.kind}-${item.serviceId}-${item.createdAt}`} item={item} />)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {section === 'Admins' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">ACCESS CONTROL <span>·</span> NOSTR KEYS</div>
+                  <h1>People who run this node.</h1>
+                  <p>Admins sign in with their Nostr key. This build verifies the operator key only.</p>
+                </div>
+              </div>
+
+              <div className="admin-callout">
+                <div className="callout-shield"><ShieldCheck size={20} /></div>
+                <div>
+                  <strong>Access follows the operator key.</strong>
+                  <p>Only the key published in <code>ncc-config.json</code> can open this panel. Additional admins and revocations are not implemented yet.</p>
+                </div>
+                <span>KEY-BASED ACCESS</span>
+              </div>
+
+              <section className="admin-section">
+                <div className="section-heading">
+                  <div><h2>Node administrators <span className="count-chip">1</span></h2><p>Verified operator for this node.</p></div>
+                </div>
+                <div className="admin-table">
+                  <div className="admin-table-head"><span>OPERATOR</span><span>ACCESS</span><span>ADDED</span><span /></div>
+                  <div className="admin-table-row">
+                    <div className="admin-person">
+                      <span className="admin-avatar lime">{initials(operatorNpub)}</span>
+                      <span>
+                        <strong>Node operator</strong>
+                        <small>
+                          {shortNpub(operatorNpub)}
+                          <button aria-label="Copy operator npub" onClick={() => copy(operatorNpub, 'Operator npub')}><Copy size={12} /></button>
+                        </small>
+                      </span>
+                    </div>
+                    <span className="admin-state"><i />Owner · verified</span>
+                    <span className="admin-added">Operator key</span>
+                    <button className="icon-quiet" disabled aria-label="Admin actions (inactive)" title="Admin key management is inactive in this build"><MoreHorizontal size={18} /></button>
+                  </div>
+                </div>
+              </section>
+
+              <section className="invite-card">
+                <div className="invite-heading">
+                  <span className="invite-icon"><Plus size={18} /></span>
+                  <div>
+                    <h2>Invite an operator</h2>
+                    <p>Adding another key needs the sidecar invitation API, which this build does not include.</p>
+                  </div>
+                  <span className="inactive-badge">INACTIVE</span>
+                </div>
+                <form onSubmit={(event) => event.preventDefault()}>
+                  <label htmlFor="admin-npub">OPERATOR PUBLIC KEY</label>
+                  <div className="invite-input-row">
+                    <input id="admin-npub" placeholder="npub1…" disabled />
+                    <button className="button-primary" type="submit" disabled><Plus size={15} /> Send invitation</button>
+                  </div>
+                  <small><LockKeyhole size={12} /> Public key only. Never enter or share a private key here.</small>
+                </form>
+              </section>
+
+              <div className="admin-footnote">
+                <CircleHelp size={15} />
+                <span>This panel reads the operator key from the node's public config. Adding or revoking keys is inactive.</span>
+              </div>
+            </>
+          )}
+
+          {section === 'Settings' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">NODE CONFIGURATION <span>·</span> READ-ONLY</div>
+                  <h1>Settings for this server.</h1>
+                  <p>The identity and records this node publishes on Nostr.</p>
+                </div>
+              </div>
+
+              <div className="settings-grid">
+                <section className="settings-card">
+                  <div className="settings-card-title">
+                    <Globe2 size={17} />
+                    <div><h2>Public identity</h2><p>How clients find this node on Nostr.</p></div>
+                  </div>
+                  <label>OPERATOR NPUB</label>
+                  <div className="settings-readonly">
+                    <span>{shortNpub(operatorNpub)}</span>
+                    <button className="icon-quiet" onClick={() => copy(operatorNpub, 'Operator npub')} aria-label="Copy operator npub"><Copy size={14} /></button>
+                  </div>
+                  <label>PUBLIC ADDRESS</label>
+                  <div className="settings-readonly">
+                    <span>{publicHosts[0] ?? 'Not published'}</span>
+                  </div>
+                  {publicHosts.length > 1 && <small className="settings-hint">{publicHosts.length} endpoints published across services.</small>}
+                  <button className="text-button" disabled title="Identity is managed by the NCC sidecar">
+                    Managed by the sidecar <LockKeyhole size={12} />
+                  </button>
+                </section>
+
+                <section className="settings-card">
+                  <div className="settings-card-title">
+                    <Radio size={17} />
+                    <div><h2>Publication relays</h2><p>Where this browser looks for your NCC records.</p></div>
+                  </div>
+                  {(snapshot?.relays ?? (config?.relays ?? []).map((url) => ({ url, connected: false, anchorCount: 0, locatorCount: 0 }))).map((relay) => (
+                    <div className="relay-setting" key={relay.url}>
+                      <i className={`relay-dot ${relay.connected ? '' : 'off'}`} />
+                      <span>
+                        <strong>{new URL(relay.url).host}</strong>
+                        <small>{relay.url}</small>
+                      </span>
+                      <span className={`relay-state ${relay.connected ? '' : 'off'}`}>
+                        {snapshot ? (relay.connected ? `${relay.anchorCount + relay.locatorCount} records` : 'Unreachable') : 'Not checked'}
+                      </span>
+                    </div>
+                  ))}
+                  <button className="text-button" disabled title="Relay configuration is managed by the NCC sidecar">
+                    Managed by the sidecar <LockKeyhole size={12} />
+                  </button>
+                </section>
+
+                <section className="settings-card">
+                  <div className="settings-card-title">
+                    <Shield size={17} />
+                    <div><h2>Admin access</h2><p>Operators sign in with Nostr keys only.</p></div>
+                  </div>
+                  <div className="settings-inline"><span>Verified operator keys</span><strong>1 active</strong></div>
+                  <div className="settings-inline"><span>Additional admin keys</span><strong>Not implemented</strong></div>
+                  <button className="text-button" onClick={() => setSection('Admins')}>View operators <ArrowUpRight size={13} /></button>
+                </section>
+
+                <section className="settings-card">
+                  <div className="settings-card-title">
+                    <Layers3 size={17} />
+                    <div><h2>Publication cadence</h2><p>Values reported by the latest locator.</p></div>
+                  </div>
+                  <div className="settings-inline"><span>Locator TTL</span><strong>{loadingRecords ? 'Reading…' : locatorTtl === null ? 'Not published' : durationLabel(locatorTtl)}</strong></div>
+                  <div className="settings-inline"><span>Latest record</span><strong>{loadingRecords ? 'Reading…' : snapshot?.latestPublishedAt ? relativeTime(snapshot.latestPublishedAt) : '—'}</strong></div>
+                  <div className="settings-inline"><span>Records found</span><strong>{loadingRecords ? 'Reading…' : services.length}</strong></div>
+                </section>
+              </div>
+            </>
+          )}
         </div>
       </main>
 
       {mobileNav && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
-      {showInstall && <div className="modal-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !installing) setShowInstall(false); }}><section className="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-title"><div className="modal-top"><div className="eyebrow">NEW SERVICE <span>·</span> STEP 1 OF 2</div><button className="icon-quiet" onClick={() => setShowInstall(false)} aria-label="Close" disabled={installing}><X size={19} /></button></div><h2 id="install-title">Install {selectedApp.name}</h2><p className="modal-intro">Review what this package will add to your server.</p><div className="modal-app"><IconBox icon={selectedApp.icon} tint={selectedApp.tint} /><div><strong>{selectedApp.name}</strong><small>{selectedApp.description}</small></div><span className="verified-tag"><ShieldCheck size={13} /> REVIEWED</span></div><div className="install-spec"><div><span>CONTAINER IMAGE</span><strong>{selectedApp.image}:1.4.2</strong></div><div><span>PUBLIC ENDPOINT</span><strong>https://1.43.63.94:8450</strong></div><div><span>DATA STORAGE</span><strong>/srv/ncc/apps/{selectedApp.name.toLowerCase().replaceAll(' ', '-')} · persistent</strong></div><div><span>NETWORK ACCESS</span><strong>One public HTTPS port · backend loopback only</strong></div></div><div className="install-security"><LockKeyhole size={15} /><span>Secrets stay on this server. The service locator publishes only its public endpoint.</span></div><div className="modal-buttons"><button className="button-secondary" onClick={() => setShowInstall(false)} disabled={installing}>Cancel</button><button className="button-primary" onClick={confirmInstall} disabled={installing}>{installing ? <><span className="button-spinner" /> Pulling image…</> : <><Plus size={15} /> Install service</>}</button></div><div className="install-step-hint">{installing ? 'Pulling image · Starting container · Checking health · Publishing locator' : 'Next: confirm install and publish a signed NCC locator.'}</div></section></div>}
+
+      {selectedApp && (
+        <div
+          className="modal-scrim"
+          role="presentation"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedApp(null); }}
+        >
+          <section className="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-title">
+            <div className="modal-top">
+              <div className="eyebrow">SERVICE REVIEW <span>·</span> READ-ONLY</div>
+              <button className="icon-quiet" onClick={() => setSelectedApp(null)} aria-label="Close"><X size={19} /></button>
+            </div>
+            <h2 id="install-title">Review {selectedApp.name}</h2>
+            <p className="modal-intro">What this package would add to your server. Provisioning is inactive in this build.</p>
+            <div className="modal-app">
+              <IconBox icon={selectedApp.icon} tint={selectedApp.tint} />
+              <div><strong>{selectedApp.name}</strong><small>{selectedApp.description}</small></div>
+              <span className="inactive-badge">INACTIVE</span>
+            </div>
+            <div className="install-spec">
+              <div><span>CONTAINER IMAGE</span><strong>{selectedApp.image}</strong></div>
+              <div><span>PUBLIC ENDPOINT</span><strong>Assigned by the node during provisioning</strong></div>
+              <div><span>DATA STORAGE</span><strong>/srv/ncc/apps/{selectedApp.name.toLowerCase().replaceAll(' ', '-')} · persistent</strong></div>
+              <div><span>NETWORK ACCESS</span><strong>One public HTTPS port · backend loopback only</strong></div>
+            </div>
+            <div className="install-security">
+              <LockKeyhole size={15} />
+              <span>Secrets stay on this server. The service locator publishes only its public endpoint.</span>
+            </div>
+            <div className="modal-buttons">
+              <button className="button-secondary" onClick={() => setSelectedApp(null)}>Close</button>
+              <button className="button-primary" disabled title="Provisioning is inactive in this read-only build">
+                <Plus size={15} /> Install (inactive)
+              </button>
+            </div>
+            <div className="install-step-hint">Read-only review · no containers are changed</div>
+          </section>
+        </div>
+      )}
+
       {notice && <div className="toast-note"><Check size={15} />{notice}</div>}
     </div>
   );
