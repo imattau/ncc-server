@@ -19,6 +19,7 @@ DITTO_HTTPS="${DITTO_HTTPS:-https://localhost:${DITTO_WEB_TLS_PORT:-8446}}"
 # search block for why the API can't be a separate host/port.
 SEARCH_UI_HTTPS="${SEARCH_UI_HTTPS:-https://localhost:${SEARCH_TLS_PORT:-8447}}"
 SEARCH_API_HTTPS="${SEARCH_API_HTTPS:-$SEARCH_UI_HTTPS}"
+ADMIN_PANEL_HTTPS="${ADMIN_PANEL_HTTPS:-https://localhost:${ADMIN_PANEL_TLS_PORT:-8448}}"
 SITE_NPUB="${SITE_NPUB:-}"
 
 check() {
@@ -48,5 +49,6 @@ fi
 check 'Ditto HTTPS web route' "$DITTO_HTTPS/" --insecure
 check 'ncc-search HTTPS UI route' "$SEARCH_UI_HTTPS/" --insecure -H "Host: $PUBLIC_IPV4"
 check 'ncc-search HTTPS API route' "$SEARCH_API_HTTPS/search?q=a" --insecure -H "Host: $PUBLIC_IPV4"
+check 'Admin panel HTTPS route' "$ADMIN_PANEL_HTTPS/admin" --insecure
 check 'Ditto WSS NIP-11 route' "$RELAY_HTTPS" --insecure -H 'Accept: application/nostr+json'
 ./scripts/compose-bundle.sh ps

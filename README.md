@@ -21,12 +21,13 @@ through their managed runtime configuration.
 - To build and deploy the welcome page: a workstation with Git, SSH, Node.js 22 or newer,
   and npm.
 
-Forward TCP 8443–8447 to expose the NCC services. Port 8080 is optional for
+Forward TCP 8443–8448 to expose the NCC services. Port 8080 is optional for
 plain HTTP web access; Tor's onion service reaches it locally. You can leave
 individual service ports closed if that service should not be reachable.
-When the optional panel Caddy image is selected, the prototype listens on
-loopback port 8081 and needs no router forward; see [admin panel](docs/admin-panel.md)
-for SSH access.
+The admin panel is published as an NCC service on port 8448 and redirects to
+`/admin`. The optional panel Caddy image also serves the prototype on loopback
+port 8081, which needs no router forward; see
+[admin panel](docs/admin-panel.md) for SSH access.
 
 | Port | Purpose |
 | --- | --- |
@@ -37,6 +38,7 @@ for SSH access.
 | 8445 | Pinned HTTPS Npanel dashboard |
 | 8446 | Pinned HTTPS Ditto Web |
 | 8447 | Pinned HTTPS ncc-search UI and API (optional, same origin) |
+| 8448 | Pinned HTTPS admin panel (NCC service; prototype) |
 
 Do not forward the internal service ports. Onion access uses Tor and needs no
 router port forward. Port forwarding requires a public IP; it will not work
@@ -73,15 +75,15 @@ stack. During first startup, choose to import an existing identity JSON file
 or generate a new keypair. The bootstrap saves it at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), initializes
 the sidecar, creates and publishes the `addr`, `web`, `relay`, `npanel`,
-`ditto`, and `search` records, then brings up Caddy and Ditto Relay. The
+`ditto`, `search`, and `admin` records, then brings up Caddy and Ditto Relay. The
 `addr` locator points to the same web endpoint, so the bare root address opens
 the welcome page. No DNS names or
 follow-up provisioning commands are required. Keep an encrypted backup of the
 identity file outside the server; it is needed to recover service control.
 
 NCC Browser identifies each service with its signed npub/service locator.
-Caddy serves web, relay, Npanel, Ditto Web, and search on ports 8443 through
-8447 respectively.
+Caddy serves web, relay, Npanel, Ditto Web, search, and the admin panel on
+ports 8443 through 8448 respectively.
 
 The installer also writes a placeholder `index.html` into `CONTENT_ROOT` if
 it's empty, so `make bundle-health` sees HTTP 200 on the web root even before

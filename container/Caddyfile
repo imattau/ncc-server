@@ -171,6 +171,27 @@
 	}
 }
 
+# The admin panel is published as an NCC service on its own pinned port. Its
+# page lives at /admin in the same SPA build served from CONTENT_ROOT, and a
+# service endpoint must be rooted at / because NCC Browser joins the endpoint
+# path with the request path -- so the service root redirects to /admin.
+:{$ADMIN_PANEL_TLS_PORT} {
+	tls {$WEB_CERT} {$WEB_KEY}
+	import cors_response
+	root * {$CONTENT_ROOT}
+	encode gzip
+	handle / {
+		redir * /admin 302
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+	log {
+		output stdout
+	}
+}
+
 # The admin-panel prototype is bundled into the NCC Caddy image and served
 # only on loopback until real Nostr signer verification and admin authorization
 # are connected. Reach it remotely through an SSH tunnel.

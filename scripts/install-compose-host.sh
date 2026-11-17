@@ -27,7 +27,7 @@ preflight_checks() {
     for port in "${CONTENT_PORT:-8080}" "${CONTENT_TLS_PORT:-8443}" \
       "${RELAY_TLS_PORT:-8444}" "${NPANEL_TLS_PORT:-8445}" \
       "${DITTO_WEB_TLS_PORT:-8446}" "${SEARCH_TLS_PORT:-8447}" \
-      "${ADMIN_PANEL_PORT:-8081}"; do
+      "${ADMIN_PANEL_TLS_PORT:-8448}" "${ADMIN_PANEL_PORT:-8081}"; do
       ss -Htln "( sport = :$port )" 2>/dev/null | grep -q . || continue
       if command -v docker >/dev/null 2>&1 \
         && docker ps --filter 'label=com.docker.compose.project=ncc-bundle' --format '{{.Ports}}' 2>/dev/null \
@@ -143,6 +143,7 @@ ensure_env_default RELAY_TLS_PORT 8444
 ensure_env_default NPANEL_TLS_PORT 8445
 ensure_env_default DITTO_WEB_TLS_PORT 8446
 ensure_env_default SEARCH_TLS_PORT 8447
+ensure_env_default ADMIN_PANEL_TLS_PORT 8448
 ensure_env_default ADMIN_PANEL_PORT 8081
 ensure_env_default NCC_OPERATOR_PUBKEY ''
 python3 - "$PUBLIC_IPV4" <<'PY'

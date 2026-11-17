@@ -262,6 +262,7 @@ body {
 .service-blue { background: #d9e5e8; }
 .service-lilac { background: #e5dfe9; }
 .service-gold { background: #e9e4c9; }
+.service-sage { background: #dfe4d3; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

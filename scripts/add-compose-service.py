@@ -115,7 +115,7 @@ def main():
             fail(f'{key} must be a TCP port from 1 through 65535')
     if not isinstance(probe_path, str) or not probe_path.startswith('/') or any(c in probe_path for c in '\r\n"'):
         fail('probe_path must be an absolute URL path')
-    if public_port in {8080, 8443, 8444, 8445, 8446, 8447}:
+    if public_port in {8080, 8443, 8444, 8445, 8446, 8447, 8448}:
         fail(f'public port {public_port} is reserved by NCC-Server')
     if backend_port == public_port:
         fail('public_port and backend_port must be different')

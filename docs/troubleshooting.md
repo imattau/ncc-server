@@ -42,11 +42,12 @@ curl --insecure -I https://127.0.0.1:8444/relay/
 curl --insecure -I https://127.0.0.1:8445/api/instance
 curl --insecure -I https://127.0.0.1:8446/
 curl --insecure -I https://127.0.0.1:8447/
+curl --insecure -I https://127.0.0.1:8448/admin
 ~~~
 
 Each service has its own listener: web 8443, relay 8444, Npanel 8445, Ditto
-Web 8446, and search 8447. Requests use the server IP directly; no DNS names
-are needed.
+Web 8446, search 8447, and the admin panel 8448. Requests use the server IP
+directly; no DNS names are needed.
 
 For an empty web root, deploy the MKStack welcome page or place your own files in
 the CONTENT_ROOT directory from .env. Check that files are readable by the

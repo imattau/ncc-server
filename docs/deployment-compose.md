@@ -48,16 +48,18 @@ Forward and allow these TCP ports:
 | 8445 | VM port 8445 | Pinned HTTPS npanel |
 | 8446 | VM port 8446 | Pinned HTTPS Ditto Web |
 | 8447 | VM port 8447 | Pinned HTTPS ncc-search (UI and API, same origin) |
+| 8448 | VM port 8448 | Pinned HTTPS admin panel (NCC service; prototype) |
 
 Forward the ports for the services you want clients to reach. ncc-search's UI
 and API share port 8447 so browser certificate trust covers both. Npanel uses
 its own HTTPS origin on port 8445 because its frontend's instance probe does
 not work under the ncc:// origin.
 
-Do not forward ports 3000, 3200, 3201, 3220, 3230, 9050, 9051, 9200, or 13131.
-The sidecar admin port, Npanel backends, ncc-search's own containers, Tor,
-OpenSearch, and relay backend are local services. Onion access uses outbound
-Tor connections and needs no router forward.
+Do not forward ports 3000, 3200, 3201, 3220, 3230, 8081, 9050, 9051, 9200,
+or 13131. The sidecar admin port, Npanel backends, ncc-search's own
+containers, the admin panel's loopback listener, Tor, OpenSearch, and relay
+backend are local services. Onion access uses outbound Tor connections and
+needs no router forward.
 
 If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
@@ -119,16 +121,19 @@ identity, signer, or certificate of its own. Its NCC service record is created
 by first-start provisioning so clients can resolve its UI.
 
 The first-start provisioner creates the web profile first (sidecar record ID 2) and relay
-second (ID 3), followed by Npanel, Ditto Web, and ncc-search. The first two
-IDs are fixed because Caddy reads their generated certificate files from
-matching paths. All five records use the operator identity -- including
-ncc-search's, even though that process itself never signs or publishes an
-event; it gets a record purely so it has a discoverable ncc://<npub>/search/
-address, the same reasoning as Npanel/Ditto Web. The web profile advertises
+second (ID 3), followed by Npanel, Ditto Web, ncc-search, and the admin
+panel. The first two IDs are fixed because Caddy reads their generated
+certificate files from matching paths. All six records use the operator
+identity -- including ncc-search's and the admin panel's, even though those
+processes never sign or publish an event themselves; they get records purely
+so they have discoverable ncc://<npub>/search/ and ncc://<npub>/admin/
+addresses, the same reasoning as Npanel/Ditto Web. The web profile advertises
 HTTPS on port 8443 and maps its onion service to local HTTP port 8080. Relay,
-Npanel, Ditto Web, and ncc-search advertise ports 8444, 8445, 8446, and 8447
-respectively. Each profile's published port matches its dedicated Caddy
-listener, avoiding cross-service fallback to the web content root.
+Npanel, Ditto Web, ncc-search, and the admin panel advertise ports 8444, 8445,
+8446, 8447, and 8448 respectively. Each profile's published port matches its
+dedicated Caddy listener, avoiding cross-service fallback to the web content
+root. The admin panel service root redirects to /admin; leave it unreachable
+if you do not want the prototype's UI published.
 
 The bundle's default publication relays are wss://relay.primal.net/ and
 wss://relay.ditto.pub/. The manager profile does not create its own onion
@@ -170,8 +175,8 @@ sudo make bundle-health
 
 The nsite checks are skipped unless you pass SITE_NPUB. The test app uses port
 8443, the relay uses port 8444, Npanel uses port 8445, Ditto Web uses port
-8446, and ncc-search uses port 8447 for its UI and API. The health check probes
-each service on its own port.
+8446, ncc-search uses port 8447 for its UI and API, and the admin panel uses
+port 8448. The health check probes each service on its own port.
 
 If you already host an nsite, include its npub to check its HTTPS route and
 root-relative JavaScript asset:
@@ -281,6 +286,10 @@ component at a time. The default tags are `latest`; for controlled upgrades,
 pin images to version tags in `.env`, then pull and recreate only the service
 you changed. `make bundle-pull` refreshes all configured images, and
 `make bundle-up` pulls before starting the stack.
+
+When a release adds a new sidecar service record (such as the `admin` panel),
+run `sudo make bundle-provision-services` once after upgrading to create and
+publish it; the script is idempotent for the existing records.
 
 The legacy systemd installer and its TLS/Tor scripts are separate. Do not run
 them against a Compose deployment.

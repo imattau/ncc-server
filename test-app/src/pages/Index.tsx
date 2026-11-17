@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSeoMeta } from '@unhead/react';
-import { ArrowDownRight, ArrowUpRight, Globe2, LockKeyhole, Radio, Search, Server, Waves } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, Globe2, LockKeyhole, Radio, Search, Server, ShieldCheck, Waves } from 'lucide-react';
 
 const services = [
   {
@@ -45,12 +45,29 @@ const services = [
     number: '05',
     name: 'Npanel',
     type: 'ADMINISTRATION',
-    description: 'Manage this node and its services. Administrator access is required.',
+    description: 'Browse and manage the nsites hosted on this node. Administrator access is required.',
     icon: Server,
     theme: 'gold',
     restricted: true,
   },
+  {
+    id: 'admin',
+    number: '06',
+    name: 'Admin Panel',
+    type: 'ADMINISTRATION',
+    description: 'Manage this node, its services and operator access. Administrator access is required.',
+    icon: ShieldCheck,
+    theme: 'sage',
+    restricted: true,
+  },
 ];
+
+const serviceHref = (id: string, rootNpub: string | null) => {
+  if (rootNpub) return `ncc://${rootNpub}/${id === 'web' ? '' : `${id}/`}`;
+  // The admin panel is also reachable on the loopback listener, where
+  // /ncc-config.json is absent and no npub is available for an ncc:// link.
+  return id === 'admin' ? '/admin' : undefined;
+};
 
 const Index = () => {
   const [rootNpub, setRootNpub] = useState<string | null>(null);
@@ -138,8 +155,8 @@ const Index = () => {
             {services.map(({ id, number, name, type, description, icon: Icon, theme, optional, restricted }) => (
               <a
                 key={id}
-                href={rootNpub ? `ncc://${rootNpub}/${id === 'web' ? '' : `${id}/`}` : undefined}
-                aria-disabled={!rootNpub}
+                href={serviceHref(id, rootNpub)}
+                aria-disabled={!rootNpub && id !== 'admin'}
                 className={`service-card service-${theme} group relative flex min-h-[225px] flex-col justify-between rounded-[20px] border border-[#18211d]/10 p-5 transition duration-300 hover:-translate-y-1 hover:shadow-[0_16px_40px_rgba(26,39,28,0.10)] aria-disabled:cursor-wait aria-disabled:opacity-60 aria-disabled:hover:translate-y-0 aria-disabled:hover:shadow-none sm:min-h-[244px] sm:p-6`}
                 aria-label={`Open ${name} in NCC Browser${restricted ? ' (administrator access required)' : ''}`}
               >
@@ -165,7 +182,7 @@ const Index = () => {
 
           <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[#18211d]/10 bg-white/45 px-4 py-4 text-xs leading-5 text-[#69736d] sm:items-center sm:px-5 sm:text-sm">
             <LockKeyhole size={16} className="mt-0.5 shrink-0 text-[#75884e] sm:mt-0" />
-            <p><span className="font-semibold text-[#364039]">Private by design.</span> Npanel is visible in the directory, but requires an administrator identity to manage this node.</p>
+            <p><span className="font-semibold text-[#364039]">Private by design.</span> Npanel and the Admin Panel are visible in the directory, but managing this node requires an operator identity.</p>
           </div>
           <p className="mt-4 text-[11px] leading-5 text-[#858c82]">NCC Search is an optional service and may not be enabled on every installation.</p>
         </section>

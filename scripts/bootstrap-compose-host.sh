@@ -219,4 +219,4 @@ echo 'Reconciling the saved public IPv4 address with the current network address
 "$PROJECT_DIR/scripts/reconcile-public-ip.py"
 
 echo "Operator npub: $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["npub"])' "$IDENTITY_FILE")"
-echo 'Fresh Compose setup is complete. Service ports: web 8443, relay 8444, Npanel 8445, Ditto Web 8446, search 8447.'
+echo 'Fresh Compose setup is complete. Service ports: web 8443, relay 8444, Npanel 8445, Ditto Web 8446, search 8447, admin panel 8448.'
