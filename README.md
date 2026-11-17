@@ -24,10 +24,14 @@ through their managed runtime configuration.
 Forward TCP 8443–8447 to expose the NCC services. Port 8080 is optional for
 plain HTTP web access; Tor's onion service reaches it locally. You can leave
 individual service ports closed if that service should not be reachable.
+When the optional panel Caddy image is selected, the prototype listens on
+loopback port 8081 and needs no router forward; see [admin panel](docs/admin-panel.md)
+for SSH access.
 
 | Port | Purpose |
 | --- | --- |
 | 8080 | HTTP web content and local Tor onion target |
+| 8081 | Local-only admin panel prototype (SSH tunnel) |
 | 8443 | Pinned HTTPS web content |
 | 8444 | Pinned WSS Ditto Relay |
 | 8445 | Pinned HTTPS Npanel dashboard |

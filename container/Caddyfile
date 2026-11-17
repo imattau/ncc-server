@@ -171,6 +171,19 @@
 	}
 }
 
+# The admin-panel prototype is bundled into the NCC Caddy image and served
+# only on loopback until real Nostr signer verification and admin authorization
+# are connected. Reach it remotely through an SSH tunnel.
+http://127.0.0.1:{$ADMIN_PANEL_PORT} {
+	root * /srv/ncc-server/admin-panel
+	encode gzip
+	try_files {path} /index.html
+	file_server
+	log {
+		output stdout
+	}
+}
+
 # Custom services installed with `make service-add` get dedicated TLS ports
 # and use the bundle's pinned web certificate.
 import /etc/caddy/custom/*.caddy

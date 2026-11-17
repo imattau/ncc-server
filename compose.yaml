@@ -273,7 +273,7 @@ services:
     logging: *bounded-logs
 
   caddy:
-    image: caddy:2.11.9-alpine
+    image: "${CADDY_IMAGE:-caddy:2.11.9-alpine}"
     network_mode: host
     group_add:
       - "${CADDY_GID}"
@@ -286,6 +286,7 @@ services:
       DITTO_WEB_TLS_PORT: "${DITTO_WEB_TLS_PORT}"
       SEARCH_TLS_PORT: "${SEARCH_TLS_PORT}"
       NPANEL_TLS_PORT: "${NPANEL_TLS_PORT}"
+      ADMIN_PANEL_PORT: "${ADMIN_PANEL_PORT:-8081}"
       CONTENT_ROOT: /srv/ncc-server/public
       WEB_CERT: /opt/ncc-sidecar/certs/2/server.crt
       WEB_KEY: /opt/ncc-sidecar/certs/2/server.key

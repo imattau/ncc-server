@@ -1,0 +1,14 @@
+# Build the MKStack panel and package its static output with the Caddy image
+# already used by the NCC bundle. Caddy remains the only HTTP server.
+FROM node:24-bookworm-slim AS panel-build
+WORKDIR /src
+COPY test-app/package.json test-app/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY test-app/index.html test-app/vite.config.ts test-app/tsconfig.json ./
+COPY test-app/public/ ./public/
+COPY test-app/src/ ./src/
+RUN ./node_modules/.bin/tsc --noEmit \
+    && ./node_modules/.bin/vite build --outDir /panel
+
+FROM caddy:2.11.9-alpine
+COPY --from=panel-build /panel/ /srv/ncc-server/admin-panel/

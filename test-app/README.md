@@ -15,6 +15,16 @@ template is the official [MKStack repository](https://gitlab.com/soapbox-pub/mks
 
 The lookup uses public relay data. It never asks for or handles an `nsec`.
 
+## NCC Server panel prototype
+
+The `/admin` route contains a clickable management-panel prototype built with
+the same MKStack and Nostrify foundation. It includes overview, app catalog,
+installed services, activity, operator-key admin management, and settings
+screens. Sign-in, invitations, installs, and publication actions are demo-only;
+they do not call the server or publish events.
+
+Run `npm run dev` from this directory and open `http://localhost:8080/admin`.
+
 ## Build and serve
 
 From the NCC-Server root:
