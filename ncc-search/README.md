@@ -48,6 +48,23 @@ The two halves only talk over the crawler's private listener:
 API retries opening the index until the crawler has created it, so a cold
 start in either order is fine.
 
+## nsite edition (browser crawler, no server)
+
+The UI also builds as a static NIP-5A site (`npm run build:nsite`, output
+`ui/dist-nsite/`). In that build there is no API server: a Web Worker crawls
+the relay-native kinds, keeps the index in IndexedDB, resumes from per-relay
+cursors on the next visit, and searches with MiniSearch. It is published with
+[`nsite-publisher/`](nsite-publisher/README.md) as
+`nsite://<npub>/nccsearch`.
+
+It is deliberately not a mirror of this index: a browser cannot fetch arbitrary
+endpoints (CORS), so NCC anchors/locators are not resolved, nothing gets a
+reachability or attestation claim, NIP-05 is never verified, and nsite rows are
+searchable by their manifest title/description rather than the entry page's
+text. It also caps itself at 20k rows / 40 MB. See
+[`ui/README.md`'s nsite edition section](ui/README.md#nsite-edition-no-server)
+for the full list.
+
 ## Why it fetches sites instead of just indexing relay metadata
 
 A plain relay-metadata index (service name, npub, endpoint host) is cheap but

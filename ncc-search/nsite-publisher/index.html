@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="description" content="Publish an nsite (NIP-5A) to Blossom and Nostr relays with a NIP-07 signer." />
+        <title>Publish an nsite · nccsearch</title>
+        <!-- The page has exactly two network jobs: upload/fetch blobs over
+             https and publish the manifest over wss. Nothing else is needed,
+             so nothing else is allowed. -->
+        <meta
+            http-equiv="content-security-policy"
+            content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https: wss:; base-uri 'none'; form-action 'none'"
+        />
+    </head>
+    <body>
+        <div id="root"></div>
+        <script type="module" src="/src/main.tsx"></script>
+    </body>
+</html>

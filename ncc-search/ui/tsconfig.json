@@ -16,7 +16,8 @@
     "strict": true,
 
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@shared/*": ["../shared/*"]
     }
   },
   "include": ["src", "vite.config.ts"]

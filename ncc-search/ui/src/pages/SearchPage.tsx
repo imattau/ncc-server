@@ -5,6 +5,7 @@ import { ResultRow } from '@/components/ResultRow';
 import { MediaGridCard } from '@/components/MediaGridCard';
 import { ProfileGridCard } from '@/components/ProfileGridCard';
 import { LoginButton } from '@/components/LoginButton';
+import { LocalIndexPanel } from '@/components/LocalIndexPanel';
 import { SortControl } from '@/components/SortControl';
 import { SafeSearchToggle } from '@/components/SafeSearchToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -19,7 +20,9 @@ import { useMuteList } from '@/hooks/useMuteList';
 import { useSafeSearch } from '@/hooks/useSafeSearch';
 import { useTheme } from '@/hooks/useTheme';
 import type { SearchResult, SearchSort } from '@/lib/api';
+import { useLocalCrawlStatus } from '@/hooks/useLocalCrawlStatus';
 import { useSearchStatus } from '@/hooks/useSearchStatus';
+import { isLocalMode } from '@/lib/local/client';
 import { rankResults, isFollowed, type PersonalizationContext } from '@/lib/ranking';
 import { isMuted } from '@/lib/muting';
 import { cn } from '@/lib/utils';
@@ -70,6 +73,7 @@ function matchesFilter(result: SearchResult, filter: KindFilter) {
 }
 
 export function SearchPage() {
+  const local = isLocalMode();
   const [query, setQuery] = useQueryState();
   const { pubkey, login, logout } = useNip07Login();
   const follows = useFollows(pubkey);
@@ -81,6 +85,11 @@ export function SearchPage() {
   // Also fetched on the landing page: its record count is what the tagline
   // quotes. The same query backs the health notice on the results page.
   const status = useSearchStatus(true);
+  // The landing tagline quotes the record count. In the nsite edition that
+  // count is moving while the first crawl runs, and the worker pushes it live,
+  // so the tagline should not sit a poll interval behind the panel beside it.
+  const crawlStatus = useLocalCrawlStatus();
+  const recordCount = local ? crawlStatus?.recordCount : status.data?.index?.recordCount;
   const [taglineSeed] = useState(() => Math.floor(Math.random() * TAGLINES.length));
   const [filter, setFilter] = useState<KindFilter>('all');
   const safeSearch = useSafeSearch();
@@ -181,14 +190,18 @@ export function SearchPage() {
         </h1>
         <SearchBar defaultValue="" onSubmit={handleSubmit} size="hero" className="max-w-xl" autoFocus />
         <p className="mt-6 max-w-sm text-center text-sm text-muted-foreground">
-          {landingTagline(status.data?.index?.recordCount, taglineSeed)}
+          {local && (crawlStatus?.phase === 'loading' || ((recordCount ?? 0) === 0 && crawlStatus?.phase !== 'idle'))
+            ? 'Crawling relays in this browser — the first results appear as they arrive.'
+            : landingTagline(recordCount, taglineSeed)}
         </p>
         <p className="mt-2 max-w-sm text-center text-[11px] text-muted-foreground/80">
-          NCC-02 services, nsites, articles, media and profiles discovered across configured Nostr
-          relays.
+          {local
+            ? 'This copy crawls relays in your browser, indexes while the tab is open, and keeps what it finds for next time.'
+            : 'NCC-02 services, nsites, articles, media and profiles discovered across configured Nostr relays.'}
           {pubkey &&
             ' Signed in: results are prioritized by who you follow and your interests, and anyone/anything on your mute list is hidden.'}
         </p>
+        {local && <LocalIndexPanel className="mt-4 w-full max-w-sm text-left" />}
       </div>
     );
   }
@@ -213,6 +226,7 @@ export function SearchPage() {
       </header>
 
       <main className="px-3 py-5 sm:px-8">
+        {local && <LocalIndexPanel className="mb-4 max-w-2xl" />}
         {status.data && <SearchHealthNotice status={status.data} />}
         {result.isLoading && <ResultsSkeleton />}
 
@@ -241,8 +255,9 @@ export function SearchPage() {
                   No results for &ldquo;{query}&rdquo;
                 </p>
                 <p className="max-w-xl text-sm text-foreground/80">
-                  Try a different npub, nip05 handle, or service/site name. If this identity was
-                  published recently, it may not have been crawled yet.
+                  {local
+                    ? `This browser has indexed ${recordCount?.toLocaleString() ?? 0} records so far and the crawl is still running — try again in a moment, or add more relays in the local index settings.`
+                    : 'Try a different npub, nip05 handle, or service/site name. If this identity was published recently, it may not have been crawled yet.'}
                 </p>
               </>
             ) : (

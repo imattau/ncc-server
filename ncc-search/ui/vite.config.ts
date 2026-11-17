@@ -9,20 +9,33 @@ import { defineConfig } from 'vite';
 // plugin (no tailwind.config.js needed). Build output goes to its own
 // `dist/`, not `../../public/` -- this UI is served as its own thing, not
 // bundled into the main site (see ui/README.md's Caddy routing note).
-export default defineConfig(() => ({
-  base: '/',
-  server: {
-    host: '::',
-    port: 8081,
-  },
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: {
-      '@': path.resolve(import.meta.dirname, './src'),
+//
+// `--mode nsite` builds the NIP-5A edition: the same UI, but the API path in
+// lib/api.ts is replaced by the browser crawler/index in lib/local/. It gets
+// its own output directory so a normal deployment build and an nsite build
+// can sit side by side; the nsite publisher uploads `dist-nsite/`.
+export default defineConfig(({ mode }) => {
+  const nsite = mode === 'nsite';
+  return {
+    base: '/',
+    server: {
+      host: '::',
+      port: 8081,
+      // The nsite edition imports the shared posted-at/Markdown rules from
+      // ../shared, outside this package's root. Vite's dev server refuses
+      // that by default even though the production build resolves it fine.
+      fs: { allow: [path.resolve(import.meta.dirname, '..')] },
     },
-  },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-  },
-}));
+    plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: {
+        '@': path.resolve(import.meta.dirname, './src'),
+        '@shared': path.resolve(import.meta.dirname, '../shared'),
+      },
+    },
+    build: {
+      outDir: nsite ? 'dist-nsite' : 'dist',
+      emptyOutDir: true,
+    },
+  };
+});

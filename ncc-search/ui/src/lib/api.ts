@@ -1,3 +1,5 @@
+import { getLocalStatusAsync, isLocalMode, searchLocal } from '@/lib/local/client';
+
 export type ResultKind =
   | 'ncc-service'
   | 'nsite-root'
@@ -138,6 +140,10 @@ export async function search(
   query: string,
   opts: { limit?: number; offset?: number; sort?: SearchSort; signal?: AbortSignal } = {},
 ): Promise<SearchResponse> {
+  // The nsite edition runs its own crawler and index in a Web Worker (see
+  // lib/local/), so the same components work with no server at all. Live
+  // NIP-50 hits are a server feature and are not part of the local path.
+  if (isLocalMode()) return searchLocal(query, opts);
   const url = new URL('/search', API_BASE);
   url.searchParams.set('q', query);
   if (opts.limit) url.searchParams.set('limit', String(opts.limit));
@@ -159,6 +165,7 @@ export async function search(
 }
 
 export async function getStatus(signal?: AbortSignal): Promise<SearchStatus> {
+  if (isLocalMode()) return getLocalStatusAsync();
   const res = await fetch(new URL('/status', API_BASE), { signal });
   if (!res.ok) throw new Error(`Status unavailable (HTTP ${res.status})`);
   return res.json() as Promise<SearchStatus>;

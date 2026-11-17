@@ -61,6 +61,66 @@ actually reads like a search engine result.
       rendered as Markdown in a dialog — see "Article previews" below. The
       results page itself loads no article bodies.
 
+## nsite edition (no server)
+
+`npm run build:nsite` builds the same page to `dist-nsite/` with the API path
+replaced by an in-browser crawler and index. That folder is published as a
+NIP-5A nsite (`nsite://<npub>/nccsearch`) and opened in a client such as Nostr
+Navigator; it keeps working with no server of any kind. `.env.nsite` sets
+`VITE_NCC_SEARCH_MODE=local`, which is the only switch — `lib/api.ts` delegates
+`search()`/`getStatus()` to [`src/lib/local/`](src/lib/local/), and every
+component, the sort control, previews, names and quote cards are unchanged.
+
+How it works:
+
+- [`local/crawler.ts`](src/lib/local/crawler.ts) is a Web Worker that walks the
+  configured relays: newest page per content kind per relay first (so a first
+  visit is searchable in seconds), then deeper pages up to the depth setting,
+  then `kind:0` profiles for the authors of the content it found. It dedupes on
+  `(kind, pubkey, item id)` with the newest `created_at` winning, exactly like
+  the backend.
+- [`local/db.ts`](src/lib/local/db.ts) stores rows and per-relay crawl cursors
+  in IndexedDB. Reopening the page loads that index and resumes from the
+  cursors; it does not start over. `navigator.storage.persist()` is requested
+  so the index is less likely to be evicted.
+- [`local/search.ts`](src/lib/local/search.ts) is a
+  [MiniSearch](https://github.com/lucaong/minisearch) index over title,
+  hashtags, description and body, with the field weights the backend's FTS5
+  weights approximate. Date and A–Z sorts are applied here with the same rules
+  as `/search` (undated rows last, `(pubkey, itemId)` tiebreak), so the sort
+  control behaves identically.
+- [`local/rows.ts`](src/lib/local/rows.ts) maps events to results using
+  `posted_at` and the Markdown-to-text rule from
+  [`../shared/`](../shared/), shared with the Node crawler rather than copied.
+- The page pauses the crawl while it is hidden, and a Web Lock
+  (`ncc-search-crawler`) keeps exactly one open tab crawling; other tabs still
+  read and search the index they loaded.
+
+What it can index, and what it deliberately cannot:
+
+- Indexed: articles (`30023`, with `published_at` honoured), pictures (`20`),
+  videos (`21`/`22`/`34235`/`34236`), nsite manifests (`15128`/`35128`), npack
+  releases (`9900`), NCC-02 service records (`30059`) and profiles (`0`).
+- Not indexed: anything that requires fetching an arbitrary endpoint. A browser
+  cannot read another site's HTML without CORS, so there is no NCC anchor/
+  locator resolution, no fetched page titles, no reachability checks, no
+  attestations and no verified NIP-05. Nsite rows are searchable by the
+  manifest's own title/description rather than the entry page's text; npack
+  rows have no artifact download link (that is a separate event the backend
+  joins in). The panel on the page says "relay data only — endpoints are not
+  fetched or verified here" for the same reason.
+- Caps keep it a browser tool, not a mirror: 20,000 rows / 40 MB, 4 pages per
+  kind per relay by default, bodies truncated to 4 KB. Oldest rows (by posting
+  date, then first-seen) are pruned first. Relays, depth and whether profiles
+  are indexed are editable in the panel; the relay list also drives the page's
+  profile/preview lookups, so there is only one list to manage.
+- Relevance is MiniSearch's scoring, not SQLite's bm25. It ranks the same kinds
+  of matches similarly, but it is not the same number the backend computes.
+
+Publishing `dist-nsite/` to Blossom and a `kind:35128` manifest is done by
+[`../nsite-publisher/`](../nsite-publisher/README.md), a separate NIP-07 page —
+this UI never asks for a signer to publish, and the publisher never sees a key.
+
 ## Result dates and sorting
 
 Each result row shows the event's own posting date (`postedAt` from `/search`:
