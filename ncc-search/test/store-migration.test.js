@@ -12,7 +12,7 @@ import { openStore } from '../src/store.js';
 // deployment's database is in once a schema change like seen_relays ships.
 // This simulates that: a `services` table built from an *old* schema,
 // missing the column, opened by the *current* openStore().
-test('openStore adds seen_relays via ALTER TABLE to a database from before that column existed', () => {
+test('openStore adds columns introduced after a database was created', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ncc-search-store-migration-test-'));
   const dbPath = join(dir, 'test.db');
   try {
@@ -62,6 +62,7 @@ test('openStore adds seen_relays via ALTER TABLE to a database from before that 
     const columns = check.prepare(`PRAGMA table_info(services)`).all().map((c) => c.name);
     check.close();
     assert.ok(columns.includes('seen_relays'), 'seen_relays must exist after opening an old database');
+    assert.ok(columns.includes('posted_at'), 'posted_at must exist after opening an old database');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

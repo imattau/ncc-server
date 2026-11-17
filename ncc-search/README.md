@@ -211,11 +211,55 @@ store.js  -- one `services` table/FTS5 index for both crawl adapters,
              weight than profile handles and body text.
 server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
              rows always winning on a (pubkey, itemId) collision; add
-             &live=false to skip the live fan-out), GET /services/:pubkey/:itemId,
-             GET /status (aggregate index size/counts and crawler health).
+             &live=false to skip the live fan-out and &sort= to choose the
+             order -- see "Posting dates and result order" below), GET
+             /services/:pubkey/:itemId, GET /status (aggregate index
+             size/counts and crawler health).
              Served by src/api.js only; the crawler (src/index.js) exposes
              just the private health/ingest listener described above.
 ```
+
+## Posting dates and result order
+
+Article, image, video, nsite and npack rows record `posted_at`: when the event
+that produced the row was posted, in unix seconds. For NIP-23 articles the
+`published_at` tag wins -- that is the date the author calls the publication
+date, and unlike `created_at` it does not move when the article is edited and
+republished. Everything else uses the event's `created_at`. Profiles and
+NCC-02/05 service rows have no posting date: a kind:0 is a profile *update*,
+and an anchored service record has no single source event. `last_resolved_at`
+is a different thing (when the crawler last looked) and is still reported as
+`indexedAt`.
+
+`GET /search` returns the date as `postedAt` (unix milliseconds, like
+`indexedAt`) and accepts `sort=`:
+
+| `sort` | order |
+| --- | --- |
+| `relevance` (default) | FTS5/bm25 with the anchored/attested/reachable tiebreak |
+| `newest`, `oldest` | `posted_at`; rows with no date last in both directions |
+| `title`, `title-desc` | title, case-insensitive; untitled rows last |
+
+An unknown or missing `sort` falls back to `relevance`. Rows without a date
+always sort last so "oldest" cannot silently mean "we don't know". Every order
+ends with `(pubkey, item_id)`, so `limit`/`offset` paging is stable within a
+query. Live NIP-50 hits are only merged in for `relevance`: a relay search has
+no order this backend could merge into a date or alphabetical sort, and
+prepending them would just make the first page look unsorted.
+
+Discovery resumes from per-relay cursors, so rows indexed before `posted_at`
+existed are not revisited on their own. `src/backfillPostedAt.js` walks them and
+asks the configured relays once per author:
+
+```bash
+docker-compose -p ncc-bundle exec search-crawler node src/backfillPostedAt.js --dry-run
+docker-compose -p ncc-bundle exec search-crawler node src/backfillPostedAt.js
+```
+
+It is safe to re-run -- it only selects rows whose date is still NULL, and the
+write itself is guarded the same way -- so a date a crawl stored in the
+meantime is never overwritten. Rows a relay cannot resolve stay NULL and are
+skipped until the next run; the UI labels those with their index time instead.
 
 ## Relay recovery and status
 

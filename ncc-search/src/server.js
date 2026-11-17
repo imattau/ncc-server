@@ -6,6 +6,10 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 
+// The orders GET /search accepts for `?sort=`. Mirrors store.search's
+// SORT_ORDERS keys; anything else is treated as relevance.
+const SORT_VALUES = new Set(['relevance', 'newest', 'oldest', 'title', 'title-desc']);
+
 /**
  * @param {ReturnType<typeof import('./store.js').openStore>} store
  * @param {import('./adapters/nip50.js').Nip50Adapter} [nip50Adapter] optional
@@ -57,10 +61,15 @@ export function createServer(store, nip50Adapter = null, options = {}) {
     if (!q) return reply.code(400).send({ error: 'missing q' });
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
+    // An unknown/absent sort falls back to relevance rather than erroring: a
+    // search that still returns the right rows in the default order is a
+    // better answer to a stale client than a 400. See store.search's
+    // SORT_ORDERS for what each value means.
+    const sort = SORT_VALUES.has(String(req.query.sort)) ? String(req.query.sort) : 'relevance';
 
     // Fetch one extra row to know whether another page exists, without a
     // separate COUNT(*) query -- then trim it back off before returning.
-    const indexRows = store.search(q, limit + 1, offset);
+    const indexRows = store.search(q, limit + 1, offset, sort);
     const hasMore = indexRows.length > limit;
     const indexResults = indexRows.slice(0, limit).map((r) => ({ ...r, source: 'index' }));
 
@@ -71,9 +80,11 @@ export function createServer(store, nip50Adapter = null, options = {}) {
     // relay search has no stable offset/cursor of its own, so paging it
     // would either repeat the same hits on every page or silently drop
     // some -- the index (which does support offset) carries pagination
-    // from page 2 on.
+    // from page 2 on. They are also only mixed in for relevance order: a
+    // relay search has no ordering this backend can merge into "newest" or
+    // "A-Z" without making the first page look like the sort was ignored.
     let liveHits = [];
-    if (nip50Adapter && req.query.live !== 'false' && offset === 0) {
+    if (nip50Adapter && req.query.live !== 'false' && offset === 0 && sort === 'relevance') {
       const seen = new Set(indexResults.map((r) => `${r.pubkey}\u0000${r.itemId}`));
       const found = await nip50Adapter.search(q, { limit });
       // Dedupe against each other too, not just against the index: two
@@ -90,7 +101,7 @@ export function createServer(store, nip50Adapter = null, options = {}) {
       }
     }
 
-    return { query: q, results: [...indexResults, ...liveHits], hasMore };
+    return { query: q, sort, results: [...indexResults, ...liveHits], hasMore };
   });
 
   // :itemId is an NCC-02 `d` tag, an nsite `d` tag, or `_root` for a root site.

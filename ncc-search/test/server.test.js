@@ -2,9 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from '../src/server.js';
 
-function fakeStore(indexResults) {
+function fakeStore(indexResults, calls = []) {
   return {
-    search: (_query, limit, offset = 0) => indexResults.slice(offset, offset + limit),
+    search: (_query, limit, offset = 0, sort = 'relevance') => {
+      calls.push({ limit, offset, sort });
+      return indexResults.slice(offset, offset + limit);
+    },
     getService: () => null,
   };
 }
@@ -162,4 +165,46 @@ test('GET /search skips live NIP-50 hits on pages after the first', async () => 
 
   await app.inject({ method: 'GET', url: '/search?q=wallet&offset=20' });
   assert.equal(called, false, 'a live relay search has no offset of its own to page through');
+});
+
+test('GET /search passes a known sort through to the index and echoes it', async () => {
+  const calls = [];
+  const store = fakeStore([{ pubkey: 'a', itemId: 'web', title: 'Indexed' }], calls);
+  const app = createServer(store, null);
+
+  const body = (await app.inject({ method: 'GET', url: '/search?q=wallet&sort=newest' })).json();
+
+  assert.equal(calls[0].sort, 'newest');
+  assert.equal(body.sort, 'newest');
+});
+
+test('GET /search treats an unknown or absent sort as relevance', async () => {
+  const calls = [];
+  const store = fakeStore([], calls);
+  const app = createServer(store, null);
+
+  await app.inject({ method: 'GET', url: '/search?q=wallet&sort=sideways' });
+  await app.inject({ method: 'GET', url: '/search?q=wallet' });
+
+  assert.deepEqual(calls.map((call) => call.sort), ['relevance', 'relevance']);
+});
+
+// Live NIP-50 results have no ordering this backend can merge into a date or
+// title sort, so mixing them into page 1 would make the sort look ignored.
+test('GET /search skips live NIP-50 hits when a non-relevance sort is requested', async () => {
+  const store = fakeStore([{ pubkey: 'a', itemId: 'web', title: 'Indexed' }]);
+  let liveCalls = 0;
+  const nip50Adapter = {
+    search: async () => {
+      liveCalls += 1;
+      return [{ pubkey: 'b', itemId: 'blog', title: 'Live only', source: 'live' }];
+    },
+  };
+  const app = createServer(store, nip50Adapter);
+
+  const body = (await app.inject({ method: 'GET', url: '/search?q=wallet&sort=oldest' })).json();
+
+  assert.equal(liveCalls, 0);
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].source, 'index');
 });

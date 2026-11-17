@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openStore, KIND_ARTICLE, KIND_IMAGE, KIND_NSITE_NAMED } from '../src/store.js';
+import { openStore, KIND_ARTICLE, KIND_IMAGE, KIND_NSITE_NAMED, KIND_PROFILE } from '../src/store.js';
 
 function freshStore() {
   const dir = mkdtempSync(join(tmpdir(), 'ncc-search-store-content-test-'));
@@ -36,6 +36,39 @@ test('upsertContent indexes an article with no reachability claim', () => {
     const results = store.search('wallets');
     assert.equal(results.length, 1);
     assert.equal(results[0].itemId, 'my-post');
+  } finally {
+    cleanup();
+  }
+});
+
+test('upsertContent stores the posting date and a later date-less update does not erase it', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({
+      pubkey: 'a'.repeat(64),
+      itemId: 'dated-post',
+      kind: KIND_ARTICLE,
+      title: 'Dated post',
+      description: null,
+      body: 'Some searchable text.',
+      postedAt: 1_700_000_000,
+    });
+
+    assert.equal(store.getService('a'.repeat(64), 'dated-post').posted_at, 1_700_000_000);
+    assert.equal(store.search('searchable')[0].postedAt, 1_700_000_000_000, 'postedAt is Unix milliseconds');
+
+    // e.g. the npack artifact arriving later, or a NIP-05 recheck: neither
+    // has an event to read a date from, and neither may blank the stored one.
+    store.upsertContent({
+      pubkey: 'a'.repeat(64),
+      itemId: 'dated-post',
+      kind: KIND_ARTICLE,
+      title: 'Dated post',
+      description: null,
+      body: 'Some searchable text.',
+    });
+
+    assert.equal(store.getService('a'.repeat(64), 'dated-post').posted_at, 1_700_000_000);
   } finally {
     cleanup();
   }
@@ -234,6 +267,44 @@ test('attachNip05 updates every row for a pubkey across kinds, and keeps body te
     const results = store.search('caption');
     assert.equal(results.length, 1);
     assert.equal(results[0].nip05, 'alice@example.com');
+  } finally {
+    cleanup();
+  }
+});
+
+test('backfill helpers page undated content rows and never overwrite a stored date', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({
+      pubkey: 'a'.repeat(64), itemId: 'early', kind: KIND_ARTICLE,
+      title: 'Early', description: null, body: 'text',
+    });
+    store.upsertContent({
+      pubkey: 'b'.repeat(64), itemId: 'late', kind: KIND_ARTICLE,
+      title: 'Late', description: null, body: 'text',
+    });
+    store.upsertContent({
+      pubkey: 'c'.repeat(64), itemId: 'dated', kind: KIND_ARTICLE,
+      title: 'Dated', description: null, body: 'text', postedAt: 1_700_000_000,
+    });
+    // Profiles are not backfillable -- there is no posting date to find.
+    store.upsertContent({
+      pubkey: 'd'.repeat(64), itemId: '_profile', kind: KIND_PROFILE,
+      title: 'Someone', description: null, body: null,
+    });
+
+    assert.equal(store.countMissingPostedAt(), 2);
+
+    const first = store.listMissingPostedAt(null, 1);
+    assert.deepEqual(first.map((row) => row.itemId), ['early']);
+
+    const cursor = { pubkey: first[0].pubkey, itemId: first[0].itemId };
+    assert.deepEqual(store.listMissingPostedAt(cursor, 10).map((row) => row.itemId), ['late']);
+
+    assert.equal(store.setPostedAt('a'.repeat(64), 'early', 1_500_000_000), 1);
+    assert.equal(store.setPostedAt('a'.repeat(64), 'early', 1_400_000_000), 0, 'an already-dated row is left alone');
+    assert.equal(store.getService('a'.repeat(64), 'early').posted_at, 1_500_000_000);
+    assert.equal(store.countMissingPostedAt(), 1);
   } finally {
     cleanup();
   }

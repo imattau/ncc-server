@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openStore, KIND_ARTICLE } from '../src/store.js';
+import { openStore, KIND_ARTICLE, KIND_PROFILE } from '../src/store.js';
 
 function freshStore() {
   const dir = mkdtempSync(join(tmpdir(), 'ncc-search-store-search-query-test-'));
@@ -104,6 +104,62 @@ test('search() does not let the tiebreak boost override a clearly stronger text 
 
     const results = store.search('solar mapping');
     assert.equal(results[0].itemId, 'exact-title', 'a true title match beats a trusted but weak match');
+  } finally {
+    cleanup();
+  }
+});
+
+function datedArticle(pubkey, itemId, title, postedAt) {
+  return {
+    pubkey,
+    itemId,
+    kind: KIND_ARTICLE,
+    title,
+    description: null,
+    body: 'shared search term',
+    postedAt,
+  };
+}
+
+test('search() exposes postedAt in milliseconds and sorts by it, undated rows last either way', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent(datedArticle('a'.repeat(64), 'old', 'Old post', 1_600_000_000));
+    store.upsertContent(datedArticle('b'.repeat(64), 'new', 'New post', 1_700_000_000));
+    // Profiles have no posting date by design (see store.js's schema comment).
+    store.upsertContent({
+      pubkey: 'c'.repeat(64), itemId: '_profile', kind: KIND_PROFILE,
+      title: 'Undated profile', description: null, body: 'shared search term',
+    });
+
+    const ids = (sort) => store.search('shared', 10, 0, sort).map((row) => row.itemId);
+
+    assert.deepEqual(ids('newest'), ['new', 'old', '_profile']);
+    assert.deepEqual(ids('oldest'), ['old', 'new', '_profile']);
+    assert.equal(store.search('shared', 10, 0, 'newest')[0].postedAt, 1_700_000_000_000);
+    assert.equal(store.search('shared', 10, 0, 'newest')[2].postedAt, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('search() sorts by title, case-insensitively, with untitled rows last', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent(datedArticle('a'.repeat(64), 'lower', 'beta guide', 1_700_000_000));
+    store.upsertContent(datedArticle('b'.repeat(64), 'upper', 'Alpha guide', 1_600_000_000));
+    store.upsertContent(datedArticle('c'.repeat(64), 'last', 'gamma guide', 1_650_000_000));
+    store.upsertContent({
+      pubkey: 'd'.repeat(64), itemId: 'untitled', kind: KIND_ARTICLE,
+      title: null, description: null, body: 'shared search term',
+    });
+
+    const ids = (sort) => store.search('shared', 10, 0, sort).map((row) => row.itemId);
+
+    assert.deepEqual(ids('title'), ['upper', 'lower', 'last', 'untitled']);
+    assert.deepEqual(ids('title-desc'), ['last', 'lower', 'upper', 'untitled']);
+    // An unknown sort still returns relevance order rather than throwing.
+    assert.equal(store.search('shared', 10, 0, 'bogus').length, 4);
   } finally {
     cleanup();
   }

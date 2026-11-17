@@ -6,6 +6,7 @@ function releaseEvent(overrides = {}) {
   return {
     pubkey: 'a'.repeat(64),
     id: 'release-id',
+    created_at: 1_700_000_000,
     tags: [
       ['d', 'ncc-browser/1.2.0/x86_64'],
       ['v', '1'],
@@ -35,6 +36,7 @@ test('resolveNpackRelease extracts the required and store-listing tags', () => {
   assert.equal(resolved.description, 'The ncc:// browser');
   assert.equal(resolved.artifactId, 'artifact-id');
   assert.equal(resolved.sha256, 'b'.repeat(64));
+  assert.equal(resolved.postedAt, 1_700_000_000);
   assert.deepEqual(resolved.hashtags, ['browser', 'nostr']);
 });
 
@@ -70,6 +72,7 @@ test('toSearchRow joins a release with its artifact once resolved', () => {
   const release = resolveNpackRelease(releaseEvent());
   const withoutArtifact = toSearchRow(release, null);
   assert.equal(withoutArtifact.mediaUrl, null);
+  assert.equal(withoutArtifact.postedAt, 1_700_000_000, 'the release date survives until the artifact arrives');
 
   const artifact = resolveNpackArtifact({
     id: 'artifact-id',

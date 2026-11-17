@@ -23,6 +23,7 @@
 //   - `title` tag: required by both NIPs.
 
 import { extractHashtags } from './hashtags.js';
+import { postedAtOf } from '../postedAt.js';
 import { discoverFromRelays } from '../relayDiscovery.js';
 
 export const KIND_PICTURE = 20;
@@ -127,6 +128,7 @@ export function resolveMedia(event) {
     thumbhash: scalar(primary.thumbhash),
     endpoint: null,
     duration: scalar(primary.duration) ? Number(scalar(primary.duration)) : null,
+    postedAt: postedAtOf(event),
     hashtags: extractHashtags(event),
     contentWarning,
   };

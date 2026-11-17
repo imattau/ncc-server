@@ -6,6 +6,10 @@ import { stripMarkdown } from '../src/adapters/markdown.js';
 function articleEvent(overrides = {}) {
   return {
     pubkey: 'a'.repeat(64),
+    // Discovery only hands resolveArticle() kind:30023 events (see
+    // discoverArticles), and postedAtOf() keys the published_at rule off it.
+    kind: 30023,
+    created_at: 1_600_000_000,
     content: 'Hello world.',
     tags: [['d', 'hello-world'], ['title', 'Hello World']],
     ...overrides,
@@ -33,9 +37,21 @@ test('resolveArticle extracts d/title/summary/image/published_at', () => {
   assert.equal(resolved.description, 'A short summary');
   assert.equal(resolved.thumbnailUrl, 'https://example.com/cover.jpg');
   assert.equal(resolved.publishedAt, 1700000000);
+  assert.equal(resolved.postedAt, 1700000000, 'published_at is the date the author calls the posting date');
   assert.equal(resolved.body, 'The body.');
   assert.equal(resolved.mediaUrl, null);
   assert.deepEqual(resolved.hashtags, ['bitcoin', 'nostr']);
+});
+
+test('resolveArticle falls back to created_at when published_at is missing or invalid', () => {
+  const noTag = resolveArticle(articleEvent({ created_at: 1_690_000_000 }));
+  assert.equal(noTag.postedAt, 1_690_000_000);
+
+  const invalidTag = resolveArticle(articleEvent({
+    created_at: 1_690_000_000,
+    tags: [['d', 'x'], ['published_at', 'not-a-date']],
+  }));
+  assert.equal(invalidTag.postedAt, 1_690_000_000);
 });
 
 test('resolveArticle has no itemId (and is skippable) when the d tag is missing', () => {

@@ -18,6 +18,7 @@
 import { stripMarkdown } from './markdown.js';
 import { extractHashtags } from './hashtags.js';
 import { discoverFromRelays } from '../relayDiscovery.js';
+import { postedAtOf } from '../postedAt.js';
 
 export const KIND_ARTICLE_EVENT = 30023;
 
@@ -56,6 +57,7 @@ export function resolveArticle(event) {
     mediaType: null,
     endpoint: null,
     publishedAt: publishedAt ? Number(publishedAt) : null,
+    postedAt: postedAtOf(event),
     hashtags: extractHashtags(event),
   };
 }
@@ -72,6 +74,8 @@ export function resolveArticle(event) {
  * @property {null} mediaUrl
  * @property {null} mediaType
  * @property {null} endpoint
- * @property {number|null} publishedAt
+ * @property {number|null} publishedAt - the raw `published_at` tag, if any
+ * @property {number|null} postedAt - unix seconds: `published_at` when valid,
+ *   otherwise the event's `created_at` (see ../postedAt.js)
  * @property {string[]} hashtags - from `t` tags, lowercased; [] if none
  */

@@ -72,6 +72,7 @@ test('NsiteAdapter.resolveSite: root site uses siteId "_root", named site uses i
   assert.equal(adapter.resolveSite(root).siteId, '_root');
   assert.equal(adapter.resolveSite(named).siteId, 'blog');
   assert.equal(adapter.resolveSite(named).entrySha256, 'abc');
+  assert.equal(adapter.resolveSite(named).postedAt, named.created_at, 'an nsite row is dated by its manifest');
 });
 
 test('NsiteAdapter.fetchAndExtract fails closed on a sha256 mismatch (Blossom integrity check)', async () => {

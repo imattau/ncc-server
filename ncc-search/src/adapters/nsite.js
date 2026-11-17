@@ -38,6 +38,7 @@
 import crypto from 'node:crypto';
 import { fetchUrl } from '../fetcher.js';
 import { extractDocument } from '../extract.js';
+import { postedAtOf } from '../postedAt.js';
 import { discoverFromRelays } from '../relayDiscovery.js';
 
 export const KIND_ROOT_SITE = 15128;
@@ -211,6 +212,7 @@ export class NsiteAdapter {
       entryPath,
       entrySha256: entryPath ? manifest.paths.get(entryPath) : null,
       servers: manifest.servers,
+      postedAt: postedAtOf(event),
     };
   }
 

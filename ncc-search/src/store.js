@@ -113,6 +113,16 @@ export function openStore(dbPath, opts = {}) {
       -- ui/'s safe-search toggle (see ui/src/hooks/useSafeSearch.ts) to
       -- filter or label on.
       content_warning TEXT,
+      -- Article/image/video/nsite/npack only: when the event that built this
+      -- row was posted, unix seconds. NIP-23's published_at tag when the
+      -- author set it, the event's created_at otherwise (see
+      -- src/postedAt.js). This is what the UI shows and sorts by, as opposed
+      -- to last_resolved_at, which only says when the crawler last looked.
+      -- Null for profiles and NCC-02/05 service rows: a kind:0 is a profile
+      -- update, and an anchored service record has no single source event, so
+      -- neither has a posting date to report. Also null on rows indexed
+      -- before this column existed until re-crawled or backfilled.
+      posted_at INTEGER,
       -- nsite/article/image/video only (see relayTracking.js): which
       -- relay(s), by URL, actually delivered the event this row was built
       -- from -- a JSON array string, same encoding as hashtags. A
@@ -166,17 +176,35 @@ export function openStore(dbPath, opts = {}) {
   `);
 
   // `CREATE TABLE IF NOT EXISTS` above only creates the table on a brand
-  // new database -- it does nothing for `seen_relays` on a database that
-  // already existed before this column did. This is the first schema
-  // change this project has needed since its initial release, so there is
-  // no migration runner yet; this ad hoc guard is deliberately small
-  // rather than standing one up for a single column.
-    const hasSeenRelays = db
-      .prepare(`PRAGMA table_info(services)`)
-      .all()
-      .some((column) => column.name === 'seen_relays');
-    if (!hasSeenRelays) {
-      db.exec(`ALTER TABLE services ADD COLUMN seen_relays TEXT`);
+  // new database -- it does nothing for columns added after a database
+  // already exists, which is the situation every long-running deployment is
+  // in when a schema change ships. There is still no migration runner; this
+  // guard is deliberately small rather than standing one up for a handful of
+  // nullable columns, but it lists them explicitly so each addition is one
+  // entry rather than another copy of the same ceremony.
+    const columns = new Set(
+      db.prepare(`PRAGMA table_info(services)`).all().map((column) => column.name),
+    );
+    for (const [name, type] of [
+      ['seen_relays', 'TEXT'],
+      ['posted_at', 'INTEGER'],
+    ]) {
+      if (!columns.has(name)) db.exec(`ALTER TABLE services ADD COLUMN ${name} ${type}`);
+    }
+  } else {
+    // A reader must not migrate the schema, so if the crawler has not added a
+    // column this build's queries reference, fail here instead of preparing a
+    // statement that throws on every request: src/api.js's open retry loop
+    // then waits for the crawler (they ship in the same image, so this is
+    // only ever the rollout window).
+    const columns = new Set(
+      db.prepare(`PRAGMA table_info(services)`).all().map((column) => column.name),
+    );
+    if (!columns.has('posted_at')) {
+      db.close();
+      throw new Error(
+        'index schema is older than this build (services.posted_at is missing); waiting for the crawler to migrate it',
+      );
     }
   }
 
@@ -186,13 +214,13 @@ export function openStore(dbPath, opts = {}) {
       anchored, used_fallback, attestation_count, is_revoked, ttl_seconds,
       last_resolved_at, last_reachable_at, last_status, last_error,
       title, description, body, media_url, media_type, thumbnail_url,
-      blurhash, thumbhash, hashtags, content_warning, seen_relays
+      blurhash, thumbhash, hashtags, content_warning, posted_at, seen_relays
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
       @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
-      @blurhash, @thumbhash, @hashtags, @contentWarning, @seenRelays
+      @blurhash, @thumbhash, @hashtags, @contentWarning, @postedAt, @seenRelays
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -220,6 +248,9 @@ export function openStore(dbPath, opts = {}) {
       thumbhash = COALESCE(excluded.thumbhash, services.thumbhash),
       hashtags = COALESCE(excluded.hashtags, services.hashtags),
       content_warning = COALESCE(excluded.content_warning, services.content_warning),
+      -- A partial update (a NIP-05 recheck, an artifact arriving later) has
+      -- no event to read a date from; it must not erase one already stored.
+      posted_at = COALESCE(excluded.posted_at, services.posted_at),
       seen_relays = COALESCE(excluded.seen_relays, services.seen_relays)
   `);
 
@@ -266,6 +297,7 @@ export function openStore(dbPath, opts = {}) {
       thumbhash: null,
       hashtags: null,
       contentWarning: null,
+      postedAt: null,
       seenRelays: null,
       ...row,
     });
@@ -337,6 +369,7 @@ export function openStore(dbPath, opts = {}) {
       lastReachableAt: reachable ? now : null,
       lastStatus: fetched.status ?? null,
       lastError: fetched.error ?? null,
+      postedAt: resolved.postedAt ?? null,
       title: fetched.title ?? existing?.title ?? resolved.title ?? null,
       description: fetched.description ?? existing?.description ?? resolved.description ?? null,
       // NsiteAdapter.fetchAndExtract() returns extractDocument()'s own
@@ -396,6 +429,7 @@ export function openStore(dbPath, opts = {}) {
       hashtags:
         resolved.hashtags && resolved.hashtags.length ? JSON.stringify(resolved.hashtags) : null,
       contentWarning: resolved.contentWarning ?? null,
+      postedAt: resolved.postedAt ?? null,
       seenRelays: seenRelays.length ? JSON.stringify(seenRelays) : null,
     });
   }
@@ -436,9 +470,29 @@ export function openStore(dbPath, opts = {}) {
      ORDER BY item_id`,
   );
 
-  function search(query, limit = 20, offset = 0) {
+  // How the result page is ordered. `relevance` is the FTS/bm25 order this
+  // backend has always used; the others are what the UI's sort control asks
+  // for. Every order ends with a unique key (pubkey, itemId) so `LIMIT/
+  // OFFSET` paging stays stable within a query -- without a tiebreak, two
+  // rows with the same date or title could swap places between pages and a
+  // result would appear twice or not at all.
+  //
+  // "No date" rows (profiles, NCC-02/05 services, rows indexed before
+  // `posted_at` existed) always sort last in both directions rather than
+  // first in ascending order, where they would be indistinguishable from
+  // genuinely oldest content.
+  const SORT_ORDERS = {
+    relevance: 'rank - boost, itemId',
+    newest: 'postedAt IS NULL, postedAt DESC, pubkey, itemId',
+    oldest: 'postedAt IS NULL, postedAt ASC, pubkey, itemId',
+    title: `(title IS NULL OR title = ''), lower(title), pubkey, itemId`,
+    'title-desc': `(title IS NULL OR title = ''), lower(title) DESC, pubkey, itemId`,
+  };
+
+  function search(query, limit = 20, offset = 0, sort = 'relevance') {
     const matchQuery = buildMatchQuery(query);
     if (!matchQuery) return [];
+    const orderBy = SORT_ORDERS[sort] ?? SORT_ORDERS.relevance;
     const rows = db
       .prepare(
         `WITH matches AS MATERIALIZED (
@@ -447,6 +501,7 @@ export function openStore(dbPath, opts = {}) {
                   s.last_reachable_at AS "lastReachableAt", s.last_status AS "lastStatus",
                   s.title, s.description,
                   s.last_resolved_at * 1000 AS "indexedAt",
+                  s.posted_at * 1000 AS "postedAt",
                   s.media_url AS "mediaUrl", s.media_type AS "mediaType",
                   s.thumbnail_url AS "thumbnailUrl",
                   s.blurhash, s.thumbhash, s.hashtags,
@@ -487,7 +542,7 @@ export function openStore(dbPath, opts = {}) {
            FROM matches
          )
          SELECT * FROM ranked WHERE dupeRank = 1
-         ORDER BY rank - boost, itemId
+         ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`,
       )
       .all(matchQuery, limit, offset);
@@ -499,6 +554,62 @@ export function openStore(dbPath, opts = {}) {
           ? []
           : alternatesStmt.all(row.pubkey, row.kind, row.title, row.description, row.itemId),
     }));
+  }
+
+  // --- posted_at backfill ----------------------------------------------------
+  // Rows indexed before `posted_at` existed have no posting date, and
+  // discovery will not revisit them on its own: it resumes from per-relay
+  // cursors, so an old event is only re-delivered if its author replaces it.
+  // src/backfillPostedAt.js walks these rows in primary-key order and asks
+  // relays for the source events. These are maintenance helpers, not part of
+  // the read path -- the read-only store does not export them.
+  const BACKFILL_KINDS = [
+    KIND_ARTICLE,
+    KIND_IMAGE,
+    KIND_VIDEO,
+    KIND_NSITE_ROOT,
+    KIND_NSITE_NAMED,
+    KIND_NPACK,
+  ];
+  const backfillKindPlaceholders = BACKFILL_KINDS.map(() => '?').join(', ');
+  const missingPostedAtStmt = db.prepare(`
+    SELECT pubkey, item_id AS "itemId", kind FROM services
+    WHERE posted_at IS NULL
+      AND kind IN (${backfillKindPlaceholders})
+      AND (pubkey > ? OR (pubkey = ? AND item_id > ?))
+    ORDER BY pubkey, item_id
+    LIMIT ?`);
+  const countMissingPostedAtStmt = db.prepare(`
+    SELECT COUNT(*) AS count FROM services
+    WHERE posted_at IS NULL AND kind IN (${backfillKindPlaceholders})`);
+  const setPostedAtStmt = db.prepare(
+    `UPDATE services SET posted_at = ? WHERE pubkey = ? AND item_id = ? AND posted_at IS NULL`,
+  );
+
+  /**
+   * One page of rows still missing a posting date, ordered by primary key.
+   * `cursor` is the last row of the previous page; paging this way (rather
+   * than OFFSET) keeps making progress even as rows above the cursor are
+   * filled in, and rows a relay cannot resolve are simply skipped for good
+   * once the cursor has passed them.
+   */
+  function listMissingPostedAt(cursor = null, limit = 200) {
+    return missingPostedAtStmt.all(
+      ...BACKFILL_KINDS,
+      cursor?.pubkey ?? '',
+      cursor?.pubkey ?? '',
+      cursor?.itemId ?? '',
+      limit,
+    );
+  }
+
+  /** @returns {number} rows changed (0 when the row already had a date) */
+  function setPostedAt(pubkey, itemId, postedAt) {
+    return setPostedAtStmt.run(postedAt, pubkey, itemId).changes;
+  }
+
+  function countMissingPostedAt() {
+    return countMissingPostedAtStmt.get(...BACKFILL_KINDS).count;
   }
 
   function getService(pubkey, itemId) {
@@ -683,6 +794,9 @@ export function openStore(dbPath, opts = {}) {
     getStatus,
     listStale,
     pruneToFit,
+    listMissingPostedAt,
+    setPostedAt,
+    countMissingPostedAt,
   };
 }
 

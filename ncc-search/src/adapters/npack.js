@@ -24,6 +24,7 @@
 // does that; this is a search index, not an installer.
 
 import { discoverFromRelays } from '../relayDiscovery.js';
+import { postedAtOf } from '../postedAt.js';
 
 export const KIND_NPACK_RELEASE = 9900;
 export const KIND_NPACK_ARTIFACT = 1063;
@@ -98,6 +99,7 @@ export function resolveNpackRelease(event) {
     description: summary || description || null,
     body: description || null,
     homepage,
+    postedAt: postedAtOf(event),
     hashtags: categories.length ? categories : null,
   };
 }
@@ -138,6 +140,7 @@ export function toSearchRow(release, artifact) {
     mediaType: artifact?.mediaType ?? null,
     thumbnailUrl: null,
     endpoint: release.homepage,
+    postedAt: release.postedAt ?? null,
     hashtags: release.hashtags,
   };
 }

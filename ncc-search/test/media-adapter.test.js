@@ -29,6 +29,7 @@ test('resolveMedia (picture, kind 20) keys by the event id, not a d tag', () => 
     id: 'event-id-1',
     pubkey: 'b'.repeat(64),
     kind: KIND_PICTURE,
+    created_at: 1_700_000_000,
     content: 'A sunset',
     tags: [
       ['title', 'Sunset'],
@@ -44,6 +45,7 @@ test('resolveMedia (picture, kind 20) keys by the event id, not a d tag', () => 
   assert.equal(resolved.mediaType, 'image/jpeg');
   assert.equal(resolved.thumbnailUrl, 'https://cdn.example.com/sunset.jpg', 'an image is its own thumbnail');
   assert.match(resolved.body, /Sunset over water/);
+  assert.equal(resolved.postedAt, 1_700_000_000, 'a media row is dated by its event');
   assert.deepEqual(resolved.hashtags, ['photography']);
 });
 
