@@ -96,12 +96,15 @@ preview is built from the article event itself, in the browser:
 - The Markdown renderer is code-split with `lazy()`: react-markdown and the
   unified parser stack are ~50 kB gzipped, for a dialog most sessions never
   open, so they are fetched on the first preview rather than on page load.
-- The dialog is a native `<dialog>` — a centered panel at `sm` and above,
-  and a full-height sheet below it, because long-form text doesn't fit
-  readably in a short card on a phone. Escape, backdrop click, background
-  inertness and focus restoration come from the element itself; the body
-  scroll lock is explicit because some mobile browsers still scroll the
-  page behind a modal.
+- The dialog is a native `<dialog>`: a full-height sheet on any coarse-pointer
+  device and below `sm`, a centered panel otherwise. Width alone is not a
+  reliable "this is a phone" signal — a phone in landscape is 844 px wide, and
+  a browser asking for the desktop site gets a wider layout viewport still — so
+  `pointer-coarse` selects the sheet as well. Long-form text does not fit
+  readably in a short card on a phone, and the sheet is the only layout that
+  leaves a readable column. Escape, backdrop click, background inertness and
+  focus restoration come from the element itself; the body scroll lock is
+  explicit because some mobile browsers still scroll the page behind a modal.
 - If the relays don't return the event, the dialog keeps the indexed
   title/summary/cover, shows the indexed excerpt, and offers "Try again"
   and an "Open in njump" link built from the article's `naddr`.

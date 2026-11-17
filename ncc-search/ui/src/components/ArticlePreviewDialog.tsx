@@ -114,9 +114,9 @@ export function ArticlePreviewDialog({
         // inside the panel targets a descendant.
         if (e.target === e.currentTarget) onClose();
       }}
-      className="m-auto max-h-[85dvh] w-[min(92vw,48rem)] rounded-xl border border-border bg-background p-0 text-foreground shadow-2xl backdrop:bg-black/60 max-sm:m-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0"
+      className="m-auto max-h-[85dvh] w-[min(92vw,48rem)] overflow-hidden rounded-xl border border-border bg-background p-0 text-foreground shadow-2xl backdrop:bg-black/60 max-sm:m-0 max-sm:h-dvh max-sm:max-h-none max-sm:w-full max-sm:max-w-none max-sm:rounded-none max-sm:border-0 pointer-coarse:m-0 pointer-coarse:h-dvh pointer-coarse:max-h-none pointer-coarse:w-full pointer-coarse:max-w-none pointer-coarse:rounded-none pointer-coarse:border-0"
     >
-      <div className="flex max-h-[85dvh] flex-col max-sm:h-dvh max-sm:max-h-none">
+      <div className="flex max-h-[85dvh] flex-col max-sm:h-dvh max-sm:max-h-none pointer-coarse:h-dvh pointer-coarse:max-h-none">
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5 sm:px-5">
           <BookOpenText className="size-4 text-muted-foreground" aria-hidden="true" />
           <span className="text-sm font-medium text-muted-foreground">Article preview</span>
@@ -145,7 +145,7 @@ export function ArticlePreviewDialog({
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
           {cover && (
             <img
               src={cover}
@@ -158,7 +158,7 @@ export function ArticlePreviewDialog({
           )}
 
           <div className="px-4 py-5 sm:px-8 sm:py-6">
-            <h1 id={titleId} className="text-xl leading-tight font-semibold text-foreground sm:text-2xl">
+            <h1 id={titleId} className="text-xl leading-tight font-semibold break-words text-foreground sm:text-2xl">
               {title}
             </h1>
 
@@ -214,7 +214,7 @@ export function ArticlePreviewDialog({
                 retrying={article.isFetching}
               />
             ) : event && event.content.trim() ? (
-              <div className="text-[15px]">
+              <div className="text-[15px] break-words">
                 <Suspense fallback={<ArticleSkeleton />}>
                   <ArticleMarkdown content={event.content} />
                 </Suspense>
