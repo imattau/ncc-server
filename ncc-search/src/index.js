@@ -52,7 +52,20 @@ if (config.dbMaxBytes > 0) {
 // same reason) implements the same onopen/onmessage/onerror/onclose
 // interface without that reentrancy bug, so every relay connection this
 // process makes goes through it instead of the native implementation.
-const pool = new SimplePool({ websocketImplementation: WebSocket });
+class PoolWebSocket extends WebSocket {
+  constructor(...args) {
+    super(...args);
+    // nostr-tools closes a relay socket when its connection timer expires.
+    // `ws` emits an `error` when that happens before the handshake completes;
+    // without a listener Node treats it as an uncaught EventEmitter error and
+    // terminates the whole search process. Relay failures are already handled
+    // by nostr-tools' close/error callbacks, so keep the event from crashing
+    // this long-lived service.
+    this.on('error', () => {});
+  }
+}
+
+const pool = new SimplePool({ websocketImplementation: PoolWebSocket });
 // Lets nsite-crawl.js/content-crawl.js record which relay(s) actually
 // served a given event (see relayTracking.js) -- a redundancy signal: a
 // record seen on only one relay is one relay outage away from becoming
