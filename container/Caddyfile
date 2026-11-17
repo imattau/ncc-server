@@ -172,16 +172,19 @@
 }
 
 # The admin panel is published as an NCC service on its own pinned port. Its
-# page lives at /admin in the same SPA build served from CONTENT_ROOT, and a
-# service endpoint must be rooted at / because NCC Browser joins the endpoint
-# path with the request path -- so the service root redirects to /admin.
+# page lives at /admin in the same SPA build served from CONTENT_ROOT. The
+# service root must be / because NCC Browser joins the endpoint path with the
+# request path, and it cannot be an HTTP redirect: NCC Browser fetches
+# endpoints with redirect: 'manual', which Electron reports as "Redirect was
+# cancelled". Return a tiny 200 document that navigates to /admin instead.
 :{$ADMIN_PANEL_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
 	root * {$CONTENT_ROOT}
 	encode gzip
 	handle / {
-		redir * /admin 302
+		header Content-Type "text/html; charset=utf-8"
+		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/admin"><title>NCC Server Admin Panel</title></head><body><p><a href="/admin">Open the NCC Server Admin Panel</a></p></body></html>`
 	}
 	handle {
 		try_files {path} /index.html

@@ -24,9 +24,9 @@ through their managed runtime configuration.
 Forward TCP 8443–8448 to expose the NCC services. Port 8080 is optional for
 plain HTTP web access; Tor's onion service reaches it locally. You can leave
 individual service ports closed if that service should not be reachable.
-The admin panel is published as an NCC service on port 8448 and redirects to
-`/admin`. The optional panel Caddy image also serves the prototype on loopback
-port 8081, which needs no router forward; see
+The admin panel is published as an NCC service on port 8448 and its root
+opens `/admin`. The optional panel Caddy image also serves the prototype on
+loopback port 8081, which needs no router forward; see
 [admin panel](docs/admin-panel.md) for SSH access.
 
 | Port | Purpose |

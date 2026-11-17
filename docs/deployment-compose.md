@@ -132,7 +132,7 @@ HTTPS on port 8443 and maps its onion service to local HTTP port 8080. Relay,
 Npanel, Ditto Web, ncc-search, and the admin panel advertise ports 8444, 8445,
 8446, 8447, and 8448 respectively. Each profile's published port matches its
 dedicated Caddy listener, avoiding cross-service fallback to the web content
-root. The admin panel service root redirects to /admin; leave it unreachable
+root. The admin panel service root opens /admin; leave it unreachable
 if you do not want the prototype's UI published.
 
 The bundle's default publication relays are wss://relay.primal.net/ and

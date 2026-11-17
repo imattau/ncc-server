@@ -263,9 +263,9 @@ def main():
     force_publish(ditto)
     force_publish(search)
     # The admin panel is part of the same SPA as the welcome page, so its
-    # service endpoint is rooted at / and Caddy's admin listener redirects to
-    # /admin. Probe the local HTTP content listener: the shared web
-    # certificate is self-signed, and the sidecar only needs to know the
+    # service endpoint is rooted at / and Caddy's admin listener serves a small
+    # page that opens /admin. Probe the local HTTP content listener: the shared
+    # web certificate is self-signed, and the sidecar only needs to know the
     # content is served. The panel itself is a prototype; see
     # docs/admin-panel.md.
     services = request('/api/services')

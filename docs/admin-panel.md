@@ -15,8 +15,9 @@ The Compose bundle publishes the panel as the `admin` NCC service:
 
 - `ncc://<npub>/admin/` (resolves to the `admin` locator)
 - `https://<PUBLIC_IPV4>:8448/admin` directly
-- the service root redirects `/` to `/admin` because NCC Browser joins an
-  endpoint's path with the request path, so the endpoint itself must be `/`
+- the service root returns a small 200 page that opens `/admin`; it cannot be
+  an HTTP 302 because NCC Browser fetches endpoints with manual redirects and
+  Electron reports those as "Redirect was cancelled"
 
 The listener uses the shared web certificate and SPKI pin, exactly like the
 web/Npanel/Ditto/search listeners. Set `ADMIN_PANEL_TLS_PORT` to change the
