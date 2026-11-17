@@ -61,6 +61,24 @@ actually reads like a search engine result.
       rendered as Markdown in a dialog — see "Article previews" below. The
       results page itself loads no article bodies.
 
+## Result dates and sorting
+
+Each result row shows the event's own posting date (`postedAt` from `/search`:
+NIP-23's `published_at` when the author set it, otherwise the event's
+`created_at`). The index time is the fallback only for rows with no event date
+(profiles, NCC-02/05 services) or rows indexed before the backend recorded
+dates, and that fallback is labelled `indexed …` so the two can't be confused.
+
+The sort control beside the result count has three fields rather than five
+buttons: **Best match** (the backend's relevance order), **Date** and **A-Z**.
+Pressing the active field flips its direction — date newest/oldest, A-Z/Z-A —
+and pressing Best match returns to relevance. The sort is part of the
+`useSearch` query key, so changing it starts a fresh page 1 instead of
+appending differently ordered pages; the backend's orders all end with a
+unique key, so "Load more" never skips or repeats a row. A signed-in user's
+follow/interest re-ranking is skipped for an explicit Date/A-Z sort (it would
+undo the order the reader just asked for), while the "following" badges stay.
+
 ## Landing tagline
 
 The landing page quotes the index's current `recordCount` from `/status` in a

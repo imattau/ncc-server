@@ -5,6 +5,7 @@ import { ResultRow } from '@/components/ResultRow';
 import { MediaGridCard } from '@/components/MediaGridCard';
 import { ProfileGridCard } from '@/components/ProfileGridCard';
 import { LoginButton } from '@/components/LoginButton';
+import { SortControl } from '@/components/SortControl';
 import { SafeSearchToggle } from '@/components/SafeSearchToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -17,7 +18,7 @@ import { useInterests } from '@/hooks/useInterests';
 import { useMuteList } from '@/hooks/useMuteList';
 import { useSafeSearch } from '@/hooks/useSafeSearch';
 import { useTheme } from '@/hooks/useTheme';
-import type { SearchResult } from '@/lib/api';
+import type { SearchResult, SearchSort } from '@/lib/api';
 import { useSearchStatus } from '@/hooks/useSearchStatus';
 import { rankResults, isFollowed, type PersonalizationContext } from '@/lib/ranking';
 import { isMuted } from '@/lib/muting';
@@ -74,7 +75,8 @@ export function SearchPage() {
   const follows = useFollows(pubkey);
   const interests = useInterests(pubkey);
   const muteList = useMuteList(pubkey);
-  const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined);
+  const [sort, setSort] = useState<SearchSort>('relevance');
+  const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined, sort);
   const hasQuery = query.trim().length > 0;
   // Also fetched on the landing page: its record count is what the tagline
   // quotes. The same query backs the health notice on the results page.
@@ -107,9 +109,12 @@ export function SearchPage() {
   // literal is rebuilt every render, which would otherwise re-rank on every
   // keystroke/unrelated state change instead of only when the data that
   // actually matters (results, follows, interests) changes.
+  // Follows/interests reorder results by relevance. An explicit Date/A-Z
+  // sort is a stronger instruction than that, so it is left alone; the
+  // "following" badges still come from the same context.
   const ranked = useMemo(
-    () => rankResults(allResults, personalization),
-    [allResults, personalization?.follows, personalization?.interests],
+    () => (sort === 'relevance' ? rankResults(allResults, personalization) : allResults),
+    [allResults, personalization?.follows, personalization?.interests, sort],
   );
 
   // A signed-in user's own NIP-51 mute list hides a muted author/hashtag/
@@ -244,27 +249,30 @@ export function SearchPage() {
               <>
                 <KindTabs filter={filter} onChange={setFilter} counts={counts} />
 
-                <p className="mb-3 text-sm text-muted-foreground">
-                  {filtered.length} of {results.length} result{results.length === 1 ? '' : 's'}
-                  {mutedCount > 0 && (
-                    <>
-                      {' · '}
-                      {mutedCount} muted
-                    </>
-                  )}
-                  {hiddenCount > 0 && (
-                    <>
-                      {' · '}
-                      <button
-                        type="button"
-                        onClick={safeSearch.toggle}
-                        className="underline-offset-2 hover:underline"
-                      >
-                        {hiddenCount} hidden by safe search
-                      </button>
-                    </>
-                  )}
-                </p>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {filtered.length} of {results.length} result{results.length === 1 ? '' : 's'}
+                    {mutedCount > 0 && (
+                      <>
+                        {' · '}
+                        {mutedCount} muted
+                      </>
+                    )}
+                    {hiddenCount > 0 && (
+                      <>
+                        {' · '}
+                        <button
+                          type="button"
+                          onClick={safeSearch.toggle}
+                          className="underline-offset-2 hover:underline"
+                        >
+                          {hiddenCount} hidden by safe search
+                        </button>
+                      </>
+                    )}
+                  </p>
+                  <SortControl sort={sort} onChange={setSort} />
+                </div>
 
                 {filtered.length === 0 ? (
                   <p className="max-w-xl text-sm text-foreground/80">

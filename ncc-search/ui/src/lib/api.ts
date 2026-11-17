@@ -8,6 +8,13 @@ export type ResultKind =
   | 'profile'
   | 'npack';
 
+/**
+ * Result orders GET /search accepts. `relevance` is the backend's FTS/bm25
+ * order; the others are the sort control's explicit choices. Live NIP-50 hits
+ * only take part in `relevance` -- see src/server.js.
+ */
+export type SearchSort = 'relevance' | 'newest' | 'oldest' | 'title' | 'title-desc';
+
 export interface SearchResult {
   pubkey: string;
   npub?: string | null;
@@ -20,6 +27,14 @@ export interface SearchResult {
   lastReachableAt?: number | null;
   /** Unix milliseconds when the local index row was last resolved or updated. */
   indexedAt?: number | null;
+  /**
+   * Unix milliseconds when the event behind this result was posted: NIP-23's
+   * `published_at` when the author set it, the event's `created_at`
+   * otherwise. Null for profiles and NCC-02/05 service rows (neither has a
+   * posting date), and for rows indexed before the backend recorded dates --
+   * `indexedAt` is the fallback those are labelled with.
+   */
+  postedAt?: number | null;
   // For ncc-service/nsite rows, the backend's own reachability check.
   // Always null for article/image/video: this backend never fetches media
   // bytes or re-renders article content, so it has no reachability claim to
@@ -121,12 +136,13 @@ const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE
 
 export async function search(
   query: string,
-  opts: { limit?: number; offset?: number; signal?: AbortSignal } = {},
+  opts: { limit?: number; offset?: number; sort?: SearchSort; signal?: AbortSignal } = {},
 ): Promise<SearchResponse> {
   const url = new URL('/search', API_BASE);
   url.searchParams.set('q', query);
   if (opts.limit) url.searchParams.set('limit', String(opts.limit));
   if (opts.offset) url.searchParams.set('offset', String(opts.offset));
+  if (opts.sort && opts.sort !== 'relevance') url.searchParams.set('sort', opts.sort);
 
   const res = await fetch(url, { signal: opts.signal });
   if (!res.ok) {

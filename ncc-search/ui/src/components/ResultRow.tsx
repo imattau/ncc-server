@@ -242,17 +242,35 @@ export function ResultRow({
             <StatusDot status={status} />
           </>
         )}
-        {result.indexedAt && (
+        {/* The event's own posting date when the backend recorded one; the
+            index time only as the fallback for rows that have no event date
+            (profiles, NCC services) or predate the column. Saying which one
+            is shown is the difference between "this is old" and "this was
+            indexed a while ago", which readers reasonably confuse. */}
+        {result.postedAt ? (
           <>
             <span className="text-muted-foreground" aria-hidden="true">·</span>
             <time
-              dateTime={new Date(result.indexedAt).toISOString()}
-              title={`Indexed ${new Date(result.indexedAt).toLocaleString()}`}
+              dateTime={new Date(result.postedAt).toISOString()}
+              title={`Posted ${new Date(result.postedAt).toLocaleString()}`}
               className="text-xs text-muted-foreground"
             >
-              indexed {new Date(result.indexedAt).toLocaleDateString()}
+              {new Date(result.postedAt).toLocaleDateString()}
             </time>
           </>
+        ) : (
+          result.indexedAt && (
+            <>
+              <span className="text-muted-foreground" aria-hidden="true">·</span>
+              <time
+                dateTime={new Date(result.indexedAt).toISOString()}
+                title={`Indexed ${new Date(result.indexedAt).toLocaleString()}`}
+                className="text-xs text-muted-foreground"
+              >
+                indexed {new Date(result.indexedAt).toLocaleDateString()}
+              </time>
+            </>
+          )
         )}
         {/* Only reachable with safe search off -- see SearchPage.tsx's
             `results` filter. Labels what the publisher tagged; this app

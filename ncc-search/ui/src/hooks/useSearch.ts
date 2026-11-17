@@ -1,12 +1,14 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 
-import { search } from '@/lib/api';
+import { search, type SearchSort } from '@/lib/api';
 
-export function useSearch(query: string, pageSize?: number) {
+export function useSearch(query: string, pageSize?: number, sort: SearchSort = 'relevance') {
   const trimmed = query.trim();
   return useInfiniteQuery({
-    queryKey: ['ncc-search', trimmed, pageSize ?? null],
-    queryFn: ({ pageParam, signal }) => search(trimmed, { signal, limit: pageSize, offset: pageParam }),
+    // The sort is part of the key, so changing it starts a fresh page 1
+    // instead of appending differently-ordered pages to the old ones.
+    queryKey: ['ncc-search', trimmed, pageSize ?? null, sort],
+    queryFn: ({ pageParam, signal }) => search(trimmed, { signal, limit: pageSize, offset: pageParam, sort }),
     initialPageParam: 0,
     // Each page's offset is just the count of rows fetched so far -- the
     // index's `rank` order is stable within a query, so this never skips
