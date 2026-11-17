@@ -36,6 +36,42 @@ test('GET /status returns aggregate index and crawler status', async () => {
   assert.equal(body.crawlers.articles.state, 'healthy');
 });
 
+// The split deployment has no in-process crawl monitor: health lives in the
+// crawler process and is fetched (src/api.js's statusSource).
+test('GET /status prefers a remote status source over an in-process monitor', async () => {
+  const store = {
+    ...fakeStore([]),
+    getStatus: () => ({ recordCount: 3, rowsByKind: {}, storage: {} }),
+  };
+  const app = createServer(store, null, {
+    crawlMonitor: { snapshot: () => ({ articles: { state: 'should-not-be-used' } }) },
+    statusSource: async () => ({
+      crawlers: { nsites: { state: 'degraded', connectedRelays: 1, incomplete: false } },
+      relayLearning: { enabled: true, learnedCount: 4 },
+    }),
+  });
+
+  const body = (await app.inject({ method: 'GET', url: '/status' })).json();
+  assert.equal(body.crawlers.nsites.state, 'degraded');
+  assert.equal(body.relayLearning.learnedCount, 4);
+  assert.equal(body.crawlersUnavailable, false);
+});
+
+test('GET /status still serves the index when the crawler process is unreachable', async () => {
+  const store = {
+    ...fakeStore([]),
+    getStatus: () => ({ recordCount: 3, rowsByKind: {}, storage: {} }),
+  };
+  const app = createServer(store, null, { statusSource: async () => null });
+
+  const res = await app.inject({ method: 'GET', url: '/status' });
+  const body = res.json();
+  assert.equal(res.statusCode, 200);
+  assert.equal(body.index.recordCount, 3);
+  assert.deepEqual(body.crawlers, {});
+  assert.equal(body.crawlersUnavailable, true);
+});
+
 test('GET /search appends live NIP-50 hits that are not already in the index', async () => {
   const store = fakeStore([{ pubkey: 'a', itemId: 'web', title: 'Indexed' }]);
   const nip50Adapter = {

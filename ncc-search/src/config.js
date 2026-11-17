@@ -27,6 +27,16 @@ export const config = {
   dbMaxBytes: Number(process.env.NCC_SEARCH_DB_MAX_BYTES || 0),
   httpHost: process.env.NCC_SEARCH_HTTP_HOST || '127.0.0.1',
   httpPort: Number(process.env.NCC_SEARCH_HTTP_PORT || 7780),
+  // The crawler process's private listener (src/internal.js): the API reads
+  // crawl health from it and forwards NIP-50 discoveries to it. Never
+  // published -- see compose.yaml, which gives the crawler container no
+  // `ports:` at all.
+  internalHost: process.env.NCC_SEARCH_INTERNAL_HOST || '127.0.0.1',
+  internalPort: Number(process.env.NCC_SEARCH_INTERNAL_PORT || 7781),
+  // Where the API process (src/api.js) finds that listener. Unset means the
+  // two entrypoints are running on the same host (systemd split, dev); the
+  // compose stack overrides it with the crawler service name.
+  crawlerUrl: process.env.NCC_SEARCH_CRAWLER_URL || `http://127.0.0.1:${Number(process.env.NCC_SEARCH_INTERNAL_PORT || 7781)}`,
   torSocks: process.env.NCC_SEARCH_TOR_SOCKS || 'socks5h://127.0.0.1:9050',
   trustedCAPubkeys: listEnv('NCC_SEARCH_TRUSTED_CA_PUBKEYS', []),
   tickIntervalMs: Number(process.env.NCC_SEARCH_TICK_MS || 15000),

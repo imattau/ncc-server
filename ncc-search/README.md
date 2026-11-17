@@ -7,9 +7,46 @@ pictures and videos, Nostr profiles (kind:0), and npack
 normative contract, and serves unified full-text search over the result.
 
 This is not a feature of `ncc-server` or the `ncc-sidecar`: it runs as its own
-process/service (`ncc-search.service`), reads from the same relay list, and
-is intended to sit behind Caddy on its own path, same pattern as every other
-service in this repo.
+process/service, reads from the same relay list, and is intended to sit behind
+Caddy on its own path, same pattern as every other service in this repo.
+
+## Two processes
+
+The backend is deliberately split into two processes (`ncc-search.service` and
+`ncc-search-crawler.service`; two containers off one image in `compose.yaml`):
+
+| | `src/index.js` — crawler | `src/api.js` — API |
+|---|---|---|
+| writes the index | yes, the only writer | never |
+| SQLite connection | read/write | `readonly: true` |
+| discovers/subscribes | every crawl adapter | none |
+| relay use | discovery + NIP-65 learning | NIP-50 live fan-out per search |
+| HTTP | `7781`, private (`src/internal.js`) | `7780`, public API |
+| periodic work | re-crawl TTLs, NIP-05, prune | none |
+
+They share one SQLite file over WAL: one writer, many readers, and a reader
+sees a committed transaction immediately. That is what keeps the work that can
+block a Node event loop — a cheerio parse of a 1 MB page, an FTS5 upsert plus
+its fsync, an LRU prune batch — off the request path, and it is why a `/search`
+stays fast while 20 crawl fetches are in flight. Either process restarts
+without dropping the other; while the crawler is down the API keeps serving the
+existing index and `/status` reports `crawlersUnavailable: true`.
+
+The two halves only talk over the crawler's private listener:
+
+- `GET /internal/status` — the in-memory crawl/relay health snapshot, which
+  only exists in the crawler process; the API fetches it (1 s timeout) for
+  `/status`.
+- `POST /internal/ingest` — how a NIP-50 live-search hit reaches the crawler.
+  The API does the relay query (read-only), then posts the raw event here, and
+  the crawler routes it through the same resolve/fetch/verify path its ambient
+  subscriptions use (`src/ingest.js`). Nothing the API sends can write a row
+  directly, so this endpoint needs no credentials.
+
+`NCC_SEARCH_CRAWLER_URL` tells the API where that listener is
+(`http://search-crawler:7781` in the compose stack, loopback otherwise). The
+API retries opening the index until the crawler has created it, so a cold
+start in either order is fine.
 
 ## Why it fetches sites instead of just indexing relay metadata
 
@@ -175,7 +212,9 @@ store.js  -- one `services` table/FTS5 index for both crawl adapters,
 server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
              rows always winning on a (pubkey, itemId) collision; add
              &live=false to skip the live fan-out), GET /services/:pubkey/:itemId,
-             GET /status (aggregate index size/counts and crawler health)
+             GET /status (aggregate index size/counts and crawler health).
+             Served by src/api.js only; the crawler (src/index.js) exposes
+             just the private health/ingest listener described above.
 ```
 
 ## Relay recovery and status
@@ -252,12 +291,13 @@ relay.
   event, which re-enters undici's internal close/fail dispatch and recurses
   until the stack overflows, taking the entire Node process down with it.
   Reproduced directly against both an unreachable port and a momentary error
-  from a real public relay (`wss://relay.damus.io`). `src/index.js` now
-  constructs the shared `SimplePool` with `websocketImplementation: WebSocket`
-  from the `ws` package (already a dependency the sidecar itself uses, for
-  the same reason) instead of the native implementation, which does not have
-  this bug. This matters for every relay this process ever connects to, not
-  just NCC/nsite discovery, since the pool is shared across all adapters --
+  from a real public relay (`wss://relay.damus.io`). `src/pool.js` now
+  constructs each process's shared `SimplePool` with
+  `websocketImplementation: WebSocket` from the `ws` package (already a
+  dependency the sidecar itself uses, for the same reason) instead of the
+  native implementation, which does not have this bug. This matters for
+  every relay either process connects to, not just NCC/nsite discovery,
+  since the pool is shared across all of that process's adapters --
   a single flaky relay in `NCC_SEARCH_RELAYS` would otherwise have been able
   to kill the whole indexer.
 - **Fixed: discovery never actually worked against a real relay, at all.**
@@ -349,11 +389,14 @@ on every startup for everyone else.
 cd ncc-search
 cp .env.example .env   # edit NCC_SEARCH_RELAYS etc.
 npm install
-npm run dev
+npm run dev:crawler    # src/index.js: discovers + indexes, private listener on :7781
+npm run dev            # src/api.js: read-only API on :7780
 ```
 
 `GET http://127.0.0.1:7780/search?q=wallet` once the crawler has indexed
-something.
+something. Start them in either order: the API retries until the crawler has
+created the database. (`npm start` runs only the API, matching the container
+image's default `CMD`; the crawler is `npm run start:crawler`.)
 
 ## UI
 

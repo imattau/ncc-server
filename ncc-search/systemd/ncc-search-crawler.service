@@ -1,0 +1,42 @@
+# Install as /etc/systemd/system/ncc-search-crawler.service.
+# Same hardening pattern as ncc-search.service, which is the API half of the
+# same pair (see ../README.md "Two processes").
+#
+# This is the only writer of /var/lib/ncc-search/ncc-search.db. It publishes
+# no port: NCC_SEARCH_INTERNAL_HOST/PORT below is a loopback listener the API
+# uses for crawl health and NIP-50 ingest forwarding (src/internal.js).
+
+[Unit]
+Description=NCC-native search crawler/indexer (ncc-search)
+Wants=network-online.target
+After=network-online.target tor.service
+
+[Service]
+Type=simple
+User=ncc-search
+Group=ncc-search
+WorkingDirectory=/opt/ncc-search
+EnvironmentFile=/etc/ncc-search/ncc-search.env
+ExecStart=/usr/bin/node /opt/ncc-search/src/index.js
+Restart=on-failure
+RestartSec=5
+
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ncc-search
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# Node's V8 runtime needs executable memory for JIT; do not enable
+# MemoryDenyWriteExecute for this service (same caveat as ncc-sidecar).
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

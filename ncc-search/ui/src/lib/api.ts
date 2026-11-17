@@ -108,6 +108,12 @@ export interface SearchStatus {
     storage: { databaseBytes: number; diskBytes: number; limitBytes: number | null; freeBytes: number | null };
   } | null;
   crawlers: Record<string, CrawlerStatus>;
+  /**
+   * True when the backend's crawler process could not be reached, so
+   * `crawlers` is empty because its health is unknown -- not because no
+   * crawlers are configured. The API keeps serving the index either way.
+   */
+  crawlersUnavailable?: boolean;
 }
 
 const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE

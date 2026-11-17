@@ -92,6 +92,14 @@ sidecar database, generated certificates, Npanel data, Tor data, and
 OpenSearch/Caddy named volumes. Keep these paths and volume names stable when
 upgrading. Do not run docker compose down -v on an installed server.
 
+The search backend is two containers off the `SEARCH_IMAGE` image:
+`search-crawler` (the only writer of the index, no published port) and
+`search` (the read-only API behind Caddy). They share `SEARCH_DATA_DIR` and
+communicate over a private listener on the Compose network; see
+`ncc-search/README.md`'s "Two processes". Restarting either one alone is safe,
+`make bundle-pull` and `bundle-up` handle both, and stopping the crawler leaves
+the API serving the existing index.
+
 The operator identity is stored at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), outside the
 container images. Keep an encrypted backup off the server; it is needed to

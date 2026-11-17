@@ -37,5 +37,10 @@ COPY --from=build /app/node_modules /app/node_modules
 COPY ncc-search/package.json ./
 COPY ncc-search/src ./src
 USER ${SEARCH_UID}:${SEARCH_GID}
-EXPOSE 7780
-CMD ["node", "src/index.js"]
+# Two entrypoints, one image (see ncc-search/README.md "Two processes"):
+#   src/api.js     read-only API: /search, /services, /status   <- default
+#   src/index.js   the crawler/indexer, single writer of the index
+# compose.yaml runs both as separate services off this image, overriding
+# CMD for the crawler.
+EXPOSE 7780 7781
+CMD ["node", "src/api.js"]

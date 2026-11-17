@@ -280,5 +280,5 @@ systemctl enable --now ncc-public-ip-reconcile.timer
 # Start the identity-independent services. The bootstrap then generates or
 # reuses the root-only host identity, initializes the sidecar, provisions the
 # service records, and starts the full stack.
-"${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web search search-ui
+"${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web search-crawler search search-ui
 bash "$PROJECT_DIR/scripts/bootstrap-compose-host.sh"
