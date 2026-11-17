@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pause, Play, Settings2, Trash2 } from 'lucide-react';
 
 import { useLocalCrawlStatus } from '@/hooks/useLocalCrawlStatus';
 import {
   clearLocalIndex,
   currentSettings,
+  getLocalBootError,
   pauseLocalCrawl,
   resumeLocalCrawl,
   updateLocalSettings,
@@ -45,11 +46,27 @@ const BUTTON =
 export function LocalIndexPanel({ className }: { className?: string }) {
   const status = useLocalCrawlStatus();
   const [open, setOpen] = useState(false);
+  const [stalled, setStalled] = useState(false);
+
+  // A worker that fails to boot never posts a status, so without this the
+  // panel would say "Starting…" forever with no explanation. The boot error
+  // is usually all a reader needs ("IndexedDB unavailable", a bad relay list,
+  // or a CSP block in the browser).
+  useEffect(() => {
+    if (status) return;
+    const timer = setTimeout(() => setStalled(true), 20_000);
+    return () => clearTimeout(timer);
+  }, [status]);
 
   if (!status) {
+    const bootError = getLocalBootError();
     return (
-      <p className={cn('text-xs text-muted-foreground', className)} role="status">
-        Starting the local index…
+      <p className={cn('text-xs', bootError || stalled ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground', className)} role="status">
+        {bootError
+          ? `The local index could not start: ${bootError}`
+          : stalled
+            ? 'The local index did not start. Reload the page to try again.'
+            : 'Starting the local index…'}
       </p>
     );
   }

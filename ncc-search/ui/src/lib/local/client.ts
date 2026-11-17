@@ -15,7 +15,7 @@ declare global {
   }
 }
 
-const START_TIMEOUT_MS = 15_000;
+const START_TIMEOUT_MS = 30_000;
 
 let worker: Worker | null = null;
 let bootError: string | null = null;
@@ -93,6 +93,11 @@ function computeStatusFromLocal(status: LocalCrawlStatus): SearchStatus {
 
 export function getLocalStatus(): LocalCrawlStatus | null {
   return latestStatus;
+}
+
+/** The worker's boot error, if it had one -- shown by the status panel. */
+export function getLocalBootError(): string | null {
+  return bootError;
 }
 
 export function subscribeLocalStatus(listener: (status: LocalCrawlStatus) => void): () => void {
