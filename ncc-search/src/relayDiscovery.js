@@ -1,6 +1,56 @@
 const CHECKPOINT_OVERLAP_SECONDS = 5 * 60;
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
+// How long one drain turn may spend running onEvent before yielding to the
+// event loop. Relay backfills (a kind:0 burst after a restart, for example)
+// arrive many events per turn; running them all inline starves every timer and
+// socket in the process, including the crawler's own /health listener, which
+// then times out and marks the container unhealthy while it is actually
+// indexing.
+const EVENT_BATCH_BUDGET_MS = 8;
+
+/**
+ * Run relay events in short batches, yielding between batches.
+ *
+ * Order is preserved per relay. A handler that throws is reported through
+ * `onError` and does not stop the remaining events, matching the previous
+ * inline behaviour.
+ *
+ * @param {(event: object) => void} handler
+ * @param {(error: unknown) => void} onError
+ * @param {number} [budgetMs]
+ */
+export function createEventBatch(handler, onError, budgetMs = EVENT_BATCH_BUDGET_MS) {
+  const queue = [];
+  let head = 0;
+  let draining = false;
+
+  function drain() {
+    const started = Date.now();
+    while (head < queue.length && Date.now() - started < budgetMs) {
+      const event = queue[head++];
+      try {
+        handler(event);
+      } catch (error) {
+        onError(error);
+      }
+    }
+    if (head < queue.length) {
+      setImmediate(drain);
+      return;
+    }
+    queue.length = 0;
+    head = 0;
+    draining = false;
+  }
+
+  return (event) => {
+    queue.push(event);
+    if (draining) return;
+    draining = true;
+    setImmediate(drain);
+  };
+}
 
 /** Keeps one relay subscription alive and resumes its bounded backfill after disconnects. */
 export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, { store, monitor, since: initialSince } = {}) {
@@ -8,6 +58,12 @@ export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, 
   let timer = null;
   let subscription = null;
   let failures = 0;
+  // One queue per subscription (not per connect), so a reconnect cannot
+  // reorder events that are still waiting to be processed.
+  const enqueueEvent = createEventBatch(onEvent, (error) => {
+    monitor?.processingFailed(source);
+    console.error(`[ncc-search] ${source} event handler failed:`, error);
+  });
 
   function connect() {
     if (stopped) return;
@@ -19,12 +75,7 @@ export function subscribeRelayWithBackoff(pool, relay, source, filter, onEvent, 
       subscription = pool.subscribeMany([relay], resumedFilter, {
         onevent(event) {
           monitor?.event(source, relay);
-          try {
-            onEvent(event);
-          } catch (error) {
-            monitor?.processingFailed(source);
-            console.error(`[ncc-search] ${source} event handler failed:`, error);
-          }
+          enqueueEvent(event);
         },
         oneose() {
           failures = 0;
