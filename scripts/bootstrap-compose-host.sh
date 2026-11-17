@@ -29,11 +29,33 @@ wait_healthy() {
     if [[ -n "$id" ]]; then
       state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id" 2>/dev/null || true)"
       [[ "$state" == healthy ]] && return 0
-      [[ "$state" == exited || "$state" == dead ]] && die "$service container stopped before becoming healthy"
+      # A crash loop or a container Docker has already given up on cannot
+      # recover within this wait. Print the state, exit code and last logs now
+      # instead of sleeping out the timeout and leaving no clue behind.
+      if [[ "$state" == restarting || "$state" == unhealthy || "$state" == exited || "$state" == dead ]]; then
+        describe_container_failure "$service" "$id" "$state"
+        die "$service entered '$state' before becoming healthy"
+      fi
     fi
     sleep 2
   done
+  if [[ -n "${id:-}" ]]; then
+    describe_container_failure "$service" "$id" "${state:-unknown}"
+  fi
   die "$service did not become healthy within ${timeout}s"
+}
+
+describe_container_failure() {
+  local service="$1" id="$2" state="$3"
+  {
+    echo "--- $service ($state) ---"
+    docker inspect --format \
+      'exit={{.State.ExitCode}} oom={{.State.OOMKilled}} restarts={{.RestartCount}} image={{.Config.Image}}' \
+      "$id" 2>/dev/null || true
+    docker inspect --format '{{if .State.Health}}{{json .State.Health}}{{end}}' "$id" 2>/dev/null || true
+    echo "--- $service logs (last 80 lines) ---"
+    docker logs --tail 80 "$id"
+  } 1>&2
 }
 
 api_initialized() {
