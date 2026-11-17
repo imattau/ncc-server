@@ -100,9 +100,13 @@ preview is built from the article event itself, in the browser:
   browser from the author's host with `referrerPolicy="no-referrer"` — nothing
   here is proxied through ncc-server.
 - A `note`/`nevent`/`naddr` reference becomes a quote card instead of a
-  shortened bech32 string: author, date, title (for long-form) and the opening
-  of the text, with "Open on njump" for the rest
-  ([`QuotedNote`](src/components/QuotedNote.tsx)).
+  shortened bech32 string: author, date, title (for long-form), the opening of
+  the text, and up to four of the note's images, with "Open on njump" for the
+  rest ([`QuotedNote`](src/components/QuotedNote.tsx)). Images come from
+  NIP-92 `imeta` attachments, the NIP-23 `image` tag, NIP-68/71 `url`/`imeta`
+  tags, or image URLs and `![…](…)` in the text; they are loaded by the
+  reader's browser from the author's host (`referrerPolicy="no-referrer"`,
+  `loading="lazy"`) and never proxied or resized by this app.
   [`useQuotedNotes`](src/hooks/useQuotedNotes.ts) fetches every referenced
   event for a preview in one batched `ids` filter (plus one exact coordinate
   per `naddr`) as soon as the dialog opens — still direct from relays to the
