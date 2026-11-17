@@ -40,6 +40,26 @@ const WORDMARK = (
   </span>
 );
 
+// A little personality for the landing page. The number comes from /status when
+// the page opens, so the line is honest rather than a static boast; if the
+// status call is slow or unavailable the tagline says so instead of inventing a
+// figure. One line is picked per page load, so it doesn't shuffle while the
+// count refreshes.
+const TAGLINES: Array<(count: string) => string> = [
+  (count) => `${count} records, zero tracking pixels, one mildly overworked crawler.`,
+  (count) => `Serving ${count} records. Still fewer than your open tabs.`,
+  (count) => `${count} records indexed by robots who never sleep. You're welcome.`,
+  (count) => `${count} records, a full-text index, and no opinion about your query.`,
+  (count) => `${count} records, hand-picked by a crawler with no hands.`,
+  (count) => `Serving ${count} records at the speed of Nostr. Your move.`,
+];
+
+function landingTagline(recordCount: number | null | undefined, seed: number): string {
+  if (recordCount == null) return 'Counting the index…';
+  if (recordCount === 0) return 'Zero records. Bold of you to search anyway.';
+  return TAGLINES[seed % TAGLINES.length](recordCount.toLocaleString());
+}
+
 type KindFilter = 'all' | 'ncc-service' | 'nsite' | 'article' | 'image' | 'video' | 'profile' | 'npack';
 
 function matchesFilter(result: SearchResult, filter: KindFilter) {
@@ -56,7 +76,10 @@ export function SearchPage() {
   const muteList = useMuteList(pubkey);
   const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined);
   const hasQuery = query.trim().length > 0;
-  const status = useSearchStatus(hasQuery);
+  // Also fetched on the landing page: its record count is what the tagline
+  // quotes. The same query backs the health notice on the results page.
+  const status = useSearchStatus(true);
+  const [taglineSeed] = useState(() => Math.floor(Math.random() * TAGLINES.length));
   const [filter, setFilter] = useState<KindFilter>('all');
   const safeSearch = useSafeSearch();
   const theme = useTheme();
@@ -152,8 +175,12 @@ export function SearchPage() {
           </span>
         </h1>
         <SearchBar defaultValue="" onSubmit={handleSubmit} size="hero" className="max-w-xl" autoFocus />
-        <p className="mt-6 max-w-sm text-center text-xs text-muted-foreground">
-          Searches NCC-02 service records and nsites discovered across configured Nostr relays.
+        <p className="mt-6 max-w-sm text-center text-sm text-muted-foreground">
+          {landingTagline(status.data?.index?.recordCount, taglineSeed)}
+        </p>
+        <p className="mt-2 max-w-sm text-center text-[11px] text-muted-foreground/80">
+          NCC-02 services, nsites, articles, media and profiles discovered across configured Nostr
+          relays.
           {pubkey &&
             ' Signed in: results are prioritized by who you follow and your interests, and anyone/anything on your mute list is hidden.'}
         </p>

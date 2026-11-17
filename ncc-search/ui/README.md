@@ -61,6 +61,16 @@ actually reads like a search engine result.
       rendered as Markdown in a dialog — see "Article previews" below. The
       results page itself loads no article bodies.
 
+## Landing tagline
+
+The landing page quotes the index's current `recordCount` from `/status` in a
+short, rotating tagline ("Serving 248,633 records. Still fewer than your open
+tabs."). One line is chosen per page load, so the count can refresh without the
+sentence changing underneath the reader; while `/status` is in flight the line
+says "Counting the index…", and if the count is genuinely zero it says so
+instead of inventing a number. The status query is the same one the results
+page's health notice uses, so it is cached and shared.
+
 ## Article previews
 
 An indexed `article` result carries a title, summary, cover and a
@@ -243,8 +253,9 @@ this app has no profile/post page of its own to link to instead),
 profile display names via Nostrify, and
 client-side image/video rendering + reachability probing (see above), safe
 search (see above), light/dark mode (see above), on-demand article previews
-rendered from the relay event (see above), and a memory-bounded LRU
-cache for resized images (see above).
+rendered from the relay event (see above), a landing-page tagline that quotes
+the live index size from `/status` and picks one of several lines per load
+(see above), and a memory-bounded LRU cache for resized images (see above).
 
 Three CSP gaps worth knowing if `index.html`'s policy is ever rewritten from
 scratch — each was caught live by something going silently blank with no
