@@ -158,22 +158,74 @@ services:
       start_period: 10s
     logging: *bounded-logs
 
+  # The search backend is two services off one image (see
+  # ncc-search/README.md "Two processes"):
+  #
+  #   search          read-only API (/search, /services, /status) -- the only
+  #                   one with a published port; src/api.js
+  #   search-crawler  discovery + fetch + index writes + prune; src/index.js
+  #
+  # They share the SQLite file over WAL: exactly one writer, many readers.
+  # Keeping them apart is what stops a page parse or an index commit from
+  # landing on a request's critical path.
   search:
     image: "${SEARCH_IMAGE:-ghcr.io/imattau/ncc-server-search:latest}"
+    command: ["node", "src/api.js"]
     user: "${SEARCH_UID}:${SEARCH_GID}"
     environment:
       # No Nostr identity of any kind -- this process only subscribes to
-      # relays (read) and serves its own SQLite/FTS5 index over plain HTTP.
-      # It never signs or publishes an event, unlike sidecar/relay/npanel/
-      # ditto-web, which all use the operator identity created by the
-      # first-start bootstrap. See container/search/Containerfile's
-      # comment and ncc-search/README.md.
+      # relays (read, for NIP-50 live search) and serves its own SQLite/FTS5
+      # index over plain HTTP. It never signs or publishes an event, unlike
+      # sidecar/relay/npanel/ditto-web, which all use the operator identity
+      # created by the first-start bootstrap. See container/search/
+      # Containerfile's comment and ncc-search/README.md.
       NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
-      NCC_SEARCH_LEARN_RELAYS: "${SEARCH_LEARN_RELAYS:-true}"
       NCC_SEARCH_CORS_ORIGIN: "${SEARCH_CORS_ORIGIN}"
+      # Displayed on /status only -- pruning is the crawler's job.
       NCC_SEARCH_DB_MAX_BYTES: "${SEARCH_DB_MAX_BYTES}"
+      NCC_SEARCH_CRAWLER_URL: "http://search-crawler:7781"
     ports:
       - "127.0.0.1:3230:7780"
+    volumes:
+      - "${SEARCH_DATA_DIR}:/data"
+    depends_on:
+      # Startup ordering only: the API retries until the crawler has created
+      # the database, so it does not need the crawler to be *healthy* first.
+      - search-crawler
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:7780/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging: *bounded-logs
+
+  search-crawler:
+    image: "${SEARCH_IMAGE:-ghcr.io/imattau/ncc-server-search:latest}"
+    command: ["node", "src/index.js"]
+    user: "${SEARCH_UID}:${SEARCH_GID}"
+    environment:
+      # Same read-only relay access as `search`, no published port: this is
+      # the single writer of /data/ncc-search.db.
+      NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
+      NCC_SEARCH_LEARN_RELAYS: "${SEARCH_LEARN_RELAYS:-true}"
+      NCC_SEARCH_DB_MAX_BYTES: "${SEARCH_DB_MAX_BYTES}"
+      # Private listener for the API (crawl health + NIP-50 ingest). Reachable
+      # on the compose network only -- no `ports:` below.
+      NCC_SEARCH_INTERNAL_HOST: "0.0.0.0"
+      NCC_SEARCH_INTERNAL_PORT: "7781"
     volumes:
       - "${SEARCH_DATA_DIR}:/data"
     restart: unless-stopped
@@ -189,7 +241,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:7780/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+        - "fetch('http://127.0.0.1:7781/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 20s
       timeout: 5s
       retries: 5

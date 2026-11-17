@@ -294,14 +294,19 @@ function SearchHealthNotice({ status }: { status: NonNullable<ReturnType<typeof 
   const availability = Object.values(status.crawlers).filter((crawler) =>
     crawler.incomplete ?? crawler.state === 'unavailable',
   );
+  // The crawler process itself being unreachable is the same signal as every
+  // source being incomplete: the index is still served, but it is no longer
+  // being refreshed and its freshness is unknown.
+  const crawlerUnreachable = status.crawlersUnavailable === true;
+  const incomplete = availability.length > 0 || crawlerUnreachable;
   const storage = status.index?.storage;
   const nearLimit = Boolean(storage?.limitBytes && storage.databaseBytes >= storage.limitBytes * 0.8);
-  if (availability.length === 0 && !nearLimit) return null;
+  if (!incomplete && !nearLimit) return null;
 
   return (
     <aside role="status" className="mb-4 max-w-2xl rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-      {availability.length > 0 ? 'Some search sources are reconnecting; results may be incomplete.' : null}
-      {nearLimit ? `${availability.length > 0 ? ' ' : ''}The search index is nearing its configured storage limit.` : null}
+      {incomplete ? 'Some search sources are reconnecting; results may be incomplete.' : null}
+      {nearLimit ? `${incomplete ? ' ' : ''}The search index is nearing its configured storage limit.` : null}
     </aside>
   );
 }

@@ -2,11 +2,15 @@
 # Mirrors the hardening pattern used for ncc-sidecar (see
 # systemd/ncc-sidecar.conf in the repo root): this is a plain unit, not a
 # drop-in, because ncc-search has no installer-generated base unit to extend.
+#
+# This unit is the API half of the split (see ../README.md "Two processes"):
+# read-only over the index, public routes only. The crawler/indexer half is
+# ncc-search-crawler.service and must be installed alongside it.
 
 [Unit]
-Description=NCC-native search indexer (ncc-search)
-Wants=network-online.target
-After=network-online.target tor.service
+Description=NCC-native search API (ncc-search)
+Wants=network-online.target ncc-search-crawler.service
+After=network-online.target tor.service ncc-search-crawler.service
 
 [Service]
 Type=simple
@@ -14,7 +18,7 @@ User=ncc-search
 Group=ncc-search
 WorkingDirectory=/opt/ncc-search
 EnvironmentFile=/etc/ncc-search/ncc-search.env
-ExecStart=/usr/bin/node /opt/ncc-search/src/index.js
+ExecStart=/usr/bin/node /opt/ncc-search/src/api.js
 Restart=on-failure
 RestartSec=5
 
@@ -22,6 +26,8 @@ UMask=0027
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
+# SQLite needs to write the WAL's shared-memory index (-shm) even on a
+# readonly connection, so this is the one directory the API has access to.
 ReadWritePaths=/var/lib/ncc-search
 PrivateTmp=true
 PrivateDevices=true

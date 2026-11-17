@@ -10,7 +10,9 @@ import cors from '@fastify/cors';
  * @param {ReturnType<typeof import('./store.js').openStore>} store
  * @param {import('./adapters/nip50.js').Nip50Adapter} [nip50Adapter] optional
  *   -- omit to run index-only, e.g. in tests or with NIP-50 disabled.
- * @param {{ corsOrigin?: string | boolean, crawlMonitor?: { snapshot: () => object } }} [options]
+ * @param {{ corsOrigin?: string | boolean, crawlMonitor?: { snapshot: () => object },
+ *           relayLearning?: { snapshot: () => object },
+ *           statusSource?: () => Promise<{ crawlers?: object, relayLearning?: object }|null> }} [options]
  *   `corsOrigin` defaults to `true` (reflect any request origin). This is a
  *   public, read-only, unauthenticated search API -- no cookies, no
  *   credentials -- so a permissive default is the same risk profile as a
@@ -20,6 +22,11 @@ import cors from '@fastify/cors';
  *   subdomain behind Caddy in production -- see ui/README.md) cannot call
  *   this endpoint from the browser; this was caught live while standing up
  *   the UI for the first time (`fetch` failing with no CORS headers set).
+ *   `statusSource` is how the split deployment supplies crawl/relay health:
+ *   those snapshots are in-memory state owned by the crawler process (see
+ *   src/index.js and src/internal.js), so the API fetches them instead of
+ *   reading them. `crawlMonitor`/`relayLearning` remain for embedded use and
+ *   tests, where both halves live in one process.
  */
 export function createServer(store, nip50Adapter = null, options = {}) {
   const app = Fastify({ logger: false });
@@ -27,13 +34,23 @@ export function createServer(store, nip50Adapter = null, options = {}) {
 
   app.get('/health', async () => ({ ok: true }));
 
-  app.get('/status', async () => ({
-    ok: true,
-    checkedAt: Date.now(),
-    index: store.getStatus?.() ?? null,
-    crawlers: options.crawlMonitor?.snapshot?.() ?? {},
-    relayLearning: options.relayLearning?.snapshot?.() ?? { enabled: false },
-  }));
+  app.get('/status', async () => {
+    const remote = options.statusSource ? await options.statusSource() : null;
+    const crawlers = remote?.crawlers ?? options.crawlMonitor?.snapshot?.() ?? {};
+    const relayLearning = remote?.relayLearning ?? options.relayLearning?.snapshot?.() ?? { enabled: false };
+    return {
+      ok: true,
+      checkedAt: Date.now(),
+      index: store.getStatus?.() ?? null,
+      crawlers,
+      relayLearning,
+      // Distinguish "no crawlers configured" from "crawler process not
+      // reachable right now" -- the UI's "results may be incomplete" notice
+      // keys off the per-source `incomplete` flag, which is unknown (not
+      // false) while the crawler is restarting.
+      crawlersUnavailable: Boolean(options.statusSource) && remote == null,
+    };
+  });
 
   app.get('/search', async (req, reply) => {
     const q = (req.query.q || '').trim();

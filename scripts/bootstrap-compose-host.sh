@@ -134,8 +134,8 @@ select_identity() {
 }
 
 echo 'Starting the identity-independent Compose services...'
-"${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web search search-ui
-for service in sidecar opensearch npanel ditto-web search search-ui; do
+"${COMPOSE[@]}" up -d tor sidecar opensearch npanel ditto-web search-crawler search search-ui
+for service in sidecar opensearch npanel ditto-web search-crawler search search-ui; do
   wait_healthy "$service"
 done
 
@@ -189,7 +189,7 @@ NCC_IDENTITY_FILE="$IDENTITY_FILE" python3 "$PROJECT_DIR/scripts/provision-compo
 # Compose re-reads .env here, including the operator pubkey saved above.
 "${COMPOSE[@]}" config >/dev/null
 "${COMPOSE[@]}" up -d
-for service in sidecar opensearch relay npanel ditto-web search search-ui caddy; do
+for service in sidecar opensearch relay npanel ditto-web search-crawler search search-ui caddy; do
   wait_healthy "$service"
 done
 

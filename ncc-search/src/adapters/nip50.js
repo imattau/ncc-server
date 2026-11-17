@@ -16,6 +16,7 @@
 
 import { Nip11Prober } from '../nip11.js';
 import { SERVICE_RECORD_KIND } from '../discovery.js';
+import { routeEventToCrawlers } from '../ingest.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from './nsite.js';
 import { KIND_ARTICLE_EVENT } from './article.js';
 import { MEDIA_KINDS, KIND_PICTURE } from './media.js';
@@ -38,8 +39,12 @@ export class Nip50Adapter {
    *   nsiteCrawler?: { ingestEvent(event: object): void },
    *   contentCrawler?: { ingestArticle(event: object): void, ingestMedia(event: object): void },
    * }} [crawlers]
-   *   Verified crawlers to hand matches to. Omit any to run this adapter in
-   *   a read-only/test mode where hits are returned but not ingested.
+   *   Where to hand matches for full resolve/fetch/verify (see ingest.js).
+   *   Omit any to run this adapter in a read-only/test mode where hits are
+   *   returned but not ingested. In src/api.js these are not the crawlers
+   *   themselves but forwarders that POST to the crawler process -- the API
+   *   holds no crawl state, and the routing this file applies is identical
+   *   either way.
    */
   constructor(pool, config, crawlers = {}) {
     this.pool = pool;
@@ -93,15 +98,10 @@ export class Nip50Adapter {
   }
 
   ingest(event) {
-    if (event.kind === SERVICE_RECORD_KIND) {
-      this.nccCrawler?.ingestEvent(event);
-    } else if (event.kind === KIND_ROOT_SITE || event.kind === KIND_NAMED_SITE) {
-      this.nsiteCrawler?.ingestEvent(event);
-    } else if (event.kind === KIND_ARTICLE_EVENT) {
-      this.contentCrawler?.ingestArticle(event);
-    } else if (MEDIA_KINDS.includes(event.kind)) {
-      this.contentCrawler?.ingestMedia(event);
-    }
+    // Same kind-to-adapter routing the crawler's internal ingest endpoint
+    // uses (see ingest.js) -- in this process the "crawlers" are either the
+    // real ones (embedded mode) or a forwarder that posts to the crawler.
+    routeEventToCrawlers(this, event);
   }
 }
 

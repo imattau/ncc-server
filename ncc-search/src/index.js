@@ -1,9 +1,18 @@
+// Crawler/indexer entrypoint: discovery, anchored resolution, fetch, extract,
+// store, prune, NIP-65 relay learning.
+//
+// This is the only writer of the index. It serves no public route: the API
+// (src/api.js) is a separate, read-only process over the same SQLite file
+// (WAL -- see README.md "Two processes"). What this process does expose is a
+// private listener (src/internal.js) carrying the two things that can only
+// live here: the in-memory crawl/relay health snapshot, and the ingest entry
+// point the API forwards NIP-50 live-search hits to.
+
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { SimplePool } from 'nostr-tools';
-import { WebSocket } from 'ws';
 import { config } from './config.js';
 import { openStore } from './store.js';
+import { createPool, closePool } from './pool.js';
 import { startCrawler } from './crawl.js';
 import { createRelayRegistry } from './relayDiscovery.js';
 import { startRelayLearning } from './relayLearning.js';
@@ -11,8 +20,7 @@ import { startNsiteCrawler } from './adapters/nsite-crawl.js';
 import { startContentCrawler } from './adapters/content-crawl.js';
 import { startProfileCrawler } from './adapters/profile-crawl.js';
 import { startNpackCrawler } from './adapters/npack-crawl.js';
-import { Nip50Adapter } from './adapters/nip50.js';
-import { createServer } from './server.js';
+import { createInternalServer } from './internal.js';
 import { createCrawlMonitor } from './crawlMonitor.js';
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
@@ -36,54 +44,36 @@ if (config.dbMaxBytes > 0) {
     }
   }, config.tickIntervalMs);
 }
+
 // One pool, shared by every adapter, so they reuse the same relay
-// connections instead of each opening its own.
-//
-// `websocketImplementation` is NOT cosmetic: nostr-tools' SimplePool
-// defaults to Node's native (undici-based) global `WebSocket`. That
-// implementation's `AbstractRelay.onerror` handler calls `this.ws.close()`
-// synchronously from inside the socket's own `error` event -- which, on a
-// failed/refused connection, re-enters undici's internal
-// failWebsocketConnection/closeWebSocketConnection dispatch and recurses
-// until the stack overflows, crashing the entire process. Reproduced this
-// directly (both against an unreachable port and against a momentary error
-// from a real public relay) while building the UI against this backend.
-// The `ws` package (already a dependency the sidecar itself uses for the
-// same reason) implements the same onopen/onmessage/onerror/onclose
-// interface without that reentrancy bug, so every relay connection this
-// process makes goes through it instead of the native implementation.
-const pool = new SimplePool({ websocketImplementation: WebSocket });
-// Lets nsite-crawl.js/content-crawl.js record which relay(s) actually
-// served a given event (see relayTracking.js) -- a redundancy signal: a
-// record seen on only one relay is one relay outage away from becoming
-// undiscoverable again, a record seen on several is not. `trackRelays`
-// isn't a constructor option (checked against nostr-tools' own source);
-// it's a plain field that must be set after construction.
-pool.trackRelays = true;
+// connections instead of each opening its own. See src/pool.js for why it
+// uses `ws` rather than Node's native WebSocket implementation.
+const pool = createPool();
 
 const nccCrawler = startCrawler(config, store, pool);
 const nsiteCrawler = config.enableNsite ? startNsiteCrawler(config, store, pool) : null;
 const contentCrawler = config.enableContent ? startContentCrawler(config, store, pool) : null;
 const profileCrawler = config.enableProfiles ? startProfileCrawler(config, store, pool) : null;
 const npackCrawler = config.enableNpack ? startNpackCrawler(config, store, pool) : null;
-const nip50Adapter = config.enableNip50
-  ? new Nip50Adapter(pool, config, { nccCrawler, nsiteCrawler, contentCrawler })
-  : null;
 const relayLearning = startRelayLearning(config, store, pool, config.relayRegistry);
 
-const app = createServer(store, nip50Adapter, { corsOrigin: config.corsOrigin, crawlMonitor, relayLearning });
+const internal = createInternalServer({
+  crawlMonitor,
+  relayLearning,
+  crawlers: { nccCrawler, nsiteCrawler, contentCrawler },
+});
 
-app
-  .listen({ host: config.httpHost, port: config.httpPort })
+internal
+  .listen({ host: config.internalHost, port: config.internalPort })
   .then(() => {
-    console.log(`ncc-search listening on http://${config.httpHost}:${config.httpPort}`);
+    console.log(`ncc-search crawler index: ${config.dbPath}`);
+    console.log(`ncc-search crawler internal API on http://${config.internalHost}:${config.internalPort} (not public)`);
     console.log(`ncc-search crawling relays: ${config.relays.join(', ')}`);
     console.log(`ncc-search NIP-65 relay learning: ${config.learnRelays ? 'enabled (3 authors, max 10 learned relays)' : 'disabled'}`);
     console.log(`ncc-search nsite adapter: ${config.enableNsite ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search article/media adapter: ${config.enableContent ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search profile adapter: ${config.enableProfiles ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search npack adapter: ${config.enableNpack ? 'enabled' : 'disabled'}`);
-    console.log(`ncc-search NIP-50 live search: ${config.enableNip50 ? 'enabled' : 'disabled'}`);
     console.log(
       config.dbMaxBytes > 0
         ? `ncc-search index size limit: ${config.dbMaxBytes} bytes (LRU-pruned)`
@@ -91,7 +81,7 @@ app
     );
   })
   .catch((err) => {
-    console.error('ncc-search failed to start:', err);
+    console.error('ncc-search crawler failed to start:', err);
     process.exit(1);
   });
 
@@ -103,8 +93,8 @@ function shutdown() {
   profileCrawler?.stop();
   npackCrawler?.stop();
   if (pruneTimer) clearInterval(pruneTimer);
-  pool.close(config.relayRegistry.allKnown());
-  app.close().finally(() => process.exit(0));
+  closePool(pool);
+  internal.close().finally(() => process.exit(0));
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

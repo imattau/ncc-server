@@ -6,8 +6,10 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "node src/api.js",
+    "start:crawler": "node src/index.js",
+    "dev": "node --watch src/api.js",
+    "dev:crawler": "node --watch src/index.js",
     "test": "node --test test/**/*.test.js"
   },
   "dependencies": {

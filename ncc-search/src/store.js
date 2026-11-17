@@ -28,26 +28,42 @@ export const KIND_NPACK = 'npack';
 
 /**
  * @param {string} dbPath
- * @param {{ maxBytes?: number }} [opts] - `maxBytes`: a disk-space ceiling
- *   enforced by {@link pruneToFit}; 0/omitted means unbounded (unchanged
- *   default behaviour).
+ * @param {{ maxBytes?: number, readonly?: boolean }} [opts] - `maxBytes`: a
+ *   disk-space ceiling enforced by {@link pruneToFit}; 0/omitted means
+ *   unbounded (unchanged default behaviour). `readonly`: open the index for
+ *   reading only, as the API process does (see src/api.js) -- the crawler
+ *   process is the single writer, so a reader must not create the schema,
+ *   migrate it, or VACUUM it out from under the writer. A readonly store
+ *   exposes only `search`, `getService` and `getStatus`.
  */
 export function openStore(dbPath, opts = {}) {
   const maxBytes = opts.maxBytes || 0;
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
+  const readonly = opts.readonly === true;
+  const db = new Database(dbPath, readonly ? { readonly: true, fileMustExist: true } : {});
+  if (readonly) {
+    // WAL readers never block the writer, but a read that loses a race with
+    // the crawler's checkpoint can still return SQLITE_BUSY: fail the request
+    // after a short wait instead of queueing HTTP behind it indefinitely.
+    db.pragma('busy_timeout = 2000');
+  } else {
+    db.pragma('journal_mode = WAL');
+  }
 
   // `auto_vacuum` only takes effect after a VACUUM rewrites the file, so
   // this one-time cost is paid only when a size limit is actually
   // configured -- not on every startup for everyone else. Without it,
   // pruneToFit()'s deletes would free internal SQLite pages without ever
   // shrinking the file on disk, making a "disk space limit" a lie.
-  if (maxBytes > 0 && db.pragma('auto_vacuum', { simple: true }) !== 2) {
+  if (!readonly && maxBytes > 0 && db.pragma('auto_vacuum', { simple: true }) !== 2) {
     db.pragma('auto_vacuum = INCREMENTAL');
     db.exec('VACUUM');
   }
 
-  db.exec(`
+  // Schema creation and the ad hoc migration below are writer-only (see
+  // this function's `readonly` note above); on a reader they would either
+  // fail outright or race the crawler's own writes.
+  if (!readonly) {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS services (
       pubkey TEXT NOT NULL,
       item_id TEXT NOT NULL,
@@ -155,12 +171,13 @@ export function openStore(dbPath, opts = {}) {
   // change this project has needed since its initial release, so there is
   // no migration runner yet; this ad hoc guard is deliberately small
   // rather than standing one up for a single column.
-  const hasSeenRelays = db
-    .prepare(`PRAGMA table_info(services)`)
-    .all()
-    .some((column) => column.name === 'seen_relays');
-  if (!hasSeenRelays) {
-    db.exec(`ALTER TABLE services ADD COLUMN seen_relays TEXT`);
+    const hasSeenRelays = db
+      .prepare(`PRAGMA table_info(services)`)
+      .all()
+      .some((column) => column.name === 'seen_relays');
+    if (!hasSeenRelays) {
+      db.exec(`ALTER TABLE services ADD COLUMN seen_relays TEXT`);
+    }
   }
 
   const upsertServiceStmt = db.prepare(`
@@ -635,6 +652,12 @@ export function openStore(dbPath, opts = {}) {
       db.pragma('incremental_vacuum');
     }
     return { prunedRows };
+  }
+
+  // A readonly store only ever serves reads -- exporting the write helpers
+  // would just move a SQLITE_READONLY failure further from its cause.
+  if (readonly) {
+    return { search, getService, getStatus };
   }
 
   return {
