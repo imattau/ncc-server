@@ -1,11 +1,14 @@
-import { Play } from 'lucide-react';
+import { useState } from 'react';
+import { BookOpenText, Play } from 'lucide-react';
 import type { ResultKind, SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useMediaProbe } from '@/hooks/useMediaProbe';
 import { useResizedImage } from '@/hooks/useResizedImage';
 import { useBlurhashPlaceholder } from '@/hooks/useBlurhashPlaceholder';
 import { nsiteHref, sanitizeHref } from '@/lib/sanitize';
+import { truncateIdentity } from '@/lib/identity';
 import { Snippet } from '@/components/Snippet';
+import { ArticlePreviewDialog } from '@/components/ArticlePreviewDialog';
 
 const KIND_LABEL: Record<ResultKind, string> = {
   'ncc-service': 'NCC service',
@@ -19,13 +22,6 @@ const KIND_LABEL: Record<ResultKind, string> = {
 };
 
 const MEDIA_KINDS = new Set<ResultKind>(['image', 'video']);
-
-// A full npub/hex pubkey (~63/64 chars) is too long for a one-line
-// breadcrumb -- noticed this rendering a demo result with no profile and no
-// nip05, where the full npub pushed everything else off-screen.
-function truncateIdentity(value: string) {
-  return value.length > 24 ? `${value.slice(0, 16)}…${value.slice(-6)}` : value;
-}
 
 // Deterministic from the pubkey, not loaded from anywhere -- real search
 // engines show a site favicon on this line; this is the equivalent for an
@@ -208,6 +204,10 @@ export function ResultRow({
   const title = result.title?.trim() || identity;
   const body = result.snippet || result.description || '';
   const status = useResultStatus(result);
+  // Deliberately per-row state: the dialog mounts closed and its article
+  // query stays disabled until this is true (see ArticlePreviewDialog), so
+  // rendering a page of results never fetches article bodies.
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const content = (
     <>
@@ -298,6 +298,26 @@ export function ResultRow({
         <p className="mt-1 text-sm leading-snug text-foreground/80">
           <Snippet text={body} />
         </p>
+      )}
+
+      {/* Articles have no external page to link a title to (a NIP-23 event's
+          home is a relay coordinate, not a URL), so the title stays plain
+          text and this is the row's one action: fetch the full event in the
+          browser and render it. Nothing is loaded until it is clicked. */}
+      {result.kind === 'article' && (
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          aria-haspopup="dialog"
+          className="mt-2 inline-flex items-center gap-1.5 rounded text-sm font-medium text-blue-700 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:text-blue-400"
+        >
+          <BookOpenText className="size-4" aria-hidden="true" />
+          Preview article
+        </button>
+      )}
+
+      {result.kind === 'article' && (
+        <ArticlePreviewDialog result={result} open={previewOpen} onClose={() => setPreviewOpen(false)} />
       )}
     </>
   );

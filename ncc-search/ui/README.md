@@ -56,6 +56,45 @@ actually reads like a search engine result.
       anything else in that pipeline fails, `ResultRow.tsx` falls back to
       the plain `<img src={mediaUrl}>` this project started with — the
       optimization is additive, never a requirement to view a result.
+    - For `article` results, the full NIP-23 body is fetched **from the
+      relays by the browser** when a reader clicks "Preview article", then
+      rendered as Markdown in a dialog — see "Article previews" below. The
+      results page itself loads no article bodies.
+
+## Article previews
+
+An indexed `article` result carries a title, summary, cover and a
+truncated plain-text snippet. That is enough to rank and label a result,
+but not enough to read one: the backend stores an FTS-friendly stripped
+copy and `/search` only returns the snippet, never the body. So the
+preview is built from the article event itself, in the browser:
+
+- The "Preview article" link on an article row opens
+  [`ArticlePreviewDialog`](src/components/ArticlePreviewDialog.tsx). Only
+  then does [`useArticleEvent`](src/hooks/useArticleEvent.ts) run its
+  `{ kinds: [30023], authors: [pubkey], '#d': [itemId] }` query against the
+  same relay list `useAuthor` uses. The query is `enabled: false` while
+  the dialog is closed, so rendering a results page never fires one relay
+  query per article row.
+- [`ArticleMarkdown`](src/components/ArticleMarkdown.tsx) renders it with
+  react-markdown + remark-gfm and **no raw-HTML plugin**, so author HTML is
+  always escaped rather than injected. URLs go through react-markdown's
+  own allowlist transform, plus one rewrite: `nostr:` references become
+  njump.me links, matching `Snippet.tsx`. Body images are fetched by the
+  reader's browser from the author's host with `referrerPolicy="no-referrer"`
+  — nothing here is proxied through ncc-server.
+- The Markdown renderer is code-split with `lazy()`: react-markdown and the
+  unified parser stack are ~50 kB gzipped, for a dialog most sessions never
+  open, so they are fetched on the first preview rather than on page load.
+- The dialog is a native `<dialog>` — a centered panel at `sm` and above,
+  and a full-height sheet below it, because long-form text doesn't fit
+  readably in a short card on a phone. Escape, backdrop click, background
+  inertness and focus restoration come from the element itself; the body
+  scroll lock is explicit because some mobile browsers still scroll the
+  page behind a modal.
+- If the relays don't return the event, the dialog keeps the indexed
+  title/summary/cover, shows the indexed excerpt, and offers "Try again"
+  and an "Open in njump" link built from the article's `naddr`.
 
 ## Resized-image cache: LRU, memory-bounded
 
@@ -203,7 +242,8 @@ this app has no profile/post page of its own to link to instead),
 `sanitizeHref`-gated result links/media src — see `src/lib/sanitize.ts`),
 profile display names via Nostrify, and
 client-side image/video rendering + reachability probing (see above), safe
-search (see above), light/dark mode (see above), and a memory-bounded LRU
+search (see above), light/dark mode (see above), on-demand article previews
+rendered from the relay event (see above), and a memory-bounded LRU
 cache for resized images (see above).
 
 Three CSP gaps worth knowing if `index.html`'s policy is ever rewritten from
