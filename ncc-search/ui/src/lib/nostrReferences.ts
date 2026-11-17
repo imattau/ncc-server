@@ -19,8 +19,17 @@ export const NOSTR_URI_EXACT_RE = new RegExp(`^${NOSTR_URI_SOURCE}$`, 'i');
 
 export type NostrReference =
   | { kind: 'profile'; uri: string; bech32: string; pubkey: string }
-  | { kind: 'event'; uri: string; bech32: string }
-  | { kind: 'address'; uri: string; bech32: string };
+  | { kind: 'event'; uri: string; bech32: string; id: string; key: string }
+  | {
+      kind: 'address';
+      uri: string;
+      bech32: string;
+      address: { kind: number; pubkey: string; identifier: string };
+      key: string;
+    };
+
+/** A reference to something that can be fetched and shown as a quote. */
+export type NoteReference = Extract<NostrReference, { kind: 'event' | 'address' }>;
 
 /**
  * Decode one `nostr:` URI. Returns null for anything that isn't a complete,
@@ -46,10 +55,19 @@ export function parseNostrReference(value: string | null | undefined): NostrRefe
     case 'nprofile':
       return { kind: 'profile', uri, bech32, pubkey: decoded.data.pubkey };
     case 'note':
+      return { kind: 'event', uri, bech32, id: decoded.data, key: `id:${decoded.data}` };
     case 'nevent':
-      return { kind: 'event', uri, bech32 };
-    case 'naddr':
-      return { kind: 'address', uri, bech32 };
+      return { kind: 'event', uri, bech32, id: decoded.data.id, key: `id:${decoded.data.id}` };
+    case 'naddr': {
+      const { kind, pubkey, identifier } = decoded.data;
+      return {
+        kind: 'address',
+        uri,
+        bech32,
+        address: { kind, pubkey, identifier },
+        key: `addr:${kind}:${pubkey}:${identifier}`,
+      };
+    }
     default:
       return null;
   }
@@ -66,4 +84,22 @@ export function profilePubkeysInContent(content: string): string[] {
     if (reference?.kind === 'profile') pubkeys.add(reference.pubkey);
   }
   return [...pubkeys];
+}
+
+/**
+ * Every note/article the body points at with `note`, `nevent` or `naddr`,
+ * deduplicated and in document order -- the set a preview fetches once so its
+ * quotes can render inline. Repeated references to the same event collapse to
+ * one entry; the renderer looks the event up by `key`.
+ */
+export function noteReferencesInContent(content: string): NoteReference[] {
+  const seen = new Set<string>();
+  const references: NoteReference[] = [];
+  for (const match of content.matchAll(NOSTR_URI_RE)) {
+    const reference = parseNostrReference(match[0]);
+    if (!reference || reference.kind === 'profile' || seen.has(reference.key)) continue;
+    seen.add(reference.key);
+    references.push(reference);
+  }
+  return references;
 }

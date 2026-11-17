@@ -3,8 +3,6 @@ import { useNostr } from '@nostrify/react';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
-import { profilePubkeysInContent } from '@/lib/nostrReferences';
-
 // Most relays cap the number of values in one filter, so a long article that
 // mentions fifty people is fetched in a few batches rather than one filter
 // some relays would truncate.
@@ -16,29 +14,33 @@ function stringField(value: unknown): string | null {
 }
 
 /**
- * Display names for the people a `nostr:` reference points at, so a preview
- * can show "@alice" instead of a 63-character bech32 blob.
+ * Display names for a set of pubkeys: the people a preview mentions and the
+ * authors of the notes it quotes, so the reader sees "@alice" and not a
+ * 63-character bech32 blob (or a hex key).
  *
  * Deliberately client-side, like the article fetch and the byline's author
- * lookup: the search backend is an index, and resolving a mention's current
- * kind:0 is something the reader's own browser can do without that being
- * proxied or cached anywhere. Failure is not an error state -- the mention
- * still renders, just with a shortened npub -- so a slow or unreachable relay
- * never costs the reader the article text.
+ * lookup: the search backend is an index, and resolving a current kind:0 is
+ * something the reader's own browser can do without that being proxied or
+ * cached anywhere. Failure is not an error state -- the mention still renders,
+ * just with a shortened npub -- so a slow or unreachable relay never costs the
+ * reader the article text.
  */
-export function useMentionProfiles(content: string) {
+export function useProfileNames(pubkeys: string[]) {
   const { nostr } = useNostr();
-  const pubkeys = useMemo(() => profilePubkeysInContent(content), [content]);
+  // The caller builds a fresh array each render; keying the query on the
+  // contents keeps it stable (React Query hashes keys structurally anyway,
+  // this just avoids rebuilding the batches needlessly).
+  const key = useMemo(() => [...new Set(pubkeys)].sort(), [pubkeys]);
 
   return useQuery<ReadonlyMap<string, string>>({
-    queryKey: ['nostr', 'mention-profiles', pubkeys],
-    enabled: pubkeys.length > 0,
+    queryKey: ['nostr', 'profile-names', key],
+    enabled: key.length > 0,
     staleTime: 5 * 60 * 1000,
     retry: 1,
     queryFn: async () => {
       const batches: string[][] = [];
-      for (let i = 0; i < pubkeys.length; i += AUTHORS_PER_QUERY) {
-        batches.push(pubkeys.slice(i, i + AUTHORS_PER_QUERY));
+      for (let i = 0; i < key.length; i += AUTHORS_PER_QUERY) {
+        batches.push(key.slice(i, i + AUTHORS_PER_QUERY));
       }
 
       const responses = await Promise.all(

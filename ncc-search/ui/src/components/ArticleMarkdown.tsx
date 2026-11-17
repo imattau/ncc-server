@@ -1,8 +1,12 @@
+import { type NostrEvent } from '@nostrify/nostrify';
 import { useMemo, type ReactNode } from 'react';
 import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { nip19 } from 'nostr-tools';
 
-import { useMentionProfiles } from '@/hooks/useMentionProfiles';
+import { QuotedNote } from '@/components/QuotedNote';
+import { useProfileNames } from '@/hooks/useProfileNames';
+import { useQuotedNotes } from '@/hooks/useQuotedNotes';
 import { truncateIdentity } from '@/lib/identity';
 import {
   NOSTR_URI_EXACT_RE,
@@ -10,6 +14,7 @@ import {
   NOSTR_URI_TEST_RE,
   type NostrReference,
   parseNostrReference,
+  profilePubkeysInContent,
 } from '@/lib/nostrReferences';
 import { sanitizeHref } from '@/lib/sanitize';
 
@@ -100,6 +105,18 @@ function flattenText(children: ReactNode): string {
   return '';
 }
 
+// A hex key from a relay is not guaranteed to be a valid pubkey; a bad one
+// costs the author's name, not the quote.
+function authorLabel(pubkey: string, names: ReadonlyMap<string, string>): string {
+  const name = names.get(pubkey);
+  if (name) return name;
+  try {
+    return truncateIdentity(nip19.npubEncode(pubkey));
+  } catch {
+    return truncateIdentity(pubkey);
+  }
+}
+
 function mentionLabel(reference: NostrReference, names: ReadonlyMap<string, string>): string {
   if (reference.kind === 'profile') {
     const name = names.get(reference.pubkey);
@@ -145,19 +162,58 @@ function NostrMention({
   );
 }
 
+type Notes = {
+  byKey: ReadonlyMap<string, NostrEvent>;
+  pending: boolean;
+};
+
 // Utility classes rather than a prose/typography plugin: this is the only
 // place in the app that renders arbitrary author formatting, and a handful of
 // explicit element styles is smaller and more predictable than a plugin's
 // global cascade.
-function createComponents(names: ReadonlyMap<string, string>): Components {
+function createComponents({ names, notes }: { names: ReadonlyMap<string, string>; notes: Notes }): Components {
   return {
     a: ({ href, children }) => {
       const reference = parseNostrReference(href);
       if (reference) {
+        // Profiles stay a mention: there is nothing useful to quote, and the
+        // name is the whole payload.
+        if (reference.kind === 'profile') {
+          return (
+            <NostrMention reference={reference} names={names}>
+              {children}
+            </NostrMention>
+          );
+        }
+
+        // The author wrote their own label for this link (e.g. `[last week's
+        // post](nostr:nevent…)`); the card would throw that wording away.
+        const label = flattenText(children).trim();
+        if (label.length > 0 && !label.toLowerCase().startsWith('nostr:')) {
+          return (
+            <NostrMention reference={reference} names={names}>
+              {children}
+            </NostrMention>
+          );
+        }
+
+        const event = notes.byKey.get(reference.key);
+        // Nothing came back and nothing is still coming: show the shortened
+        // reference rather than an empty card.
+        if (!event && !notes.pending) {
+          return (
+            <NostrMention reference={reference} names={names}>
+              {children}
+            </NostrMention>
+          );
+        }
+
         return (
-          <NostrMention reference={reference} names={names}>
-            {children}
-          </NostrMention>
+          <QuotedNote
+            reference={reference}
+            event={event}
+            author={event ? authorLabel(event.pubkey, names) : undefined}
+          />
         );
       }
       // A `nostr:` URL that matched the shape but did not decode is not a
@@ -231,11 +287,27 @@ function createComponents(names: ReadonlyMap<string, string>): Components {
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 export function ArticleMarkdown({ content }: { content: string }) {
-  const profiles = useMentionProfiles(content);
+  const mentionPubkeys = useMemo(() => profilePubkeysInContent(content), [content]);
+  const quotes = useQuotedNotes(content);
+  const quotedAuthors = useMemo(
+    () => [...new Set([...quotes.byKey.values()].map((event) => event.pubkey))],
+    [quotes.byKey],
+  );
+  // One kind:0 lookup for everyone the article names: the people it mentions
+  // and the authors of the notes it quotes.
+  const profilePubkeys = useMemo(
+    () => [...new Set([...mentionPubkeys, ...quotedAuthors])],
+    [mentionPubkeys, quotedAuthors],
+  );
+  const profiles = useProfileNames(profilePubkeys);
   const names = profiles.data ?? NO_NAMES;
-  // The components object closes over the resolved names, so it has to be
-  // rebuilt when (and only when) they arrive.
-  const components = useMemo(() => createComponents(names), [names]);
+  const notes = useMemo(
+    () => ({ byKey: quotes.byKey, pending: quotes.pending }),
+    [quotes.byKey, quotes.pending],
+  );
+  // The components object closes over the resolved names and quotes, so it
+  // has to be rebuilt when (and only when) they arrive.
+  const components = useMemo(() => createComponents({ names, notes }), [names, notes]);
 
   return (
     <div className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [overflow-wrap:anywhere]">

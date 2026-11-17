@@ -91,7 +91,7 @@ preview is built from the article event itself, in the browser:
   always escaped rather than injected. URLs go through react-markdown's
   own allowlist transform. A small remark plugin finds bare `nostr:` URIs in
   running text (skipping code spans and links that already have a label) and
-  [`useMentionProfiles`](src/hooks/useMentionProfiles.ts) resolves mentioned
+  [`useProfileNames`](src/hooks/useProfileNames.ts) resolves mentioned
   npubs/nprofiles to their kind:0 display name in the browser, so a mention
   reads "@zenjunk" rather than 63 characters of bech32. The link always points
   at njump.me — this app is a search index, not a Nostr client, so there is no
@@ -99,6 +99,19 @@ preview is built from the article event itself, in the browser:
   falls back to a shortened npub. Body images are fetched by the reader's
   browser from the author's host with `referrerPolicy="no-referrer"` — nothing
   here is proxied through ncc-server.
+- A `note`/`nevent`/`naddr` reference becomes a quote card instead of a
+  shortened bech32 string: author, date, title (for long-form) and the opening
+  of the text, with "Open on njump" for the rest
+  ([`QuotedNote`](src/components/QuotedNote.tsx)).
+  [`useQuotedNotes`](src/hooks/useQuotedNotes.ts) fetches every referenced
+  event for a preview in one batched `ids` filter (plus one exact coordinate
+  per `naddr`) as soon as the dialog opens — still direct from relays to the
+  reader's browser. Relay hints inside a reference are deliberately ignored:
+  an article must not be able to make every reader dial a host of its
+  choosing. A reference's own text is rendered as text, never re-parsed as
+  Markdown, so quotes cannot recurse; a link the author labelled themselves
+  keeps its label, and a note the configured relays do not return falls back
+  to the shortened reference.
 - The Markdown renderer is code-split with `lazy()`: react-markdown and the
   unified parser stack are ~50 kB gzipped, for a dialog most sessions never
   open, so they are fetched on the first preview rather than on page load.
