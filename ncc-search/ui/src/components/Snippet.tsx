@@ -85,7 +85,7 @@ export function Snippet({ text }: { text: string }) {
     <>
       {parts.map((part, i) =>
         i % 2 === 1 ? (
-          <mark key={i} className="rounded-sm bg-yellow-200 px-0.5 text-inherit dark:bg-yellow-500/40">
+          <mark key={i} className="rounded-sm bg-yellow-200 px-0.5 text-inherit [overflow-wrap:anywhere] dark:bg-yellow-500/40">
             {linkifyNostrUris(part, `m${i}`)}
           </mark>
         ) : (

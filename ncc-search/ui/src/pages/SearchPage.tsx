@@ -163,7 +163,7 @@ export function SearchPage() {
   // homepage -- not a hero banner, not a chat prompt.
   if (!hasQuery) {
     return (
-      <div className="relative flex min-h-dvh flex-col items-center px-4 pt-[18vh]">
+      <div className="relative flex min-h-dvh flex-col items-center px-4 pt-[18vh] [overflow-wrap:anywhere]">
         <div className="absolute top-4 right-4 flex items-center gap-3 sm:top-6 sm:right-8">
           <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
           <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
@@ -189,7 +189,7 @@ export function SearchPage() {
   }
 
   return (
-    <div className="min-h-dvh">
+    <div className="min-h-dvh [overflow-wrap:anywhere]">
       <header className="sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-border bg-background/95 px-3 py-3 backdrop-blur-sm sm:flex-nowrap sm:gap-6 sm:px-8">
         <button
           type="button"

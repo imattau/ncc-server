@@ -295,7 +295,7 @@ export function ResultRow({
       )}
 
       {body && (
-        <p className="mt-1 text-sm leading-snug text-foreground/80">
+        <p className="mt-1 text-sm leading-snug text-foreground/80 [overflow-wrap:anywhere]">
           <Snippet text={body} />
         </p>
       )}

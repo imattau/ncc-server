@@ -89,10 +89,16 @@ preview is built from the article event itself, in the browser:
 - [`ArticleMarkdown`](src/components/ArticleMarkdown.tsx) renders it with
   react-markdown + remark-gfm and **no raw-HTML plugin**, so author HTML is
   always escaped rather than injected. URLs go through react-markdown's
-  own allowlist transform, plus one rewrite: `nostr:` references become
-  njump.me links, matching `Snippet.tsx`. Body images are fetched by the
-  reader's browser from the author's host with `referrerPolicy="no-referrer"`
-  — nothing here is proxied through ncc-server.
+  own allowlist transform. A small remark plugin finds bare `nostr:` URIs in
+  running text (skipping code spans and links that already have a label) and
+  [`useMentionProfiles`](src/hooks/useMentionProfiles.ts) resolves mentioned
+  npubs/nprofiles to their kind:0 display name in the browser, so a mention
+  reads "@zenjunk" rather than 63 characters of bech32. The link always points
+  at njump.me — this app is a search index, not a Nostr client, so there is no
+  local profile or note page to open; if the name can't be loaded, the label
+  falls back to a shortened npub. Body images are fetched by the reader's
+  browser from the author's host with `referrerPolicy="no-referrer"` — nothing
+  here is proxied through ncc-server.
 - The Markdown renderer is code-split with `lazy()`: react-markdown and the
   unified parser stack are ~50 kB gzipped, for a dialog most sessions never
   open, so they are fetched on the first preview rather than on page load.
@@ -105,6 +111,13 @@ preview is built from the article event itself, in the browser:
   leaves a readable column. Escape, backdrop click, background inertness and
   focus restoration come from the element itself; the body scroll lock is
   explicit because some mobile browsers still scroll the page behind a modal.
+- Long unbroken tokens must never widen the page. Chrome/Android's
+  shrink-to-fit turns even a single overflowing word into a zoomed-out layout
+  that reads as "the desktop version" — the preview looked like a desktop
+  modal because one `nostr:npub…` in the article body was wider than the
+  phone. Result text, highlighted search terms and the Markdown body all use
+  `overflow-wrap: anywhere` (not `break-word`, which does not affect
+  min-content width, so a flex/full-width child can still overflow).
 - If the relays don't return the event, the dialog keeps the indexed
   title/summary/cover, shows the indexed excerpt, and offers "Try again"
   and an "Open in njump" link built from the article's `naddr`.
