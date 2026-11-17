@@ -43,6 +43,29 @@ To use the page inside Nostr Navigator, run the dev server and type
 `http://127.0.0.1:5174` in the address bar; the built-in signer shows its
 normal per-origin approval sheet.
 
+## Updating a published site
+
+Rebuild and publish again with the same site id:
+
+```bash
+cd ncc-search/ui && npm run build:nsite
+cd ../nsite-publisher && npm run dev   # or open the publisher nsite
+```
+
+Pick the new `dist-nsite`, sign, publish. There is no separate "update" step:
+the site is addressed by `(your npub, site id)`, so the new `kind:35128`
+manifest replaces the old one at the relays, and unchanged files are not
+re-uploaded because Blossom addresses them by their content hash. Only assets
+whose bytes changed get new hashes.
+
+A reader who already has the site open keeps the old assets until they reload;
+a reader opening it gets the new manifest within about a minute (the client
+resolves manifests with a short TTL). Their local search index survives the
+update, because the origin (`nsite://<npub>/<site id>`) has not changed.
+
+Changing the site id creates a *different* site: different origin, different
+browser storage, so the local index starts empty there.
+
 ## Notes
 
 - **Blossom servers must accept uploads from your key.** The defaults are
@@ -59,8 +82,10 @@ normal per-origin approval sheet.
 - Republishing after a rebuild is the same flow. Files that are already on a
   server are skipped (Blossom addresses are hashes), so only new assets upload,
   and a new manifest replaces the old one.
-- This page can itself be published as an nsite (choose its own `dist/`), so
-  later publishes need nothing running locally. Bootstrap it once from the dev
+- This page can itself be published as an nsite, so later publishes need
+  nothing running locally. Build it with `npm run build` in this folder and
+  choose `nsite-publisher/dist-nsite` in its own folder picker (site id
+  `nccsearch-pub` fits the 13-character limit). Bootstrap it once from the dev
   server.
 - The form fields are remembered in `localStorage`; the selected folder is not
   (a `File` is not serialisable), so each publish starts with choosing the

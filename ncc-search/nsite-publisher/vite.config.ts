@@ -15,7 +15,10 @@ export default defineConfig({
     port: 5174,
   },
   build: {
-    outDir: 'dist',
+    // Same name as the search UI's nsite build: when publishing this page
+    // itself, the folder to pick is `nsite-publisher/dist-nsite`, not a
+    // generically named `dist` that could be anything.
+    outDir: 'dist-nsite',
     emptyOutDir: true,
   },
 });

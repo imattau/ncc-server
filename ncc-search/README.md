@@ -61,7 +61,8 @@ It is deliberately not a mirror of this index: a browser cannot fetch arbitrary
 endpoints (CORS), so NCC anchors/locators are not resolved, nothing gets a
 reachability or attestation claim, NIP-05 is never verified, and nsite rows are
 searchable by their manifest title/description rather than the entry page's
-text. It also caps itself at 20k rows / 40 MB. See
+text. It also caps itself at a configurable size (40 MB and roughly 20k
+records by default, never more than half the browser's quota). See
 [`ui/README.md`'s nsite edition section](ui/README.md#nsite-edition-no-server)
 for the full list.
 

@@ -18,15 +18,37 @@ export const DEFAULT_RELAYS = [
   'wss://nos.lol',
 ];
 
+/**
+ * How much room the local index may take. Chosen in megabytes because that is
+ * the number a reader can reason about (and the one the browser evicts or
+ * complains about); the row cap is derived from it, since a row is roughly
+ * 1-2 KB of text between the stored copy and the search index. The default is
+ * the useful relay-native part of the deployed index -- the server spends most
+ * of its 250k rows on profiles.
+ */
+export const MAX_BYTES_OPTIONS = [
+  { bytes: 10 * 1024 * 1024, label: '10 MB' },
+  { bytes: 25 * 1024 * 1024, label: '25 MB' },
+  { bytes: 40 * 1024 * 1024, label: '40 MB' },
+  { bytes: 80 * 1024 * 1024, label: '80 MB' },
+  { bytes: 150 * 1024 * 1024, label: '150 MB' },
+] as const;
+
+const MIN_MAX_BYTES = 5 * 1024 * 1024;
+const MAX_MAX_BYTES = 250 * 1024 * 1024;
+/** Observed average: 7.7k rows of mixed content was ~9 MB of IndexedDB. */
+const BYTES_PER_ROW_ESTIMATE = 2 * 1024;
+const MAX_ROWS = 60_000;
+
+export function deriveMaxRows(maxBytes: number): number {
+  return Math.min(MAX_ROWS, Math.max(2_000, Math.round(maxBytes / BYTES_PER_ROW_ESTIMATE)));
+}
+
 export const DEFAULT_SETTINGS: LocalSettings = {
   relays: DEFAULT_RELAYS,
   depth: 4,
   includeProfiles: true,
-  // ~20k rows is roughly the useful relay-native part of the deployed index
-  // (which spends most of its 250k rows on profiles). The byte cap is the
-  // one that actually matters for a browser: it leaves room for the app and
-  // the origin's other storage under a typical quota.
-  maxRows: 20_000,
+  maxRows: deriveMaxRows(40 * 1024 * 1024),
   maxBytes: 40 * 1024 * 1024,
 };
 
@@ -61,12 +83,18 @@ export function parseRelayInput(input: string): string[] {
 export function normalizeSettings(input: Partial<LocalSettings> | null | undefined): LocalSettings {
   const relays = normalizeRelays(input?.relays);
   const depth = Number(input?.depth);
+  const bytes = Number(input?.maxBytes);
+  const maxBytes = Number.isFinite(bytes)
+    ? Math.min(MAX_MAX_BYTES, Math.max(MIN_MAX_BYTES, Math.round(bytes)))
+    : DEFAULT_SETTINGS.maxBytes;
   return {
     relays: relays.length ? relays : DEFAULT_RELAYS,
     depth: Number.isFinite(depth) ? Math.min(10, Math.max(1, Math.round(depth))) : DEFAULT_SETTINGS.depth,
     includeProfiles: input?.includeProfiles !== false,
-    maxRows: DEFAULT_SETTINGS.maxRows,
-    maxBytes: DEFAULT_SETTINGS.maxBytes,
+    // Always derived rather than trusted: a stored row cap from an older
+    // build must not disagree with the size the reader just chose.
+    maxRows: deriveMaxRows(maxBytes),
+    maxBytes,
   };
 }
 

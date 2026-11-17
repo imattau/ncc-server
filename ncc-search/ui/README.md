@@ -109,11 +109,16 @@ What it can index, and what it deliberately cannot:
   rows have no artifact download link (that is a separate event the backend
   joins in). The panel on the page says "relay data only — endpoints are not
   fetched or verified here" for the same reason.
-- Caps keep it a browser tool, not a mirror: 20,000 rows / 40 MB, 4 pages per
-  kind per relay by default, bodies truncated to 4 KB. Oldest rows (by posting
-  date, then first-seen) are pruned first. Relays, depth and whether profiles
-  are indexed are editable in the panel; the relay list also drives the page's
-  profile/preview lookups, so there is only one list to manage.
+- Caps keep it a browser tool, not a mirror: 4 pages per kind per relay by
+  default and bodies truncated to 4 KB, with an **index size limit** chosen in
+  the panel (10, 25, 40 (default), 80 or 150 MB). The record cap is derived from
+  that (roughly 2 KB per record) rather than being a second knob that could
+  contradict it, and the effective limit is never more than half the browser's
+  own quota. Oldest rows (by posting date, then first-seen) are pruned first,
+  so a smaller limit is a rolling window over the newest content. Relays, depth
+  and whether profiles are indexed are editable in the same panel; the relay
+  list also drives the page's profile/preview lookups, so there is only one
+  list to manage.
 - Relevance is MiniSearch's scoring, not SQLite's bm25. It ranks the same kinds
   of matches similarly, but it is not the same number the backend computes.
 

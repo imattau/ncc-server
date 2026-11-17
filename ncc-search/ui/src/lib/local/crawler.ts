@@ -78,6 +78,7 @@ class Crawler {
   private lastSuccessfulSyncAt: number | null = null;
   private lastFailureAt: number | null = null;
   private bytesStored: number | null = null;
+  private quotaBytes: number | null = null;
   private bytesCheckedAt = 0;
 
   private readonly relayStatuses = new Map<string, RelayStatus>();
@@ -195,7 +196,16 @@ class Crawler {
     this.runId += 1;
     this.closeConnections();
     this.paused = false;
-    this.startCrawl();
+    // A smaller limit has to take effect now, not on the next unrelated
+    // write: lowering the cap while the page is idle should prune. Flushing
+    // first means the rows this session just crawled are written (and then
+    // counted) before anything is judged over the limit.
+    this.bytesCheckedAt = 0;
+    void (async () => {
+      await this.flush();
+      await this.pruneIfNeeded();
+      this.startCrawl();
+    })();
   }
 
   search(message: Extract<LocalClientMessage, { type: 'search' }>): void {
@@ -383,9 +393,20 @@ class Crawler {
     return runId !== this.runId;
   }
 
+  /**
+   * The configured limit, never more than half the browser's own quota. A
+   * reader can pick 150 MB, but a device that only grants 200 MB must not be
+   * filled to the point where the app's own assets and other storage are at
+   * risk.
+   */
+  private effectiveMaxBytes(): number {
+    const quotaLimit = this.quotaBytes != null ? Math.floor(this.quotaBytes / 2) : Number.POSITIVE_INFINITY;
+    return Math.min(this.settings.maxBytes, quotaLimit);
+  }
+
   private overCap(): boolean {
     if (this.rows.size >= this.settings.maxRows) return true;
-    return this.bytesStored != null && this.bytesStored >= this.settings.maxBytes;
+    return this.bytesStored != null && this.bytesStored >= this.effectiveMaxBytes();
   }
 
   private async crawl(runId: number): Promise<void> {
@@ -642,7 +663,7 @@ class Crawler {
   private async pruneIfNeeded(): Promise<void> {
     await this.refreshBytes();
     const overRows = this.rows.size > this.settings.maxRows;
-    const overBytes = this.bytesStored != null && this.bytesStored > this.settings.maxBytes;
+    const overBytes = this.bytesStored != null && this.bytesStored > this.effectiveMaxBytes();
     if (!overRows && !overBytes) return;
 
     const candidates = [...this.rows.values()].sort((a, b) => {
@@ -683,6 +704,7 @@ class Crawler {
     try {
       const estimate = await navigator.storage?.estimate?.();
       if (estimate?.usage != null) this.bytesStored = estimate.usage;
+      if (estimate?.quota != null) this.quotaBytes = estimate.quota;
     } catch {
       // Not available in every context; the row cap still applies.
     }

@@ -10,7 +10,7 @@ import {
   resumeLocalCrawl,
   updateLocalSettings,
 } from '@/lib/local/client';
-import { DEFAULT_SETTINGS, parseRelayInput } from '@/lib/local/settings';
+import { DEFAULT_SETTINGS, MAX_BYTES_OPTIONS, deriveMaxRows, parseRelayInput } from '@/lib/local/settings';
 import type { LocalSettings } from '@/lib/local/types';
 import { cn } from '@/lib/utils';
 
@@ -207,6 +207,25 @@ function LocalIndexSettings({ onClose }: { onClose: () => void }) {
           </select>
         </label>
         <label className="flex items-center gap-1.5 text-[11px]">
+          <span className="text-foreground">Index limit</span>
+          <select
+            value={settings.maxBytes}
+            onChange={(event) => setSettings({ ...settings, maxBytes: Number(event.target.value) })}
+            className="rounded border border-border bg-background px-1 py-0.5 text-[11px] text-foreground"
+          >
+            {MAX_BYTES_OPTIONS.map(({ bytes, label }) => (
+              <option key={bytes} value={bytes}>
+                {label}
+              </option>
+            ))}
+            {!MAX_BYTES_OPTIONS.some((option) => option.bytes === settings.maxBytes) && (
+              <option value={settings.maxBytes}>
+                {Math.round(settings.maxBytes / (1024 * 1024))} MB
+              </option>
+            )}
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-[11px]">
           <input
             type="checkbox"
             checked={settings.includeProfiles}
@@ -215,6 +234,12 @@ function LocalIndexSettings({ onClose }: { onClose: () => void }) {
           <span className="text-foreground">Index profiles too</span>
         </label>
       </div>
+
+      <p className="text-[11px] text-muted-foreground/80">
+        Up to about {deriveMaxRows(settings.maxBytes).toLocaleString()} records; the oldest are pruned
+        first when the limit is reached. Everything stays in this browser, and the limit is never more
+        than half the storage the browser is willing to give this site.
+      </p>
 
       {error && <p className="text-[11px] text-red-600 dark:text-red-400">{error}</p>}
 
