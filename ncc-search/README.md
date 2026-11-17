@@ -279,6 +279,12 @@ write itself is guarded the same way -- so a date a crawl stored in the
 meantime is never overwritten. Rows a relay cannot resolve stay NULL and are
 skipped until the next run; the UI labels those with their index time instead.
 
+It can run while the crawler is writing: each author's dates go in as one
+transaction, and the writer connection waits up to ten seconds for a busy
+database rather than failing at the first collision. If it does stop, every
+page already written is kept and re-running continues from the rows still
+missing a date.
+
 ## Relay recovery and status
 
 Discovery subscribes to each configured relay independently. If a subscription

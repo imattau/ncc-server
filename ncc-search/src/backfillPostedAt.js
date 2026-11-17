@@ -16,8 +16,10 @@
 // NULL, and the write is itself `... AND posted_at IS NULL`, so a date a crawl
 // has stored in the meantime is never overwritten. Rows a relay cannot resolve
 // stay NULL and are skipped once the cursor passes them; re-running retries
-// them. SQLite's WAL mode lets it write while the crawler runs -- keep the
-// process short enough that it isn't competing for the database all day.
+// them. SQLite's WAL mode lets it write while the crawler runs: the store's
+// writer connection waits on a busy database (and the dates for one author are
+// written in a single transaction) instead of failing with "database is
+// locked" the first time the crawler happens to be committing a page.
 
 import { config } from './config.js';
 import { openStore } from './store.js';
@@ -115,6 +117,39 @@ async function mapLimit(items, limit, worker) {
   await Promise.all(runners);
 }
 
+const WRITE_ATTEMPTS = 4;
+
+function isBusy(error) {
+  return error?.code === 'SQLITE_BUSY' || error?.code === 'SQLITE_LOCKED';
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Writes one author's dates in a single transaction, waiting out the crawler.
+ *
+ * store.js sets a ten-second busy timeout on its writer connection, which
+ * covers every ordinary collision. This retry is for the case that timeout is
+ * not enough -- a crawl page committing rows, a VACUUM, a checkpoint -- where
+ * the alternative would be aborting a run that has already made thousands of
+ * relay requests. Batches are idempotent (`... AND posted_at IS NULL`), so
+ * retrying the same entries is always safe.
+ */
+async function writeDates(store, entries) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return store.setPostedAtBatch(entries);
+    } catch (error) {
+      if (!isBusy(error) || attempt >= WRITE_ATTEMPTS) throw error;
+      console.warn(
+        `[backfill] database busy (${error.code}), retrying ${entries.length} row(s) ` +
+          `(attempt ${attempt}/${WRITE_ATTEMPTS})`,
+      );
+      await sleep(500 * 2 ** (attempt - 1));
+    }
+  }
+}
+
 const options = parseArgs(process.argv.slice(2));
 const store = openStore(config.dbPath);
 if (typeof store.countMissingPostedAt !== 'function') {
@@ -139,6 +174,7 @@ let filled = 0;
 let unresolved = 0;
 let queries = 0;
 let pages = 0;
+let failure = null;
 
 try {
   while (pages < options.maxPages) {
@@ -193,16 +229,18 @@ try {
         });
       }
 
+      const writes = [];
       for (const row of authorRows) {
         const hit = dates.get(`${row.kind}\u0000${row.itemId}`);
         if (!hit || hit.postedAt == null) {
           unresolved += 1;
           continue;
         }
-        if (!options.dryRun) store.setPostedAt(pubkey, row.itemId, hit.postedAt);
+        writes.push({ pubkey, itemId: row.itemId, postedAt: hit.postedAt });
         filled += 1;
         pageFilled += 1;
       }
+      if (!options.dryRun && writes.length > 0) await writeDates(store, writes);
     });
 
     console.log(
@@ -210,9 +248,23 @@ try {
         `unresolved ${unresolved}, ${queries} relay request(s) (this page: ${pageFilled})`,
     );
   }
+} catch (error) {
+  failure = error;
 } finally {
   closePool(pool);
   store.db.close();
+}
+
+if (failure) {
+  // A raw stack from better-sqlite3 says "database is locked" and nothing
+  // about what to do next. Everything committed by earlier pages is already
+  // in the index, and the query is idempotent, so the recovery is a re-run.
+  console.error(
+    `[backfill] stopped after ${pages} page(s): ${failure.message}` +
+      (failure.code ? ` (${failure.code})` : ''),
+  );
+  console.error('[backfill] dates written so far are kept; re-run to continue where this stopped.');
+  process.exit(1);
 }
 
 console.log(

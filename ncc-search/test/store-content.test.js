@@ -305,6 +305,21 @@ test('backfill helpers page undated content rows and never overwrite a stored da
     assert.equal(store.setPostedAt('a'.repeat(64), 'early', 1_400_000_000), 0, 'an already-dated row is left alone');
     assert.equal(store.getService('a'.repeat(64), 'early').posted_at, 1_500_000_000);
     assert.equal(store.countMissingPostedAt(), 1);
+
+    // The backfill writes one author's dates as a single transaction; it must
+    // apply the same guard per row, and an already-dated row inside a batch
+    // must not be overwritten.
+    const changed = store.setPostedAtBatch([
+      { pubkey: 'b'.repeat(64), itemId: 'late', postedAt: 1_600_000_000 },
+      { pubkey: 'a'.repeat(64), itemId: 'early', postedAt: 1_300_000_000 },
+      { pubkey: 'c'.repeat(64), itemId: 'dated', postedAt: 1_200_000_000 },
+    ]);
+    assert.equal(changed, 1, 'only the still-undated row changes');
+    assert.equal(store.getService('b'.repeat(64), 'late').posted_at, 1_600_000_000);
+    assert.equal(store.getService('a'.repeat(64), 'early').posted_at, 1_500_000_000);
+    assert.equal(store.getService('c'.repeat(64), 'dated').posted_at, 1_700_000_000);
+    assert.equal(store.setPostedAtBatch([]), 0, 'an empty batch is a no-op, not a transaction');
+    assert.equal(store.countMissingPostedAt(), 0);
   } finally {
     cleanup();
   }

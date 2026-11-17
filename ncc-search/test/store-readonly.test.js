@@ -71,3 +71,27 @@ test('opening a readonly store fails when the crawler has not created the index 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// WAL still permits only one writer at a time. src/backfillPostedAt.js is a
+// second writer next to a live crawler, and without a busy handler its first
+// write that lost that race failed immediately with SQLITE_BUSY ("database is
+// locked") instead of waiting for the crawler's transaction to commit.
+test('both the writer and the reader wait on a busy database instead of failing at once', () => {
+  const dir = freshDir();
+  try {
+    const path = join(dir, 'test.db');
+    const writer = writerWithArticle(path);
+
+    assert.ok(
+      writer.db.pragma('busy_timeout', { simple: true }) >= 5_000,
+      'a second writer (the backfill) must wait for the crawler, not abort',
+    );
+    assert.equal(writer.db.pragma('journal_mode', { simple: true }), 'wal');
+    // The reader's own short timeout is a property of its connection, which a
+    // readonly store deliberately does not expose; it is covered by opening
+    // one here and checking that a live reader sees the writer's rows.
+    assert.equal(openStore(path, { readonly: true }).getStatus().recordCount, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

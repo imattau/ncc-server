@@ -27,6 +27,14 @@ export const KIND_PROFILE = 'profile';
 export const KIND_NPACK = 'npack';
 
 /**
+ * How long a writer waits for another connection's transaction to commit
+ * before SQLITE_BUSY. Ten seconds is far longer than any single write the
+ * crawler does; if it is ever hit, something is genuinely stuck and failing
+ * is better than blocking the caller forever.
+ */
+const WRITER_BUSY_TIMEOUT_MS = 10_000;
+
+/**
  * @param {string} dbPath
  * @param {{ maxBytes?: number, readonly?: boolean }} [opts] - `maxBytes`: a
  *   disk-space ceiling enforced by {@link pruneToFit}; 0/omitted means
@@ -47,6 +55,13 @@ export function openStore(dbPath, opts = {}) {
     db.pragma('busy_timeout = 2000');
   } else {
     db.pragma('journal_mode = WAL');
+    // WAL allows many readers but still only one writer at a time. The
+    // crawler is normally the only writer, so this only matters when a
+    // maintenance script (src/backfillPostedAt.js) opens its own connection
+    // against a live index: without a busy handler the loser of that race
+    // fails immediately with SQLITE_BUSY instead of waiting for the other
+    // transaction to commit.
+    db.pragma(`busy_timeout = ${WRITER_BUSY_TIMEOUT_MS}`);
   }
 
   // `auto_vacuum` only takes effect after a VACUUM rewrites the file, so
@@ -585,6 +600,16 @@ export function openStore(dbPath, opts = {}) {
   const setPostedAtStmt = db.prepare(
     `UPDATE services SET posted_at = ? WHERE pubkey = ? AND item_id = ? AND posted_at IS NULL`,
   );
+  // One transaction per author rather than one per row: the backfill is a
+  // second writer next to a live crawler, and every extra lock acquisition is
+  // another chance to wait on (or, without a busy handler, lose to) it.
+  const setPostedAtBatchTxn = db.transaction((entries) => {
+    let changed = 0;
+    for (const entry of entries) {
+      changed += setPostedAtStmt.run(entry.postedAt, entry.pubkey, entry.itemId).changes;
+    }
+    return changed;
+  });
 
   /**
    * One page of rows still missing a posting date, ordered by primary key.
@@ -606,6 +631,17 @@ export function openStore(dbPath, opts = {}) {
   /** @returns {number} rows changed (0 when the row already had a date) */
   function setPostedAt(pubkey, itemId, postedAt) {
     return setPostedAtStmt.run(postedAt, pubkey, itemId).changes;
+  }
+
+  /**
+   * Same write, many rows, one transaction. The backfill only needs this; a
+   * row that already has a date is still skipped, so a crawl that resolved the
+   * same row in the meantime wins either way.
+   * @param {Array<{ pubkey: string, itemId: string, postedAt: number }>} entries
+   * @returns {number} rows changed
+   */
+  function setPostedAtBatch(entries) {
+    return entries.length === 0 ? 0 : setPostedAtBatchTxn(entries);
   }
 
   function countMissingPostedAt() {
@@ -796,6 +832,7 @@ export function openStore(dbPath, opts = {}) {
     pruneToFit,
     listMissingPostedAt,
     setPostedAt,
+    setPostedAtBatch,
     countMissingPostedAt,
   };
 }
