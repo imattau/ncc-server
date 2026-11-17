@@ -437,15 +437,8 @@ export function openStore(dbPath, opts = {}) {
   );
 
   function search(query, limit = 20, offset = 0) {
-    // The API accepts natural-language text, not FTS5 syntax. Passing raw
-    // input through makes ordinary addresses and dotted names (for example
-    // `user@host` and `zap.stream`) syntax errors, while strings such as
-    // `title:foo` can be interpreted as column filters. Keep Unicode
-    // letters, numbers and underscores as terms, quote each one, and AND
-    // them together so punctuation becomes a harmless token boundary.
-    const terms = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
-    if (terms.length === 0) return [];
-    const ftsQuery = terms.map((term) => `"${term}"`).join(' AND ');
+    const matchQuery = buildMatchQuery(query);
+    if (!matchQuery) return [];
     const rows = db
       .prepare(
         `WITH matches AS MATERIALIZED (
@@ -459,7 +452,28 @@ export function openStore(dbPath, opts = {}) {
                   s.blurhash, s.thumbhash, s.hashtags,
                   s.content_warning AS "contentWarning",
                   snippet(services_fts, 5, '[', ']', '…', 12) AS snippet,
-                  bm25(services_fts, 0, 0, 30.0, 8.0, 5.0, 1.0) AS rank
+                  bm25(services_fts, 0, 0, 30.0, 8.0, 5.0, 1.0) AS rank,
+                  -- A small tiebreak, not a reranking signal: subtracted
+                  -- from the rank column (where more negative is better,
+                  -- per bm25() above) so it only nudges ordering among otherwise-close
+                  -- text matches, never overrides a clearly stronger one.
+                  -- Three cheap, already-indexed proxies for "this result is
+                  -- worth trusting more" -- a verified anchor, independent
+                  -- attestations, and having answered recently.
+                  (
+                    s.anchored * 1.5
+                    + CASE
+                        WHEN s.attestation_count >= 5 THEN 2.0
+                        WHEN s.attestation_count >= 1 THEN 1.0
+                        ELSE 0
+                      END
+                    + CASE
+                        WHEN s.last_reachable_at IS NOT NULL
+                             AND s.last_reachable_at > (strftime('%s', 'now') - 86400)
+                        THEN 1.0
+                        ELSE 0
+                      END
+                  ) AS boost
            FROM services_fts f
            JOIN services s ON s.pubkey = f.pubkey AND s.item_id = f.item_id
            WHERE services_fts MATCH ?
@@ -468,16 +482,16 @@ export function openStore(dbPath, opts = {}) {
              PARTITION BY pubkey, kind,
                CASE WHEN title IS NULL AND description IS NULL THEN itemId ELSE '' END,
                title, description
-             ORDER BY rank, itemId
+             ORDER BY rank - boost, itemId
            ) AS dupeRank
            FROM matches
          )
          SELECT * FROM ranked WHERE dupeRank = 1
-         ORDER BY rank, itemId
+         ORDER BY rank - boost, itemId
          LIMIT ? OFFSET ?`,
       )
-      .all(ftsQuery, limit, offset);
-    return rows.map(({ rank, dupeRank, ...row }) => ({
+      .all(matchQuery, limit, offset);
+    return rows.map(({ rank, boost, dupeRank, ...row }) => ({
       ...row,
       hashtags: parseHashtags(row.hashtags),
       alternates:
@@ -670,6 +684,23 @@ export function openStore(dbPath, opts = {}) {
     listStale,
     pruneToFit,
   };
+}
+
+// Turns free-typed user input into a safe FTS5 MATCH expression:
+//  - the API accepts natural-language text, not FTS5 syntax. Passing raw
+//    input through makes ordinary addresses and dotted names (for example
+//    `user@host` and `zap.stream`) syntax errors, while strings such as
+//    `title:foo` can be interpreted as column filters. Keep Unicode
+//    letters, numbers and underscores as terms, quote each one, and AND
+//    them together so punctuation becomes a harmless token boundary.
+//  - the last term gets a trailing `*`, turning it into a prefix query
+//    (FTS5's documented `"term"*` syntax) so results start appearing before
+//    the user finishes typing the final word -- e.g. "wall" already matches
+//    "wallet".
+function buildMatchQuery(query) {
+  const terms = String(query ?? '').match(/[\p{L}\p{N}_]+/gu) ?? [];
+  if (terms.length === 0) return null;
+  return terms.map((term, i) => `"${term}"${i === terms.length - 1 ? '*' : ''}`).join(' AND ');
 }
 
 function safeNpub(hexPubkey) {
