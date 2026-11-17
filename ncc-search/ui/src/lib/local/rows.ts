@@ -170,9 +170,14 @@ function nsiteRow(event: NostrEvent, now: number): LocalRow | null {
   row.endpoint = entryPathOf(event);
   // The Node crawler indexes the entry page's extracted text; a browser can't
   // fetch arbitrary HTML (CORS), so only the manifest's own title/description
-  // are searchable here. That is a real coverage difference, not a bug --
-  // ui/README.md's nsite edition section documents it.
-  row.body = clip([row.title, row.description].filter(Boolean).join(' '), BODY_LIMIT);
+  // are searchable here. The site id is included because many manifests have
+  // no title at all, and a site a reader can name should still be findable.
+  // That is a real coverage difference, not a bug -- ui/README.md's nsite
+  // edition section documents it.
+  row.body = clip(
+    [...new Set([itemId === '_root' ? 'root site' : itemId, row.title, row.description].filter(Boolean))].join(' '),
+    BODY_LIMIT,
+  );
   return row;
 }
 

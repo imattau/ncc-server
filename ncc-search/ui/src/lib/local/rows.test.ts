@@ -137,6 +137,9 @@ test('nsite manifests index by site id and resolve the published entry page', ()
   assert.equal(named.itemId, 'blog');
   assert.equal(named.kind, 'nsite-named');
   assert.equal(named.endpoint, '/about.html');
+  // Many manifests have no title; the site id is then the only name a reader
+  // could search for.
+  assert.match(named.body ?? '', /blog/);
 });
 
 test('a named nsite needs its d tag; a root manifest without an entry page is still indexed', () => {

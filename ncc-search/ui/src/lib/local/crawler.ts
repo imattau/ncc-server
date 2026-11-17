@@ -522,14 +522,18 @@ class Crawler {
         }
       }
     } catch (error) {
-      status.state = 'failed';
-      status.failureCount += 1;
-      status.lastError = controller.signal.aborted
-        ? 'timed out'
-        : error instanceof Error
-          ? error.message
-          : String(error);
-      this.lastFailureAt = Date.now();
+      // A settings change or a clear aborts in-flight requests; that is not
+      // the relay failing, and it should not be counted as one.
+      if (runId === this.runId) {
+        status.state = 'failed';
+        status.failureCount += 1;
+        status.lastError = controller.signal.aborted
+          ? 'timed out'
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        this.lastFailureAt = Date.now();
+      }
     } finally {
       this.activeControllers.delete(controller);
       clearTimeout(timer);
@@ -574,6 +578,23 @@ class Crawler {
 
   private ingest(event: NostrEvent): void {
     const now = Math.floor(Date.now() / 1000);
+
+    // Profile events are re-requested on a cadence (see crawlProfiles), and an
+    // unchanged kind:0 must not look like a new event forever: mark it seen so
+    // the next 7-day window starts from this visit, without touching the
+    // search index or pretending the profile changed.
+    if (event.kind === 0) {
+      const existing = this.rows.get(rowKey('profile', event.pubkey, '_profile'));
+      if (existing && existing.eventCreatedAt >= (event.created_at ?? 0)) {
+        if (now - existing.updatedAt > 60) {
+          existing.updatedAt = now;
+          this.pendingWrites.push(existing);
+          this.scheduleFlush();
+        }
+        return;
+      }
+    }
+
     const row = eventToRow(event, now);
     if (!row) return;
 
@@ -588,6 +609,10 @@ class Crawler {
     this.version += 1;
     this.markDirty();
 
+    this.scheduleFlush();
+  }
+
+  private scheduleFlush(): void {
     if (this.pendingWrites.length >= 200) void this.flush();
     else if (this.flushTimer == null) {
       this.flushTimer = setTimeout(() => {
