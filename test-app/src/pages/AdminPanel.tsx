@@ -1913,9 +1913,9 @@ export default function AdminPanel() {
                     </label>
                   </div>
 
-                  <div className="settings-inline"><span>Refreshes every</span><strong>{durationLabel(nextCadence.refreshIntervalMinutes * 60)}</strong></div>
-                  <div className="settings-inline"><span>Locator valid for</span><strong>{durationLabel(nextCadence.ncc05TtlHours * 3600)}</strong></div>
-                  <div className="settings-inline"><span>Record valid for</span><strong>{durationLabel(nextCadence.ncc02ExpiryDays * 86400)}</strong></div>
+                  <div className="settings-inline"><span>Refreshes every</span><strong>{Number.isFinite(nextCadence.refreshIntervalMinutes) ? durationLabel(nextCadence.refreshIntervalMinutes * 60) : '—'}</strong></div>
+                  <div className="settings-inline"><span>Locator valid for</span><strong>{Number.isFinite(nextCadence.ncc05TtlHours) ? durationLabel(nextCadence.ncc05TtlHours * 3600) : '—'}</strong></div>
+                  <div className="settings-inline"><span>Record valid for</span><strong>{Number.isFinite(nextCadence.ncc02ExpiryDays) ? durationLabel(nextCadence.ncc02ExpiryDays * 86400) : '—'}</strong></div>
                   <div className="settings-inline">
                     <span>Latest record</span>
                     <strong>{loadingRecords ? 'Reading…' : snapshot?.latestPublishedAt ? relativeTime(snapshot.latestPublishedAt) : '—'}</strong>
