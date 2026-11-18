@@ -7,14 +7,17 @@
 #
 # The npack protocol is a project protocol, not a registered NIP yet, so the
 # version is pinned here and in docs/npack-services.md. Bump both together.
-ARG DEBIAN_IMAGE=debian:12-slim
-FROM ${DEBIAN_IMAGE}
+#
+# npack's release binaries are built on current Ubuntu and need glibc 2.39;
+# Debian 12 ships 2.36, so the daemon runs on an Ubuntu base instead.
+ARG NPACK_BASE_IMAGE=ubuntu:24.04
+FROM ${NPACK_BASE_IMAGE}
 
 ARG NPACK_VERSION=0.10.1
 ARG TARGETARCH=amd64
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl zstd libssl3 \
+  && apt-get install -y --no-install-recommends ca-certificates curl zstd \
   && rm -rf /var/lib/apt/lists/* \
   && curl -fsSL -o /tmp/npack.deb \
        "https://github.com/imattau/npack/releases/download/v${NPACK_VERSION}/npack_${NPACK_VERSION}_${TARGETARCH}.deb" \
