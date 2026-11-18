@@ -1,9 +1,9 @@
 diff --git a/src/nip98.js b/src/nip98.js
 new file mode 100644
-index 0000000..449b3bb
+index 0000000..a55e12d
 --- /dev/null
 +++ b/src/nip98.js
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,120 @@
 +/**
 + * NIP-98 HTTP authentication for the NCC panel admin API.
 + *
@@ -20,10 +20,14 @@ index 0000000..449b3bb
 +
 +export const NIP98_KIND = 27235;
 +
-+/** NIP-98 recommends a short window; one minute is enough for one request. */
-+export const NIP98_MAX_AGE_SECONDS = 60;
++/**
++ * A short window limits replay, but remote signers (NIP-46) keep the
++ * template's created_at while the user approves on another device. Five
++ * minutes covers that handoff without accepting old captures indefinitely.
++ */
++export const NIP98_MAX_AGE_SECONDS = 300;
 +
-+const REPLAY_TTL_MS = 5 * 60 * 1000;
++const REPLAY_TTL_MS = 10 * 60 * 1000;
 +const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
 +
 +/** Event ids accepted recently, so a captured header cannot be replayed. */
@@ -120,12 +124,52 @@ index 0000000..449b3bb
 +
 +  return { ok: true, pubkey: event.pubkey.toLowerCase() };
 +}
+diff --git a/src/panel-auth.js b/src/panel-auth.js
+new file mode 100644
+index 0000000..70c386e
+--- /dev/null
++++ b/src/panel-auth.js
+@@ -0,0 +1,34 @@
++/**
++ * Authorization for the NCC admin panel API.
++ *
++ * Caddy proxies `/ncc-api/*` from the public listener to this loopback
++ * process, so the binding cannot be the access boundary. Every request
++ * carries a NIP-98 event signed by the connected key (../nip98.js), and the
++ * signer must be on this node's admin list. Routes call this once per
++ * request and return its result.
++ */
++
++import { verifyNip98 } from './nip98.js';
++import { getAdmins } from './db.js';
++
++/**
++ * Resolve the calling key and require it to be an active admin.
++ *
++ * Sends the error response itself and returns null when the request is not
++ * authorized, so a route only has to check for a falsy return value.
++ */
++export function authorizePanelRequest(request, reply) {
++  const result = verifyNip98(request);
++  if (!result.ok) {
++    reply.code(result.status).send({ error: result.error });
++    return null;
++  }
++
++  const admin = getAdmins().find((entry) => entry.pubkey === result.pubkey);
++  if (!admin) {
++    reply.code(403).send({ error: 'This key is not an admin for this node' });
++    return null;
++  }
++
++  return admin;
++}
 diff --git a/src/routes/panel-admin.js b/src/routes/panel-admin.js
 new file mode 100644
-index 0000000..2af5fda
+index 0000000..3245251
 --- /dev/null
 +++ b/src/routes/panel-admin.js
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,145 @@
 +/**
 + * Admin panel API.
 + *
@@ -139,7 +183,7 @@ index 0000000..2af5fda
 + */
 +
 +import { nip19 } from 'nostr-tools';
-+import { verifyNip98 } from '../nip98.js';
++import { authorizePanelRequest } from '../panel-auth.js';
 +import {
 +  addAdmin, addLog, getAdmins, getConfig, getServices, removeAdmin,
 +} from '../db.js';
@@ -180,26 +224,6 @@ index 0000000..2af5fda
 +}
 +
 +/**
-+ * Resolve the calling key and require it to be an active admin. Sends the
-+ * error response itself and returns null when the request is not authorized.
-+ */
-+function authorize(request, reply) {
-+  const result = verifyNip98(request);
-+  if (!result.ok) {
-+    reply.code(result.status).send({ error: result.error });
-+    return null;
-+  }
-+
-+  const admin = admins().find((entry) => entry.pubkey === result.pubkey);
-+  if (!admin) {
-+    reply.code(403).send({ error: 'This key is not an admin for this node' });
-+    return null;
-+  }
-+
-+  return admin;
-+}
-+
-+/**
 + * Tell the new admin they were added. Best effort: the key is already
 + * usable, and the publish cycle sends the recovery payload separately.
 + */
@@ -231,12 +255,12 @@ index 0000000..2af5fda
 +
 +export default async function panelAdminRoutes(server) {
 +  server.get('/ncc-api/admins', async (request, reply) => {
-+    if (!authorize(request, reply)) return;
++    if (!authorizePanelRequest(request, reply)) return;
 +    return { admins: adminList() };
 +  });
 +
 +  server.post('/ncc-api/admins', async (request, reply) => {
-+    const caller = authorize(request, reply);
++    const caller = authorizePanelRequest(request, reply);
 +    if (!caller) return;
 +
 +    const body = request.body && typeof request.body === 'object' ? request.body : {};
@@ -261,7 +285,7 @@ index 0000000..2af5fda
 +  });
 +
 +  server.delete('/ncc-api/admins/:pubkey', async (request, reply) => {
-+    const caller = authorize(request, reply);
++    const caller = authorizePanelRequest(request, reply);
 +    if (!caller) return;
 +
 +    const pubkey = parsePubkey(request.params.pubkey);
@@ -291,25 +315,462 @@ index 0000000..2af5fda
 +    return { removed: true, admins: adminList() };
 +  });
 +}
+diff --git a/src/routes/panel-settings.js b/src/routes/panel-settings.js
+new file mode 100644
+index 0000000..23dc455
+--- /dev/null
++++ b/src/routes/panel-settings.js
+@@ -0,0 +1,430 @@
++/**
++ * Node settings for the NCC admin panel.
++ *
++ * The panel edits the values the sidecar publishes: where records go
++ * (publication relays), the kind 0 identity clients see, and how often
++ * records are refreshed. Like the admin routes, every request is authorized
++ * per call by NIP-98 (see ../panel-auth.js).
++ *
++ * Writes are applied to `app_config` and to every service that publishes for
++ * this node, because they all share one operator identity. The next publish
++ * cycle (within a minute) republishes the affected records; the routes mark
++ * services for an immediate cycle instead of running one inline, so a save
++ * does not block on Tor or endpoint probes.
++ */
++
++import { authorizePanelRequest } from '../panel-auth.js';
++import {
++  addLog, getConfig, getServices, setConfig, updateService,
++} from '../db.js';
++import { fromNsec, getPublicKey, toNpub } from 'ncc-06-js';
++
++const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
++const DEFAULT_CADENCE = {
++  refreshIntervalMinutes: 360,
++  ncc02ExpiryDays: 14,
++  ncc05TtlHours: 12,
++};
++const CADENCE_LIMITS = {
++  refreshIntervalMinutes: { min: 5, max: 10080 },
++  ncc02ExpiryDays: { min: 1, max: 365 },
++  ncc05TtlHours: { min: 1, max: 720 },
++};
++const MAX_RELAYS = 20;
++const MAX_IDENTITY = {
++  displayName: 64,
++  name: 32,
++  about: 500,
++  picture: 400,
++  nip05: 128,
++};
++
++/** Services that publish NCC records under the shared operator identity. */
++function publishingServices() {
++  return getServices().filter((service) => service.status === 'active' && service.type !== 'sidecar');
++}
++
++function operatorPubkey() {
++  const configured = String(process.env.NCC_OPERATOR_PUBKEY || '').toLowerCase();
++  if (PUBKEY_PATTERN.test(configured)) return configured;
++
++  const services = getServices();
++  const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
++  if (!sidecar?.service_nsec) return null;
++
++  try {
++    return getPublicKey(fromNsec(sidecar.service_nsec));
++  } catch {
++    return null;
++  }
++}
++
++/** Normalise one relay URL, accepting host, http(s) and ws(s) forms. */
++export function normalizeRelayUrl(value) {
++  if (typeof value !== 'string') return null;
++
++  let candidate = value.trim();
++  if (!candidate) return null;
++
++  if (/^https?:\/\//i.test(candidate)) {
++    candidate = candidate.replace(/^https?:\/\//i, (match) => (match.toLowerCase() === 'https://' ? 'wss://' : 'ws://'));
++  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) {
++    if (!/^wss?:\/\//i.test(candidate)) return null;
++  } else {
++    candidate = `wss://${candidate}`;
++  }
++
++  try {
++    const url = new URL(candidate);
++    if (url.protocol !== 'wss:' && url.protocol !== 'ws:') return null;
++    if (!url.hostname || url.username || url.password) return null;
++    if (url.search || url.hash) return null;
++    const path = url.pathname === '/' ? '/' : `${url.pathname.replace(/\/+$/, '')}/`;
++    return `${url.protocol}//${url.host}${path}`;
++  } catch {
++    return null;
++  }
++}
++
++function readRelays() {
++  const appConfig = getConfig('app_config') || {};
++  const configured = Array.isArray(appConfig.publication_relays) ? appConfig.publication_relays : [];
++  if (configured.length) return configured.filter(Boolean);
++
++  const services = getServices();
++  const sidecar = services.find((service) => service.type === 'sidecar');
++  const fallback = Array.isArray(sidecar?.config?.publication_relays)
++    ? sidecar.config.publication_relays
++    : [];
++
++  return fallback.filter(Boolean);
++}
++
++function normalizeRelays(value) {
++  if (!Array.isArray(value)) {
++    return { error: 'relays must be an array of relay URLs' };
++  }
++
++  const relays = [];
++  for (const entry of value) {
++    const relay = normalizeRelayUrl(entry);
++    if (!relay) {
++      return { error: `"${String(entry)}" is not a valid relay URL (use wss://relay.example/)` };
++    }
++    if (!relays.includes(relay)) relays.push(relay);
++  }
++
++  if (relays.length === 0) {
++    return { error: 'Keep at least one publication relay, or the node cannot publish records' };
++  }
++  if (relays.length > MAX_RELAYS) {
++    return { error: `Use at most ${MAX_RELAYS} publication relays` };
++  }
++
++  return { relays };
++}
++
++function profileFromService(service) {
++  const profile = service?.config?.profile;
++  if (!profile || typeof profile !== 'object') return null;
++
++  return {
++    name: typeof profile.name === 'string' ? profile.name : '',
++    displayName: typeof profile.display_name === 'string' ? profile.display_name : '',
++    about: typeof profile.about === 'string' ? profile.about : '',
++    picture: typeof profile.picture === 'string' ? profile.picture : '',
++    nip05: typeof profile.nip05 === 'string' ? profile.nip05 : '',
++  };
++}
++
++function readIdentity() {
++  const appConfig = getConfig('app_config') || {};
++  const stored = appConfig.public_identity;
++  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
++    return {
++      name: typeof stored.name === 'string' ? stored.name : '',
++      displayName: typeof stored.displayName === 'string' ? stored.displayName : '',
++      about: typeof stored.about === 'string' ? stored.about : '',
++      picture: typeof stored.picture === 'string' ? stored.picture : '',
++      nip05: typeof stored.nip05 === 'string' ? stored.nip05 : '',
++    };
++  }
++
++  for (const service of getServices()) {
++    const profile = profileFromService(service);
++    if (profile && (profile.name || profile.displayName)) return profile;
++  }
++
++  return { name: '', displayName: '', about: '', picture: '', nip05: '' };
++}
++
++function slugName(displayName) {
++  return displayName
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, '_')
++    .replace(/^_+|_+$/g, '')
++    .slice(0, MAX_IDENTITY.name);
++}
++
++/** Validate identity fields from the panel and build the kind 0 profile. */
++export function normalizeIdentity(value) {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) {
++    return { error: 'identity must be an object' };
++  }
++
++  const field = (name) => (typeof value[name] === 'string' ? value[name].trim() : '');
++
++  const displayName = field('displayName') || field('display_name');
++  const about = field('about');
++  const picture = field('picture');
++  const nip05 = field('nip05');
++  const name = field('name') || slugName(displayName);
++
++  if (!displayName) return { error: 'A display name is required' };
++  if (displayName.length > MAX_IDENTITY.displayName) {
++    return { error: `Display name must be at most ${MAX_IDENTITY.displayName} characters` };
++  }
++  if (name.length > MAX_IDENTITY.name) {
++    return { error: `Name must be at most ${MAX_IDENTITY.name} characters` };
++  }
++  if (about.length > MAX_IDENTITY.about) {
++    return { error: `About must be at most ${MAX_IDENTITY.about} characters` };
++  }
++  if (nip05.length > MAX_IDENTITY.nip05) {
++    return { error: `NIP-05 address must be at most ${MAX_IDENTITY.nip05} characters` };
++  }
++  if (nip05 && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(nip05)) {
++    return { error: 'NIP-05 must look like name@example.com' };
++  }
++  if (picture) {
++    if (picture.length > MAX_IDENTITY.picture) {
++      return { error: `Picture URL must be at most ${MAX_IDENTITY.picture} characters` };
++    }
++    try {
++      if (new URL(picture).protocol !== 'https:') {
++        return { error: 'Picture URL must use https://' };
++      }
++    } catch {
++      return { error: 'Picture URL is not a valid https URL' };
++    }
++  }
++
++  const identity = { name, displayName, about, picture, nip05 };
++  const profile = { name };
++  if (displayName) profile.display_name = displayName;
++  if (about) profile.about = about;
++  if (picture) profile.picture = picture;
++  if (nip05) profile.nip05 = nip05;
++
++  return { identity, profile };
++}
++
++function readCadence() {
++  const appConfig = getConfig('app_config') || {};
++  const stored = appConfig.publication_cadence;
++  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
++    return {
++      refreshIntervalMinutes: Number(stored.refreshIntervalMinutes) || DEFAULT_CADENCE.refreshIntervalMinutes,
++      ncc02ExpiryDays: Number(stored.ncc02ExpiryDays) || DEFAULT_CADENCE.ncc02ExpiryDays,
++      ncc05TtlHours: Number(stored.ncc05TtlHours) || DEFAULT_CADENCE.ncc05TtlHours,
++    };
++  }
++
++  const services = getServices();
++  const representative = services.find((service) => service.service_id === 'web')
++    || publishingServices()[0]
++    || services[0];
++
++  if (!representative?.config) return { ...DEFAULT_CADENCE };
++
++  return {
++    refreshIntervalMinutes: Number(representative.config.refresh_interval_minutes)
++      || DEFAULT_CADENCE.refreshIntervalMinutes,
++    ncc02ExpiryDays: Number(representative.config.ncc02_expiry_days)
++      || DEFAULT_CADENCE.ncc02ExpiryDays,
++    ncc05TtlHours: Number(representative.config.ncc05_ttl_hours)
++      || DEFAULT_CADENCE.ncc05TtlHours,
++  };
++}
++
++export function normalizeCadence(value) {
++  if (!value || typeof value !== 'object' || Array.isArray(value)) {
++    return { error: 'cadence must be an object' };
++  }
++
++  const cadence = {};
++  for (const [key, limits] of Object.entries(CADENCE_LIMITS)) {
++    const raw = typeof value[key] === 'string' ? value[key].trim() : value[key];
++    const number = Number(raw);
++    if (!Number.isInteger(number) || number < limits.min || number > limits.max) {
++      return { error: `${key} must be a whole number between ${limits.min} and ${limits.max}` };
++    }
++    cadence[key] = number;
++  }
++
++  if (cadence.ncc05TtlHours * 60 <= cadence.refreshIntervalMinutes) {
++    return { error: 'Locator TTL must be longer than the publish interval, or records expire before they are refreshed' };
++  }
++  if (cadence.ncc02ExpiryDays * 1440 <= cadence.refreshIntervalMinutes) {
++    return { error: 'Service record expiry must be longer than the publish interval, or records expire before they are refreshed' };
++  }
++
++  return { cadence };
++}
++
++function lastPublishedAt() {
++  const timestamps = getServices()
++    .map((service) => Number(service.state?.last_full_publish_timestamp) || 0)
++    .filter((value) => value > 0);
++
++  return timestamps.length ? Math.max(...timestamps) : null;
++}
++
++function settingsPayload() {
++  const pubkey = operatorPubkey();
++  const identity = readIdentity();
++  const services = publishingServices();
++
++  return {
++    operator: {
++      pubkey,
++      npub: pubkey ? toNpub(pubkey) : null,
++    },
++    relays: readRelays(),
++    identity: {
++      ...identity,
++      published: getServices().some((service) => Boolean(service.state?.last_published_kind0_id)),
++    },
++    cadence: readCadence(),
++    publication: {
++      services: services.length,
++      lastPublishedAt: lastPublishedAt(),
++    },
++  };
++}
++
++function markForRepublish(services, { anchors = false, locators = false } = {}) {
++  for (const service of services) {
++    const state = { last_full_publish_timestamp: 0 };
++    if (anchors) state.last_primary_endpoint_hash = null;
++    if (locators) state.last_endpoints_hash = null;
++    updateService(service.id, { state });
++  }
++}
++
++export default async function panelSettingsRoutes(server) {
++  server.get('/ncc-api/settings', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++    return settingsPayload();
++  });
++
++  server.put('/ncc-api/settings/relays', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    const result = normalizeRelays(body.relays);
++    if (result.error) return reply.code(400).send({ error: result.error });
++
++    const appConfig = getConfig('app_config') || {};
++    appConfig.publication_relays = result.relays;
++    setConfig('app_config', appConfig);
++
++    // The sidecar reads the per-service list first, so keep both in sync.
++    // Invalidating the endpoint hashes makes the next cycle publish anchors
++    // and locators to the new relay set instead of waiting for an interval.
++    const services = getServices();
++    for (const service of services) {
++      updateService(service.id, {
++        config: { publication_relays: result.relays },
++        state: {
++          last_primary_endpoint_hash: null,
++          last_endpoints_hash: null,
++          last_full_publish_timestamp: 0,
++        },
++      });
++    }
++
++    addLog('info', 'Publication relays changed from the NCC admin panel', {
++      relays: result.relays,
++      changedBy: caller.pubkey,
++    });
++
++    return settingsPayload();
++  });
++
++  server.put('/ncc-api/settings/identity', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    const result = normalizeIdentity(body);
++    if (result.error) return reply.code(400).send({ error: result.error });
++
++    const appConfig = getConfig('app_config') || {};
++    appConfig.public_identity = result.identity;
++    setConfig('app_config', appConfig);
++
++    // Every standard service shares the operator key, so they must publish
++    // the same kind 0. Fields the panel does not edit (banner, website, …)
++    // are preserved. The sidecar service is left alone: its job is the node's
++    // local management API, not a public profile.
++    for (const service of publishingServices()) {
++      const current = service.config?.profile && typeof service.config.profile === 'object'
++        ? { ...service.config.profile }
++        : {};
++      for (const key of ['name', 'display_name', 'about', 'picture', 'nip05']) delete current[key];
++
++      updateService(service.id, {
++        config: { profile: { ...current, ...result.profile } },
++        state: { last_profile_hash: null },
++      });
++    }
++
++    addLog('info', 'Public identity changed from the NCC admin panel', {
++      displayName: result.identity.displayName,
++      nip05: result.identity.nip05 || null,
++      changedBy: caller.pubkey,
++    });
++
++    return settingsPayload();
++  });
++
++  server.put('/ncc-api/settings/cadence', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    const result = normalizeCadence(body);
++    if (result.error) return reply.code(400).send({ error: result.error });
++
++    const appConfig = getConfig('app_config') || {};
++    appConfig.publication_cadence = result.cadence;
++    setConfig('app_config', appConfig);
++
++    const services = publishingServices();
++    for (const service of services) {
++      updateService(service.id, {
++        config: {
++          refresh_interval_minutes: result.cadence.refreshIntervalMinutes,
++          ncc02_expiry_days: result.cadence.ncc02ExpiryDays,
++          ncc05_ttl_hours: result.cadence.ncc05TtlHours,
++        },
++        // Expiry values are baked into the published events, so the anchors
++        // have to be rewritten for the new cadence to take effect; otherwise
++        // they would keep their old expiration until the endpoint changes.
++        state: {
++          last_primary_endpoint_hash: null,
++          last_full_publish_timestamp: 0,
++        },
++      });
++    }
++
++    addLog('info', 'Publication cadence changed from the NCC admin panel', {
++      ...result.cadence,
++      changedBy: caller.pubkey,
++    });
++
++    return settingsPayload();
++  });
++}
 diff --git a/src/web.js b/src/web.js
-index e0a9d9b..2481a28 100644
+index e0a9d9b..fc1ba18 100644
 --- a/src/web.js
 +++ b/src/web.js
-@@ -11,6 +11,7 @@ import { isLocalHostname, isLocalAddress, shouldAllowRemoteAccess } from './secu
+@@ -11,6 +11,8 @@ import { isLocalHostname, isLocalAddress, shouldAllowRemoteAccess } from './secu
  
  // Route Modules
  import adminRoutes from './routes/admin.js';
 +import panelAdminRoutes from './routes/panel-admin.js';
++import panelSettingsRoutes from './routes/panel-settings.js';
  import serviceRoutes from './routes/services.js';
  import configRoutes from './routes/config.js';
  import dbRoutes from './routes/db.js';
-@@ -55,6 +56,13 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+@@ -55,6 +57,13 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
          done();
          return;
        }
-+      // Caddy publishes the panel admin API here. It cannot use the loopback
++      // Caddy publishes the panel API here. It cannot use the loopback
 +      // binding as its boundary, so each /ncc-api request is authorized by its
-+      // own NIP-98 signature instead (routes/panel-admin.js).
++      // own NIP-98 signature instead (routes/panel-*.js).
 +      if (request.url.startsWith('/ncc-api/')) {
 +        done();
 +        return;
@@ -317,11 +778,93 @@ index e0a9d9b..2481a28 100644
        const forwarded = request.headers['x-forwarded-for'];
        const remoteAddress = typeof forwarded === 'string' && forwarded.length
          ? forwarded.split(',')[0].trim()
-@@ -74,6 +82,7 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+@@ -74,6 +83,8 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
    // Register Routes. Fastify always passes an options object to a plugin, so wrap
    // the callback instead of passing it positionally.
    await server.register(adminRoutes, { onInitialized });
 +  await server.register(panelAdminRoutes);
++  await server.register(panelSettingsRoutes);
    await server.register(serviceRoutes);
    await server.register(configRoutes);
    await server.register(dbRoutes);
+diff --git a/test/panel-settings.test.js b/test/panel-settings.test.js
+new file mode 100644
+index 0000000..c124cba
+--- /dev/null
++++ b/test/panel-settings.test.js
+@@ -0,0 +1,75 @@
++import { test } from 'node:test';
++import assert from 'node:assert';
++
++import {
++  normalizeCadence, normalizeIdentity, normalizeRelayUrl,
++} from '../src/routes/panel-settings.js';
++
++test('Publication relays: normalise host, http(s) and ws(s) forms', () => {
++  assert.strictEqual(normalizeRelayUrl('relay.example'), 'wss://relay.example/');
++  assert.strictEqual(normalizeRelayUrl('https://relay.example'), 'wss://relay.example/');
++  assert.strictEqual(normalizeRelayUrl('http://127.0.0.1:7777'), 'ws://127.0.0.1:7777/');
++  assert.strictEqual(normalizeRelayUrl('wss://relay.example/path/'), 'wss://relay.example/path/');
++});
++
++test('Publication relays: reject values that are not relays', () => {
++  assert.strictEqual(normalizeRelayUrl(''), null);
++  assert.strictEqual(normalizeRelayUrl('ftp://relay.example'), null);
++  assert.strictEqual(normalizeRelayUrl('https://user:pass@relay.example'), null);
++  assert.strictEqual(normalizeRelayUrl('wss://relay.example/?query=1'), null);
++  assert.strictEqual(normalizeRelayUrl('not a url'), null);
++});
++
++test('Public identity: require a display name and derive the short name', () => {
++  const result = normalizeIdentity({
++    displayName: 'Harbour Node',
++    about: 'A community node.',
++    picture: 'https://example.com/avatar.png',
++    nip05: 'harbour@example.com',
++  });
++
++  assert.strictEqual(result.error, undefined);
++  assert.strictEqual(result.identity.name, 'harbour_node');
++  assert.strictEqual(result.identity.displayName, 'Harbour Node');
++  assert.strictEqual(result.profile.display_name, 'Harbour Node');
++  assert.strictEqual(result.profile.nip05, 'harbour@example.com');
++});
++
++test('Public identity: reject missing or unsafe fields', () => {
++  assert.match(normalizeIdentity({ displayName: '' }).error, /display name is required/i);
++  assert.match(normalizeIdentity({ displayName: 'X', picture: 'http://example.com/a.png' }).error, /https/);
++  assert.match(normalizeIdentity({ displayName: 'X', nip05: 'not-an-address' }).error, /NIP-05/);
++});
++
++test('Publication cadence: accept values that outlive the publish interval', () => {
++  const result = normalizeCadence({
++    refreshIntervalMinutes: '60',
++    ncc02ExpiryDays: '7',
++    ncc05TtlHours: '3',
++  });
++
++  assert.deepStrictEqual(result.cadence, {
++    refreshIntervalMinutes: 60,
++    ncc02ExpiryDays: 7,
++    ncc05TtlHours: 3,
++  });
++});
++
++test('Publication cadence: reject gaps and out-of-range values', () => {
++  assert.match(
++    normalizeCadence({ refreshIntervalMinutes: 720, ncc02ExpiryDays: 14, ncc05TtlHours: 12 }).error,
++    /Locator TTL/,
++  );
++  assert.match(
++    normalizeCadence({ refreshIntervalMinutes: 2880, ncc02ExpiryDays: 2, ncc05TtlHours: 60 }).error,
++    /Service record expiry/,
++  );
++  assert.match(
++    normalizeCadence({ refreshIntervalMinutes: 0, ncc02ExpiryDays: 14, ncc05TtlHours: 12 }).error,
++    /refreshIntervalMinutes/,
++  );
++  assert.match(
++    normalizeCadence({ refreshIntervalMinutes: 60, ncc02ExpiryDays: 14, ncc05TtlHours: 1.5 }).error,
++    /ncc05TtlHours/,
++  );
++});

@@ -1,15 +1,22 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useNostrLogin } from '@nostrify/react/login';
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleAlert,
   CircleHelp, Copy, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
   LockKeyhole, LogOut, Menu, MoreHorizontal, Plus, Radio, RefreshCw, Search,
-  Server, Settings2, Shield, ShieldCheck, TerminalSquare, Trash2, Users, Waves, X,
+  Server, Settings2, Shield, ShieldCheck, Smartphone, TerminalSquare, Trash2,
+  Users, Waves, X,
   type LucideIcon,
 } from 'lucide-react';
 import { nip19 } from 'nostr-tools';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useLoginActions } from '@/hooks/useLoginActions';
+import {
+  generateNostrConnectParams,
+  generateNostrConnectURI,
+  useLoginActions,
+  type NostrConnectStatus,
+} from '@/hooks/useLoginActions';
+import { QRCodeCanvas } from '@/components/ui/qrcode';
 import {
   copyText,
   loadPanelConfig,
@@ -24,18 +31,68 @@ import {
 import {
   PanelApiError,
   addPanelAdmin,
+  cadenceProblem,
   listPanelAdmins,
+  loadPanelSettings,
+  relayInputToUrl,
   removePanelAdmin,
   resolvePanelApiBase,
+  savePanelCadence,
+  savePanelIdentity,
+  savePanelRelays,
   type PanelAdmin,
+  type PanelCadence,
+  type PanelSettings,
 } from '@/lib/nccPanelApi';
 import './admin-panel.css';
 
 type Section = 'Overview' | 'Apps' | 'Installed' | 'Activity' | 'Admins' | 'Settings';
 type AdminAccess = 'idle' | 'checking' | 'admin' | 'denied' | 'unavailable';
 type AdminListState = 'idle' | 'ready' | 'error';
+type SettingsState = 'idle' | 'loading' | 'ready' | 'error';
 type Tint = 'blue' | 'violet' | 'amber' | 'green';
-type SignInMethod = 'extension' | 'bunker';
+type SignInMethod = 'extension' | 'bunker' | 'nostrconnect';
+
+interface IdentityDraft {
+  displayName: string;
+  about: string;
+  picture: string;
+  nip05: string;
+}
+
+const EMPTY_IDENTITY: IdentityDraft = { displayName: '', about: '', picture: '', nip05: '' };
+const EMPTY_CADENCE: PanelCadence = {
+  refreshIntervalMinutes: 360,
+  ncc02ExpiryDays: 14,
+  ncc05TtlHours: 12,
+};
+
+type CadenceText = Record<keyof PanelCadence, string>;
+
+function cadenceTextOf(cadence: PanelCadence): CadenceText {
+  return {
+    refreshIntervalMinutes: String(cadence.refreshIntervalMinutes),
+    ncc02ExpiryDays: String(cadence.ncc02ExpiryDays),
+    ncc05TtlHours: String(cadence.ncc05TtlHours),
+  };
+}
+
+function cadenceFromText(text: CadenceText): PanelCadence {
+  return {
+    refreshIntervalMinutes: Number(text.refreshIntervalMinutes),
+    ncc02ExpiryDays: Number(text.ncc02ExpiryDays),
+    ncc05TtlHours: Number(text.ncc05TtlHours),
+  };
+}
+
+/** True when a NIP-07 provider is actually injected into this page. */
+function hasNip07(): boolean {
+  return typeof window !== 'undefined' && Boolean((window as unknown as { nostr?: unknown }).nostr);
+}
+
+function isMobileBrowser(): boolean {
+  return typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
 
 interface ServiceMeta {
   label: string;
@@ -217,22 +274,34 @@ interface OperatorGateProps {
   operatorNpub: string;
   signerNpub: string | null;
   access: AdminAccess;
+  verificationError: string;
   localKeyOnly: boolean;
   busy: SignInMethod | null;
   error: string;
   bunkerUri: string;
+  connectUri: string;
+  connectStatus: NostrConnectStatus | null;
+  nip07Available: boolean;
   onBunkerUri: (value: string) => void;
   onExtension: () => void;
   onBunker: () => void;
+  onNostrConnect: () => void;
+  onCancelConnect: () => void;
+  onRetryVerify: () => void;
   onSignOut: () => void;
   onCopy: (value: string, label: string) => void;
 }
 
 function OperatorGate({
-  config, operatorNpub, signerNpub, access, localKeyOnly, busy, error, bunkerUri,
-  onBunkerUri, onExtension, onBunker, onSignOut, onCopy,
+  config, operatorNpub, signerNpub, access, verificationError, localKeyOnly, busy, error,
+  bunkerUri, connectUri, connectStatus, nip07Available, onBunkerUri, onExtension, onBunker,
+  onNostrConnect, onCancelConnect, onRetryVerify, onSignOut, onCopy,
 }: OperatorGateProps) {
   const otherSigner = Boolean(signerNpub && signerNpub !== operatorNpub);
+  const mobile = isMobileBrowser();
+  const connectLabel = connectStatus === 'getting-public-key'
+    ? 'Signer connected. Reading its public key…'
+    : 'Waiting for your signer to approve this client…';
 
   return (
     <div className="ncc-panel gate-shell">
@@ -304,6 +373,7 @@ function OperatorGate({
                         {access === 'denied'
                           ? 'A signer is connected, but its key is not an admin for this node.'
                           : 'This key could not be verified with the node admin API. Only an active admin key can open this panel.'}
+                        {verificationError && <small className="gate-detail">{verificationError}</small>}
                       </span>
                     </div>
                   )}
@@ -312,6 +382,11 @@ function OperatorGate({
                     <strong>{shortNpub(signerNpub)}</strong>
                   </div>
                   <div className="gate-actions">
+                    {access !== 'checking' && (
+                      <button className="button-secondary" type="button" onClick={onRetryVerify}>
+                        <RefreshCw size={14} /> Try again
+                      </button>
+                    )}
                     <button className="button-secondary" type="button" onClick={onSignOut}>
                       <LogOut size={14} /> Disconnect this key
                     </button>
@@ -322,12 +397,51 @@ function OperatorGate({
                 </>
               ) : (
                 <>
-                  <button className="button-primary gate-extension" type="button" onClick={onExtension} disabled={busy !== null}>
-                    <KeyRound size={16} />
-                    {busy === 'extension' ? 'Waiting for NIP-07 extension…' : 'Sign in with NIP-07 extension'}
-                  </button>
+                  {nip07Available ? (
+                    <button className="button-primary gate-extension" type="button" onClick={onExtension} disabled={busy !== null}>
+                      <KeyRound size={16} />
+                      {busy === 'extension' ? 'Waiting for NIP-07 extension…' : 'Sign in with NIP-07 extension'}
+                    </button>
+                  ) : (
+                    <div className="gate-note warning" role="alert">
+                      <CircleAlert size={14} />
+                      <span>
+                        {mobile
+                          ? 'Mobile browsers do not load NIP-07 extensions. Sign in with your signer app below.'
+                          : 'No NIP-07 extension was detected in this browser. Install one, or use a remote signer below.'}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="gate-divider"><span>or a NIP-46 remote signer</span></div>
+
+                  {connectUri ? (
+                    <div className="gate-connect">
+                      <div className="gate-qr" aria-label="NIP-46 connect QR code">
+                        <QRCodeCanvas value={connectUri} size={148} />
+                      </div>
+                      <div className="gate-connect-copy">
+                        <strong>{connectLabel}</strong>
+                        <small>Scan this with a signer app, or open the link on this device and approve.</small>
+                        <div className="gate-actions">
+                          <a className="button-primary" href={connectUri}>
+                            <Smartphone size={14} /> Open signer app
+                          </a>
+                          <button className="button-secondary" type="button" onClick={() => onCopy(connectUri, 'Connect URI')}>
+                            <Copy size={14} /> Copy URI
+                          </button>
+                          <button className="button-secondary" type="button" onClick={onCancelConnect}>
+                            <X size={14} /> Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="button-secondary gate-extension" type="button" onClick={onNostrConnect} disabled={busy !== null}>
+                      <Smartphone size={16} />
+                      {busy === 'nostrconnect' ? 'Starting signer connection…' : 'Open signer app (NIP-46)'}
+                    </button>
+                  )}
 
                   <form onSubmit={(event) => { event.preventDefault(); onBunker(); }}>
                     <label htmlFor="bunker-uri">BUNKER URI</label>
@@ -357,7 +471,7 @@ function OperatorGate({
                   <p className="gate-foot">
                     <LockKeyhole size={12} />
                     Your signer approves this client, and every admin change is signed as a NIP-98 request.
-                    Inside NCC Browser use a NIP-46 signer; extensions usually load only on http(s) pages.
+                    Extensions usually load only on desktop; on a phone use your signer app.
                   </p>
                 </>
               )}
@@ -391,8 +505,14 @@ export default function AdminPanel() {
   const [signInBusy, setSignInBusy] = useState<SignInMethod | null>(null);
   const [signInError, setSignInError] = useState('');
   const [bunkerUri, setBunkerUri] = useState('');
+  const [connectUri, setConnectUri] = useState('');
+  const [connectStatus, setConnectStatus] = useState<NostrConnectStatus | null>(null);
+  const connectAbort = useRef<AbortController | null>(null);
+  const [nip07Available, setNip07Available] = useState(hasNip07);
 
   const [verified, setVerified] = useState<{ pubkey: string; access: 'admin' | 'denied' | 'unavailable' } | null>(null);
+  const [verifyError, setVerifyError] = useState('');
+  const [verifyToken, setVerifyToken] = useState(0);
   const [admins, setAdmins] = useState<PanelAdmin[] | null>(null);
   const [adminsState, setAdminsState] = useState<AdminListState>('idle');
   const [adminsError, setAdminsError] = useState('');
@@ -402,6 +522,20 @@ export default function AdminPanel() {
   const [inviteError, setInviteError] = useState('');
   const [inviteDone, setInviteDone] = useState('');
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+  const [settings, setSettings] = useState<PanelSettings | null>(null);
+  const [settingsState, setSettingsState] = useState<SettingsState>('idle');
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsDone, setSettingsDone] = useState('');
+  const [settingsBusy, setSettingsBusy] = useState<'relays' | 'identity' | 'cadence' | null>(null);
+  const [settingsToken, setSettingsToken] = useState(0);
+  const [relayDraft, setRelayDraft] = useState<string[]>([]);
+  const [newRelay, setNewRelay] = useState('');
+  const [relayError, setRelayError] = useState('');
+  const [identityDraft, setIdentityDraft] = useState<IdentityDraft>(EMPTY_IDENTITY);
+  const [identityError, setIdentityError] = useState('');
+  const [cadenceText, setCadenceText] = useState(() => cadenceTextOf(EMPTY_CADENCE));
+  const [cadenceError, setCadenceError] = useState('');
 
   const operatorNpub = config?.npub ?? null;
   const operatorPubkey = useMemo(() => operatorPubkeyFromNpub(operatorNpub), [operatorNpub]);
@@ -415,6 +549,12 @@ export default function AdminPanel() {
   const localKeyOnly = signerType === 'nsec';
   const isOperator = Boolean(operatorPubkey && signerPubkey && operatorPubkey === signerPubkey);
   const apiBase = useMemo(() => resolvePanelApiBase(config?.panelApi ?? null), [config]);
+  // Once the sidecar settings are loaded they name the relays this node
+  // actually publishes to, which is more accurate than the static config.
+  const readRelays = useMemo(
+    () => (settings && settings.relays.length ? settings.relays : (config?.relays ?? [])),
+    [settings, config],
+  );
   const access: AdminAccess = isOperator
     ? 'idle'
     : !config
@@ -446,6 +586,14 @@ export default function AdminPanel() {
     return () => controller.abort();
   }, []);
 
+  // Some extensions inject window.nostr after the first paint. Recheck once
+  // so a desktop user does not lose the NIP-07 option on a slow load.
+  useEffect(() => {
+    if (nip07Available) return;
+    const timer = window.setTimeout(() => setNip07Available(hasNip07()), 1000);
+    return () => window.clearTimeout(timer);
+  }, [nip07Available]);
+
   // The operator is already named by the node config, so an operator session
   // costs no extra signature. Any other key has to prove it is on the node's
   // admin list before the panel opens.
@@ -460,10 +608,12 @@ export default function AdminPanel() {
         if (controller.signal.aborted) return;
         setAdmins(result.admins);
         setAdminsState('ready');
+        setVerifyError('');
         setVerified({ pubkey: signerPubkey, access: 'admin' });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
+        setVerifyError(error instanceof Error ? error.message : 'The node admin API did not answer');
         setVerified({
           pubkey: signerPubkey,
           access: error instanceof PanelApiError && error.status === 403 ? 'denied' : 'unavailable',
@@ -471,7 +621,7 @@ export default function AdminPanel() {
       });
 
     return () => controller.abort();
-  }, [supportedSigner, signerPubkey, isOperator, apiBase, user]);
+  }, [supportedSigner, signerPubkey, isOperator, apiBase, user, verifyToken]);
 
   // The node admin list is loaded once per session, on demand: opening the
   // Admins section or retrying after an error asks the signer to sign one
@@ -497,12 +647,44 @@ export default function AdminPanel() {
     return () => controller.abort();
   }, [section, authorized, admins, apiBase, user, adminsToken]);
 
+  // Node settings are loaded when the Settings section opens. Reading them
+  // costs one NIP-98 signature, so they are not fetched with the overview.
+  useEffect(() => {
+    if (section !== 'Settings' || !authorized || settings !== null) return;
+    if (!apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadPanelSettings(apiBase, user.signer, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setSettings(loaded);
+        setRelayDraft(loaded.relays);
+        setIdentityDraft({
+          displayName: loaded.identity.displayName,
+          about: loaded.identity.about,
+          picture: loaded.identity.picture,
+          nip05: loaded.identity.nip05,
+        });
+        setCadenceText(cadenceTextOf(loaded.cadence));
+        setSettingsState('ready');
+        setSettingsError('');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setSettingsState('error');
+        setSettingsError(error instanceof Error ? error.message : 'Could not read the node settings');
+      });
+
+    return () => controller.abort();
+  }, [section, authorized, settings, apiBase, user, settingsToken]);
+
   useEffect(() => {
     if (!config || !operatorPubkey || !authorized) return;
 
     const controller = new AbortController();
 
-    loadPanelSnapshot(operatorPubkey, config.relays, controller.signal)
+    loadPanelSnapshot(operatorPubkey, readRelays, controller.signal)
       .then((loaded) => {
         if (controller.signal.aborted) return;
         setSnapshot(loaded);
@@ -518,10 +700,18 @@ export default function AdminPanel() {
       });
 
     return () => controller.abort();
-  }, [config, operatorPubkey, authorized, refreshToken]);
+  }, [config, operatorPubkey, authorized, refreshToken, readRelays]);
 
   const handleExtension = async () => {
     setSignInError('');
+    if (!hasNip07()) {
+      setSignInError(
+        isMobileBrowser()
+          ? 'Mobile browsers do not load NIP-07 extensions. Use the signer app option below.'
+          : 'No NIP-07 extension was detected. Install a signer extension or use the remote signer option below.',
+      );
+      return;
+    }
     setSignInBusy('extension');
     try {
       await login.extension();
@@ -534,6 +724,58 @@ export default function AdminPanel() {
     } finally {
       setSignInBusy(null);
     }
+  };
+
+  const cancelNostrConnect = () => {
+    connectAbort.current?.abort();
+    connectAbort.current = null;
+    setConnectUri('');
+    setConnectStatus(null);
+    setSignInBusy(null);
+  };
+
+  // Client-initiated NIP-46: the browser creates the session and the signer
+  // app approves it. This is the path that works on phones, where browsers
+  // cannot load NIP-07 extensions.
+  const handleNostrConnect = () => {
+    setSignInError('');
+    cancelNostrConnect();
+
+    let params;
+    try {
+      params = generateNostrConnectParams(login.getRelayUrls());
+    } catch (error) {
+      setSignInError(error instanceof Error ? error.message : 'Could not start a signer connection.');
+      return;
+    }
+
+    const uri = generateNostrConnectURI(params, { name: 'NCC Server Admin' });
+    const controller = new AbortController();
+    connectAbort.current = controller;
+    setConnectUri(uri);
+    setConnectStatus('awaiting-connect');
+    setSignInBusy('nostrconnect');
+
+    login.nostrconnect(params, controller.signal, (status) => {
+      if (!controller.signal.aborted) setConnectStatus(status);
+    })
+      .then(() => {
+        if (controller.signal.aborted) return;
+        setConnectUri('');
+        setConnectStatus(null);
+        setSignInBusy(null);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setConnectUri('');
+        setConnectStatus(null);
+        setSignInBusy(null);
+        setSignInError(
+          error instanceof Error && error.message
+            ? `NIP-46 sign-in failed: ${error.message}`
+            : 'The signer app did not approve this client.',
+        );
+      });
   };
 
   const handleBunker = async () => {
@@ -561,12 +803,14 @@ export default function AdminPanel() {
   };
 
   const handleSignOut = async () => {
+    cancelNostrConnect();
     await login.logout();
     setSnapshot(null);
     setRecordsError('');
     setLoadedAt(null);
     setSection('Overview');
     setVerified(null);
+    setVerifyError('');
     setAdmins(null);
     setAdminsState('idle');
     setAdminsError('');
@@ -574,6 +818,17 @@ export default function AdminPanel() {
     setInviteError('');
     setInviteDone('');
     setConfirmRemove(null);
+    setSettings(null);
+    setSettingsState('idle');
+    setSettingsError('');
+    setSettingsDone('');
+    setRelayDraft([]);
+    setNewRelay('');
+    setRelayError('');
+    setIdentityDraft(EMPTY_IDENTITY);
+    setIdentityError('');
+    setCadenceText(cadenceTextOf(EMPTY_CADENCE));
+    setCadenceError('');
   };
 
   const handleInvite = async (event: FormEvent) => {
@@ -637,6 +892,144 @@ export default function AdminPanel() {
     }
   };
 
+  const handleAddRelay = () => {
+    setRelayError('');
+    setSettingsDone('');
+    const value = newRelay.trim();
+    if (!value) return;
+
+    const relay = relayInputToUrl(value);
+    if (!relay) {
+      setRelayError('Enter a relay URL such as wss://relay.example/');
+      return;
+    }
+    if (relayDraft.includes(relay)) {
+      setRelayError('That relay is already on the list.');
+      return;
+    }
+
+    setRelayDraft([...relayDraft, relay]);
+    setNewRelay('');
+  };
+
+  const handleRemoveRelay = (url: string) => {
+    setRelayError('');
+    setSettingsDone('');
+    setRelayDraft(relayDraft.filter((relay) => relay !== url));
+  };
+
+  const handleSaveRelays = async () => {
+    setRelayError('');
+    setSettingsDone('');
+
+    const relays: string[] = [];
+    for (const value of relayDraft) {
+      const relay = relayInputToUrl(value);
+      if (!relay) {
+        setRelayError(`"${value}" is not a valid relay URL.`);
+        return;
+      }
+      if (!relays.includes(relay)) relays.push(relay);
+    }
+    if (relays.length === 0) {
+      setRelayError('Keep at least one publication relay, or the node cannot publish records.');
+      return;
+    }
+    if (!apiBase || !user) {
+      setRelayError('The node admin API is not available.');
+      return;
+    }
+
+    setSettingsBusy('relays');
+    try {
+      const next = await savePanelRelays(apiBase, user.signer, relays);
+      setSettings(next);
+      setRelayDraft(next.relays);
+      setNewRelay('');
+      setSettingsState('ready');
+      setSettingsDone('Publication relays saved. The node republishes to them within a minute.');
+      notify('Publication relays saved');
+    } catch (error) {
+      setRelayError(error instanceof Error ? error.message : 'Could not save the relays');
+    } finally {
+      setSettingsBusy(null);
+    }
+  };
+
+  const handleSaveIdentity = async () => {
+    setIdentityError('');
+    setSettingsDone('');
+
+    if (!identityDraft.displayName.trim()) {
+      setIdentityError('A display name is required.');
+      return;
+    }
+    if (!apiBase || !user) {
+      setIdentityError('The node admin API is not available.');
+      return;
+    }
+
+    setSettingsBusy('identity');
+    try {
+      const next = await savePanelIdentity(apiBase, user.signer, {
+        displayName: identityDraft.displayName,
+        about: identityDraft.about,
+        picture: identityDraft.picture,
+        nip05: identityDraft.nip05,
+      });
+      setSettings(next);
+      setIdentityDraft({
+        displayName: next.identity.displayName,
+        about: next.identity.about,
+        picture: next.identity.picture,
+        nip05: next.identity.nip05,
+      });
+      setSettingsState('ready');
+      setSettingsDone('Public identity saved. The node publishes the new profile within a minute.');
+      notify('Public identity saved');
+    } catch (error) {
+      setIdentityError(error instanceof Error ? error.message : 'Could not save the identity');
+    } finally {
+      setSettingsBusy(null);
+    }
+  };
+
+  const handleSaveCadence = async () => {
+    setCadenceError('');
+    setSettingsDone('');
+
+    const cadence = cadenceFromText(cadenceText);
+    const problem = cadenceProblem(cadence);
+    if (problem) {
+      setCadenceError(problem);
+      return;
+    }
+    if (!apiBase || !user) {
+      setCadenceError('The node admin API is not available.');
+      return;
+    }
+
+    setSettingsBusy('cadence');
+    try {
+      const next = await savePanelCadence(apiBase, user.signer, cadence);
+      setSettings(next);
+      setCadenceText(cadenceTextOf(next.cadence));
+      setSettingsState('ready');
+      setSettingsDone('Publication cadence saved. The node republishes existing records within a minute.');
+      notify('Publication cadence saved');
+    } catch (error) {
+      setCadenceError(error instanceof Error ? error.message : 'Could not save the cadence');
+    } finally {
+      setSettingsBusy(null);
+    }
+  };
+
+  const handleRetryVerify = () => {
+    setVerified(null);
+    setVerifyError('');
+    setVerifyToken((value) => value + 1);
+  };
+
   if (!authorized || !operatorNpub) {
     return (
       <OperatorGate
@@ -644,13 +1037,20 @@ export default function AdminPanel() {
         operatorNpub={operatorNpub ?? ''}
         signerNpub={signerNpub}
         access={access}
+        verificationError={verifyError}
         localKeyOnly={localKeyOnly}
         busy={signInBusy}
         error={signInError}
         bunkerUri={bunkerUri}
+        connectUri={connectUri}
+        connectStatus={connectStatus}
+        nip07Available={nip07Available}
         onBunkerUri={setBunkerUri}
         onExtension={handleExtension}
         onBunker={handleBunker}
+        onNostrConnect={handleNostrConnect}
+        onCancelConnect={cancelNostrConnect}
+        onRetryVerify={handleRetryVerify}
         onSignOut={handleSignOut}
         onCopy={copy}
       />
@@ -709,6 +1109,25 @@ export default function AdminPanel() {
   const apiAvailable = Boolean(apiBase);
   const adminsLoading = Boolean(apiAvailable && authorized && admins === null && adminsState !== 'error');
   const canManageAdmins = Boolean(apiAvailable && authorized && user && admins !== null);
+
+  const settingsLoading = Boolean(apiAvailable && authorized && settings === null && settingsState !== 'error');
+  const canEditSettings = Boolean(apiAvailable && authorized && user && settings !== null);
+  const relaysChanged = Boolean(settings && relayDraft.join('\n') !== settings.relays.join('\n'));
+  const identityChanged = Boolean(settings && (
+    identityDraft.displayName.trim() !== settings.identity.displayName
+    || identityDraft.about.trim() !== settings.identity.about
+    || identityDraft.picture.trim() !== settings.identity.picture
+    || identityDraft.nip05.trim() !== settings.identity.nip05
+  ));
+  const cadenceChanged = Boolean(settings && (
+    cadenceFromText(cadenceText).refreshIntervalMinutes !== settings.cadence.refreshIntervalMinutes
+    || cadenceFromText(cadenceText).ncc02ExpiryDays !== settings.cadence.ncc02ExpiryDays
+    || cadenceFromText(cadenceText).ncc05TtlHours !== settings.cadence.ncc05TtlHours
+  ));
+  const relayReportByUrl = new Map((snapshot?.relays ?? []).map((report) => [report.url, report]));
+  const nextCadence = cadenceFromText(cadenceText);
+  const settingsUnavailable = !apiAvailable || (settingsState === 'error' && settings === null);
+  const displayedRelays = settings ? relayDraft : (config?.relays ?? []);
 
   const groups = activityGroups(snapshot?.activity ?? []);
   const recentActivity = snapshot?.activity.slice(0, 3) ?? [];
@@ -1168,7 +1587,7 @@ export default function AdminPanel() {
                         : 'Adding another key needs the sidecar admin API, which this node does not serve yet.'}
                     </p>
                   </div>
-                  {!apiAvailable && <span className="inactive-badge">INACTIVE</span>}
+                  {settingsUnavailable && <span className="inactive-badge">INACTIVE</span>}
                 </div>
                 <form onSubmit={handleInvite}>
                   <label htmlFor="admin-npub">OPERATOR PUBLIC KEY</label>
@@ -1216,53 +1635,220 @@ export default function AdminPanel() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow">NODE CONFIGURATION <span>·</span> READ-ONLY</div>
+                  <div className="eyebrow">NODE CONFIGURATION <span>·</span> {apiAvailable ? 'SIGNED WRITES' : 'READ-ONLY'}</div>
                   <h1>Settings for this server.</h1>
-                  <p>The identity and records this node publishes on Nostr.</p>
+                  <p>
+                    {apiAvailable
+                      ? 'The identity, relays and cadence this node publishes on Nostr.'
+                      : 'The identity and records this node publishes on Nostr. Saving needs the node admin API.'}
+                  </p>
                 </div>
+                {apiAvailable && (
+                  <div className="heading-actions">
+                    <button
+                      className="button-secondary"
+                      type="button"
+                      disabled={settingsBusy !== null}
+                      onClick={() => {
+                        setSettings(null);
+                        setSettingsState('idle');
+                        setSettingsDone('');
+                        setSettingsError('');
+                        setSettingsToken((value) => value + 1);
+                      }}
+                    >
+                      <RefreshCw size={14} className={settingsLoading ? 'spin' : undefined} /> Reload
+                    </button>
+                  </div>
+                )}
               </div>
+
+              {settingsError && (
+                <div className="panel-banner error" role="alert">
+                  <CircleAlert size={14} />
+                  <span>Could not read the node settings: {settingsError}</span>
+                </div>
+              )}
+
+              {settingsDone && (
+                <div className="settings-saved" role="status"><Check size={13} /> {settingsDone}</div>
+              )}
 
               <div className="settings-grid">
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <Globe2 size={17} />
-                    <div><h2>Public identity</h2><p>How clients find this node on Nostr.</p></div>
+                    <div><h2>Public identity</h2><p>The kind 0 profile clients see for this node.</p></div>
+                    {settingsUnavailable && <span className="inactive-badge">INACTIVE</span>}
                   </div>
                   <label>OPERATOR NPUB</label>
                   <div className="settings-readonly">
                     <span>{shortNpub(operatorNpub)}</span>
                     <button className="icon-quiet" onClick={() => copy(operatorNpub, 'Operator npub')} aria-label="Copy operator npub"><Copy size={14} /></button>
                   </div>
+
+                  <div className="settings-fields">
+                    <label htmlFor="identity-display-name">DISPLAY NAME</label>
+                    <input
+                      id="identity-display-name"
+                      value={identityDraft.displayName}
+                      onChange={(event) => { setIdentityDraft({ ...identityDraft, displayName: event.target.value }); setIdentityError(''); setSettingsDone(''); }}
+                      placeholder="My community node"
+                      maxLength={64}
+                      autoComplete="off"
+                      disabled={!canEditSettings || settingsBusy !== null}
+                    />
+
+                    <label htmlFor="identity-nip05">NIP-05 ADDRESS</label>
+                    <input
+                      id="identity-nip05"
+                      value={identityDraft.nip05}
+                      onChange={(event) => { setIdentityDraft({ ...identityDraft, nip05: event.target.value }); setIdentityError(''); setSettingsDone(''); }}
+                      placeholder="name@example.com"
+                      maxLength={128}
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={!canEditSettings || settingsBusy !== null}
+                    />
+
+                    <label htmlFor="identity-about">ABOUT</label>
+                    <textarea
+                      id="identity-about"
+                      value={identityDraft.about}
+                      onChange={(event) => { setIdentityDraft({ ...identityDraft, about: event.target.value }); setIdentityError(''); setSettingsDone(''); }}
+                      placeholder="What this node is for."
+                      rows={3}
+                      maxLength={500}
+                      disabled={!canEditSettings || settingsBusy !== null}
+                    />
+
+                    <label htmlFor="identity-picture">PICTURE URL</label>
+                    <input
+                      id="identity-picture"
+                      value={identityDraft.picture}
+                      onChange={(event) => { setIdentityDraft({ ...identityDraft, picture: event.target.value }); setIdentityError(''); setSettingsDone(''); }}
+                      placeholder="https://example.com/avatar.png"
+                      maxLength={400}
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={!canEditSettings || settingsBusy !== null}
+                    />
+                  </div>
+
                   <label>PUBLIC ADDRESS</label>
                   <div className="settings-readonly">
                     <span>{publicHosts[0] ?? 'Not published'}</span>
                   </div>
                   {publicHosts.length > 1 && <small className="settings-hint">{publicHosts.length} endpoints published across services.</small>}
-                  <button className="text-button" disabled title="Identity is managed by the NCC sidecar">
-                    Managed by the sidecar <LockKeyhole size={12} />
-                  </button>
+
+                  {identityError && (
+                    <p className="invite-error" role="alert"><CircleAlert size={12} /> {identityError}</p>
+                  )}
+
+                  <div className="settings-actions">
+                    <button
+                      className="button-primary"
+                      type="button"
+                      onClick={handleSaveIdentity}
+                      disabled={!canEditSettings || settingsBusy !== null || !identityChanged}
+                    >
+                      {settingsBusy === 'identity' ? <span className="button-spinner" /> : <Check size={14} />}
+                      {settingsBusy === 'identity' ? 'Saving…' : 'Save identity'}
+                    </button>
+                    <span className="settings-status">
+                      {settingsLoading
+                        ? 'Reading…'
+                        : settings
+                          ? (settings.identity.published ? 'Kind 0 published' : 'Not published yet')
+                          : 'Node settings unavailable'}
+                    </span>
+                  </div>
+                  {settingsUnavailable && <small className="settings-hint">Saving stays inactive until the node serves /ncc-api.</small>}
                 </section>
 
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <Radio size={17} />
-                    <div><h2>Publication relays</h2><p>Where this browser looks for your NCC records.</p></div>
+                    <div><h2>Publication relays</h2><p>Where this node publishes and reads its NCC records.</p></div>
+                    {settingsUnavailable && <span className="inactive-badge">INACTIVE</span>}
                   </div>
-                  {(snapshot?.relays ?? (config?.relays ?? []).map((url) => ({ url, connected: false, anchorCount: 0, locatorCount: 0 }))).map((relay) => (
-                    <div className="relay-setting" key={relay.url}>
-                      <i className={`relay-dot ${relay.connected ? '' : 'off'}`} />
-                      <span>
-                        <strong>{new URL(relay.url).host}</strong>
-                        <small>{relay.url}</small>
-                      </span>
-                      <span className={`relay-state ${relay.connected ? '' : 'off'}`}>
-                        {snapshot ? (relay.connected ? `${relay.anchorCount + relay.locatorCount} records` : 'Unreachable') : 'Not checked'}
-                      </span>
-                    </div>
-                  ))}
-                  <button className="text-button" disabled title="Relay configuration is managed by the NCC sidecar">
-                    Managed by the sidecar <LockKeyhole size={12} />
-                  </button>
+
+                  {settingsLoading && (
+                    <span className="admin-loading" role="status"><span className="button-spinner dark" /> Reading relays…</span>
+                  )}
+
+                  {displayedRelays.map((url) => {
+                    const report = relayReportByUrl.get(url);
+                    const records = report ? report.anchorCount + report.locatorCount : 0;
+                    return (
+                      <div className="relay-setting" key={url}>
+                        <i className={`relay-dot ${report && !report.connected ? 'off' : ''}`} />
+                        <span>
+                          <strong>{new URL(url).host}</strong>
+                          <small>{url}</small>
+                        </span>
+                        <span className={`relay-state ${report && !report.connected ? 'off' : ''}`}>
+                          {report ? (report.connected ? `${records} records` : 'Unreachable') : 'Saved'}
+                        </span>
+                        <button
+                          className="icon-quiet"
+                          type="button"
+                          onClick={() => handleRemoveRelay(url)}
+                          disabled={!canEditSettings || settingsBusy !== null}
+                          aria-label={`Remove relay ${url}`}
+                          title="Remove this relay"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  <div className="invite-input-row settings-add-relay">
+                    <input
+                      aria-label="Add a publication relay"
+                      value={newRelay}
+                      onChange={(event) => { setNewRelay(event.target.value); setRelayError(''); setSettingsDone(''); }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          handleAddRelay();
+                        }
+                      }}
+                      placeholder="wss://relay.example/"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={!canEditSettings || settingsBusy !== null}
+                    />
+                    <button
+                      className="button-secondary"
+                      type="button"
+                      onClick={handleAddRelay}
+                      disabled={!canEditSettings || settingsBusy !== null || newRelay.trim().length === 0}
+                    >
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
+
+                  {relayError && (
+                    <p className="invite-error" role="alert"><CircleAlert size={12} /> {relayError}</p>
+                  )}
+
+                  <div className="settings-actions">
+                    <button
+                      className="button-primary"
+                      type="button"
+                      onClick={handleSaveRelays}
+                      disabled={!canEditSettings || settingsBusy !== null || !relaysChanged}
+                    >
+                      {settingsBusy === 'relays' ? <span className="button-spinner" /> : <Check size={14} />}
+                      {settingsBusy === 'relays' ? 'Saving…' : 'Save relays'}
+                    </button>
+                    <span className="settings-status">
+                      {relayDraft.length} relay{relayDraft.length === 1 ? '' : 's'} · anchors and locators
+                    </span>
+                  </div>
+                  {settingsUnavailable && <small className="settings-hint">Saving stays inactive until the node serves /ncc-api.</small>}
                 </section>
 
                 <section className="settings-card">
@@ -1281,11 +1867,81 @@ export default function AdminPanel() {
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <Layers3 size={17} />
-                    <div><h2>Publication cadence</h2><p>Values reported by the latest locator.</p></div>
+                    <div><h2>Publication cadence</h2><p>How often the node refreshes anchors and locators.</p></div>
+                    {settingsUnavailable && <span className="inactive-badge">INACTIVE</span>}
                   </div>
-                  <div className="settings-inline"><span>Locator TTL</span><strong>{loadingRecords ? 'Reading…' : locatorTtl === null ? 'Not published' : durationLabel(locatorTtl)}</strong></div>
-                  <div className="settings-inline"><span>Latest record</span><strong>{loadingRecords ? 'Reading…' : snapshot?.latestPublishedAt ? relativeTime(snapshot.latestPublishedAt) : '—'}</strong></div>
-                  <div className="settings-inline"><span>Records found</span><strong>{loadingRecords ? 'Reading…' : services.length}</strong></div>
+
+                  <div className="cadence-grid">
+                    <label htmlFor="cadence-refresh">
+                      PUBLISH INTERVAL
+                      <span>
+                        <input
+                          id="cadence-refresh"
+                          inputMode="numeric"
+                          value={cadenceText.refreshIntervalMinutes}
+                          onChange={(event) => { setCadenceText({ ...cadenceText, refreshIntervalMinutes: event.target.value }); setCadenceError(''); setSettingsDone(''); }}
+                          disabled={!canEditSettings || settingsBusy !== null}
+                        />
+                        min
+                      </span>
+                    </label>
+                    <label htmlFor="cadence-ttl">
+                      LOCATOR TTL
+                      <span>
+                        <input
+                          id="cadence-ttl"
+                          inputMode="numeric"
+                          value={cadenceText.ncc05TtlHours}
+                          onChange={(event) => { setCadenceText({ ...cadenceText, ncc05TtlHours: event.target.value }); setCadenceError(''); setSettingsDone(''); }}
+                          disabled={!canEditSettings || settingsBusy !== null}
+                        />
+                        hr
+                      </span>
+                    </label>
+                    <label htmlFor="cadence-expiry">
+                      RECORD EXPIRY
+                      <span>
+                        <input
+                          id="cadence-expiry"
+                          inputMode="numeric"
+                          value={cadenceText.ncc02ExpiryDays}
+                          onChange={(event) => { setCadenceText({ ...cadenceText, ncc02ExpiryDays: event.target.value }); setCadenceError(''); setSettingsDone(''); }}
+                          disabled={!canEditSettings || settingsBusy !== null}
+                        />
+                        days
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="settings-inline"><span>Refreshes every</span><strong>{durationLabel(nextCadence.refreshIntervalMinutes * 60)}</strong></div>
+                  <div className="settings-inline"><span>Locator valid for</span><strong>{durationLabel(nextCadence.ncc05TtlHours * 3600)}</strong></div>
+                  <div className="settings-inline"><span>Record valid for</span><strong>{durationLabel(nextCadence.ncc02ExpiryDays * 86400)}</strong></div>
+                  <div className="settings-inline">
+                    <span>Latest record</span>
+                    <strong>{loadingRecords ? 'Reading…' : snapshot?.latestPublishedAt ? relativeTime(snapshot.latestPublishedAt) : '—'}</strong>
+                  </div>
+                  <div className="settings-inline">
+                    <span>Services publishing</span>
+                    <strong>{settingsLoading ? 'Reading…' : settings?.publication.services ?? services.length}</strong>
+                  </div>
+
+                  {cadenceError && (
+                    <p className="invite-error" role="alert"><CircleAlert size={12} /> {cadenceError}</p>
+                  )}
+
+                  <div className="settings-actions">
+                    <button
+                      className="button-primary"
+                      type="button"
+                      onClick={handleSaveCadence}
+                      disabled={!canEditSettings || settingsBusy !== null || !cadenceChanged}
+                    >
+                      {settingsBusy === 'cadence' ? <span className="button-spinner" /> : <Check size={14} />}
+                      {settingsBusy === 'cadence' ? 'Saving…' : 'Save cadence'}
+                    </button>
+                    <span className="settings-status">{locatorTtl === null ? 'No locator TTL published' : `${durationLabel(locatorTtl)} locator TTL live`}</span>
+                  </div>
+                  {settingsUnavailable && <small className="settings-hint">Saving stays inactive until the node serves /ncc-api.</small>}
                 </section>
               </div>
             </>

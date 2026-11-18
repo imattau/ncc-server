@@ -63,11 +63,12 @@ export function useLoginActions() {
       const relays = config.relayMetadata.relays
         .filter((r) => r.write)
         .map((r) => r.url);
-      // Fall back to the app default relays if the user has none configured,
-      // so the remote signer has multiple connection options during handshake.
-      return relays.length > 0
-        ? relays
-        : APP_RELAYS.relays.filter((r) => r.write).map((r) => r.url);
+      // Fall back to the app default relays if the user has none configured.
+      // They are marked read-only for normal publishing, but nostrconnect
+      // only uses them to carry the NIP-46 handshake, and an empty list makes
+      // the handshake fail immediately ("Timeout waiting for remote signer").
+      if (relays.length > 0) return relays;
+      return APP_RELAYS.relays.map((relay) => relay.url);
     },
     // Log out the current user
     async logout(): Promise<void> {

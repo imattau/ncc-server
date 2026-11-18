@@ -21,7 +21,7 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
        patch --dry-run -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
        && patch -p1 < /tmp/ncc-sidecar-tor-control-close.patch; \
      fi \
-  && if [ ! -f src/routes/panel-admin.js ]; then \
+  && if [ ! -f src/routes/panel-settings.js ]; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-admin-api.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-admin-api.patch; \
      fi \

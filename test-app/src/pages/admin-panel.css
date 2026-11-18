@@ -34,3 +34,32 @@
 .invite-error svg{flex:none}
 .invite-error button{margin-left:auto;border:0;background:none;color:#8d4a37;font-size:9px;font-weight:700;white-space:nowrap}
 .invite-card .invite-success{margin-top:10px}
+
+/* Settings writes and the mobile-first NIP-46 sign-in path. */
+.settings-fields{display:grid;margin-bottom:13px}
+.settings-fields label{display:block;font-size:8px;letter-spacing:.09em;color:#929c94;font-weight:750;margin:0 0 6px}
+.settings-fields input,.settings-fields textarea{width:100%;border:1px solid #e2e8df;border-radius:7px;padding:8px 10px;font-size:10px;color:#39483d;background:#fff;margin-bottom:11px;resize:vertical}
+.settings-fields input:focus,.settings-fields textarea:focus{outline:3px solid #8bb442;outline-offset:1px}
+.settings-fields input:disabled,.settings-fields textarea:disabled{background:#fafbf9;color:#8b958d;cursor:not-allowed}
+.settings-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:13px}
+.settings-status{margin-left:auto;color:#8d978f;font-size:9px;text-align:right}
+.settings-saved{display:flex;align-items:center;gap:7px;border:1px solid #e2ebd7;background:#edf4e4;color:#5b6d52;border-radius:9px;padding:9px 12px;font-size:10px;margin-bottom:14px}
+.settings-saved svg{flex:none;color:#6e9550}
+.settings-add-relay{margin-top:10px}
+.settings-add-relay input{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.cadence-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.cadence-grid label{display:grid;gap:5px;font-size:8px;letter-spacing:.08em;color:#929c94;font-weight:750}
+.cadence-grid label>span{display:flex;align-items:center;gap:5px;color:#7b867e;font-size:9px;letter-spacing:0;font-weight:550}
+.cadence-grid input{width:100%;height:32px;border:1px solid #e2e8df;border-radius:7px;padding:0 8px;font-size:10px;color:#39483d;background:#fff}
+.cadence-grid input:disabled{background:#fafbf9;color:#8b958d;cursor:not-allowed}
+.settings-card .relay-setting .icon-quiet{padding:4px}
+.gate-connect{display:flex;gap:12px;align-items:center;border:1px solid #e8ede4;background:#fafbf8;border-radius:10px;padding:11px;margin-bottom:14px}
+.gate-qr{flex:none;background:#fff;border:1px solid #eef1ec;border-radius:8px;padding:5px;line-height:0}
+.gate-qr canvas{display:block;width:110px;height:110px}
+.gate-connect-copy{display:grid;gap:6px;min-width:0}
+.gate-connect-copy strong{font-size:10px;line-height:1.45}
+.gate-connect-copy small{font-size:9px;color:#89938b;line-height:1.5}
+.gate-connect-copy .gate-actions{margin-top:2px}
+.gate-connect-copy .button-primary,.gate-connect-copy .button-secondary{height:32px;padding:0 10px;font-size:10px;text-decoration:none}
+.gate-detail{display:block;margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;color:#8a6f37;word-break:break-word}
+@media(max-width:760px){.cadence-grid{grid-template-columns:1fr 1fr}.gate-connect{align-items:flex-start}.gate-qr canvas{width:88px;height:88px}.settings-actions .button-primary{flex:1}.settings-status{margin-left:0;flex-basis:100%;text-align:left}}

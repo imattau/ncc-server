@@ -25,7 +25,18 @@ function base64Utf8(text: string): string {
   return btoa(binary);
 }
 
-export type Nip98Method = 'GET' | 'POST' | 'DELETE';
+/**
+ * NIP-98 tags do not include a nonce, and two attempts in the same second
+ * would otherwise produce a byte-identical event. The sidecar treats a
+ * repeated event id as a replay, so add one to keep retries distinct.
+ */
+function nonce(): string {
+  const bytes = new Uint8Array(8);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export type Nip98Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 /** Build the `Authorization` header for one admin API request. */
 export async function nip98Authorization(
@@ -36,7 +47,7 @@ export async function nip98Authorization(
   const event = await signer.signEvent({
     kind: NIP98_KIND,
     created_at: Math.floor(Date.now() / 1000),
-    tags: [['u', url], ['method', method]],
+    tags: [['u', url], ['method', method], ['nonce', nonce()]],
     content: '',
   });
 
