@@ -45,6 +45,7 @@ verifies nothing itself: the sidecar checks each request.
   send a best-effort invite DM
 - `DELETE /ncc-api/admins/<pubkey or npub>` — remove an admin
 - `GET /ncc-api/settings` — read relays, identity, cadence and publication state
+- `GET /ncc-api/records` — query the node's published NCC records from its relays
 - `PUT /ncc-api/settings/relays` with `{"relays": ["wss://…"]}` — replace the
   publication relays
 - `PUT /ncc-api/settings/identity` with `{"displayName", "about", "picture",
@@ -88,6 +89,23 @@ probes). It invalidates the relevant hashes and timestamp on each service, so
 the normal 60-second cycle republishes anchors, locators and the profile
 within about a minute. The panel says so instead of claiming the records are
 already updated.
+
+### Record and relay status
+
+The overview and the relay reachability labels are not read from the
+browser. NCC Browser pages are not allowed to open WebSockets to public
+relays, so every relay appeared "Unreachable" and the records list was empty
+under `ncc://`. The panel now asks the sidecar for `GET /ncc-api/records`;
+the sidecar queries the configured publication relays (with its own normal
+network access), verifies the events, and returns the relay reports and
+events. The panel parses those events with the same code it used to use for
+its own pool.
+
+If the sidecar image predates the route, the panel falls back to querying the
+relays from the browser, which still works over plain `https`; it will keep
+showing everything unreachable under `ncc://` until the sidecar is updated.
+Relay status in Settings is therefore the node's view of the relays, not the
+browser's.
 
 ### Sign-in on mobile
 

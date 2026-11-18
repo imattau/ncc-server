@@ -13,7 +13,13 @@
  */
 
 import { nip98Authorization, type Nip98Method, type PanelSigner } from './nip98';
-import { normalizeRelay } from './nccPanel';
+import {
+  buildPanelSnapshot,
+  normalizeRelay,
+  type PanelSnapshot,
+  type RelayReport,
+} from './nccPanel';
+import type { NostrEvent } from 'nostr-tools';
 
 export interface PanelAdmin {
   pubkey: string;
@@ -197,6 +203,34 @@ function whole(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : fallback;
 }
 
+function readRelayReport(value: unknown): RelayReport | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const url = normalizeRelay(record.url);
+  if (!url) return null;
+
+  return {
+    url,
+    connected: record.connected === true,
+    anchorCount: whole(record.anchorCount, 0),
+    locatorCount: whole(record.locatorCount, 0),
+    ...(typeof record.error === 'string' && record.error ? { error: record.error } : {}),
+  };
+}
+
+function isNostrEvent(value: unknown): value is NostrEvent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+
+  return typeof record.id === 'string'
+    && typeof record.pubkey === 'string'
+    && typeof record.sig === 'string'
+    && typeof record.content === 'string'
+    && typeof record.created_at === 'number'
+    && typeof record.kind === 'number'
+    && Array.isArray(record.tags);
+}
+
 function readSettings(payload: unknown): PanelSettings {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new PanelApiError(0, 'The node returned an unexpected response');
@@ -337,6 +371,37 @@ export async function loadPanelSettings(
   signal?: AbortSignal,
 ): Promise<PanelSettings> {
   return readSettings(await requestJson(base, signer, 'GET', '/settings', undefined, signal));
+}
+
+/**
+ * Published NCC records, queried by the sidecar.
+ *
+ * NCC Browser pages cannot open WebSockets to public relays, so the browser
+ * would always report every relay unreachable there. The sidecar has normal
+ * network access and already knows the publication relays.
+ */
+export async function loadPanelRecords(
+  base: string,
+  signer: PanelSigner,
+  signal?: AbortSignal,
+): Promise<PanelSnapshot> {
+  const payload = await requestJson(base, signer, 'GET', '/records', undefined, signal);
+
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new PanelApiError(0, 'The node returned an unexpected response');
+  }
+
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.relays) || !Array.isArray(record.events)) {
+    throw new PanelApiError(0, 'The node returned an unexpected response');
+  }
+
+  const relays = record.relays
+    .map(readRelayReport)
+    .filter((report): report is RelayReport => report !== null);
+  const events = record.events.filter(isNostrEvent);
+
+  return buildPanelSnapshot(events, relays);
 }
 
 export async function savePanelRelays(

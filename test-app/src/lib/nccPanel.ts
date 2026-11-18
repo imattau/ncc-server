@@ -222,58 +222,23 @@ function locatorServiceId(dTag: string): string {
   return dTag.endsWith('-locator') ? dTag.slice(0, -'-locator'.length) : dTag;
 }
 
-export async function loadPanelSnapshot(
-  pubkey: string,
-  relays: string[],
-  signal?: AbortSignal,
-): Promise<PanelSnapshot> {
-  const pool = new SimplePool();
-  const filter = { kinds: [30059, 30058], authors: [pubkey], limit: 200 };
-  const reports: RelayReport[] = [];
+/** Build the panel view from events fetched by a relay pool or the node. */
+export function buildPanelSnapshot(events: NostrEvent[], relayReports: RelayReport[]): PanelSnapshot {
   const anchors = new Map<string, NostrEvent>();
   const locators = new Map<string, NostrEvent>();
 
-  const abort = () => pool.close(relays);
-  signal?.addEventListener('abort', abort, { once: true });
+  for (const event of events) {
+    const dTag = tagValue(event, 'd');
+    if (!dTag) continue;
 
-  try {
-    await Promise.all(
-      relays.map(async (url) => {
-        const report: RelayReport = { url, connected: false, anchorCount: 0, locatorCount: 0 };
-
-        try {
-          const relay = await pool.ensureRelay(url, { connectionTimeout: CONNECT_TIMEOUT_MS });
-          report.connected = relay.connected;
-
-          const events = await pool.querySync([url], filter, { maxWait: QUERY_TIMEOUT_MS });
-          for (const event of events) {
-            const dTag = tagValue(event, 'd');
-            if (!dTag) continue;
-
-            if (event.kind === 30059) {
-              report.anchorCount += 1;
-              const existing = anchors.get(dTag);
-              if (!existing || existing.created_at < event.created_at) anchors.set(dTag, event);
-            } else if (event.kind === 30058) {
-              report.locatorCount += 1;
-              const existing = locators.get(dTag);
-              if (!existing || existing.created_at < event.created_at) locators.set(dTag, event);
-            }
-          }
-        } catch (error) {
-          report.connected = false;
-          report.error = error instanceof Error ? error.message : 'connection failed';
-        } finally {
-          reports.push(report);
-        }
-      }),
-    );
-  } finally {
-    signal?.removeEventListener('abort', abort);
-    pool.close(relays);
+    if (event.kind === 30059) {
+      const existing = anchors.get(dTag);
+      if (!existing || existing.created_at < event.created_at) anchors.set(dTag, event);
+    } else if (event.kind === 30058) {
+      const existing = locators.get(dTag);
+      if (!existing || existing.created_at < event.created_at) locators.set(dTag, event);
+    }
   }
-
-  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
   const now = Math.floor(Date.now() / 1000);
   const ids = new Set<string>(anchors.keys());
@@ -333,9 +298,56 @@ export async function loadPanelSnapshot(
   return {
     services,
     activity,
-    relays: reports.sort((a, b) => a.url.localeCompare(b.url)),
+    relays: [...relayReports].sort((a, b) => a.url.localeCompare(b.url)),
     latestPublishedAt: activity[0]?.createdAt ?? null,
   };
+}
+
+export async function loadPanelSnapshot(
+  pubkey: string,
+  relays: string[],
+  signal?: AbortSignal,
+): Promise<PanelSnapshot> {
+  const pool = new SimplePool();
+  const filter = { kinds: [30059, 30058], authors: [pubkey], limit: 200 };
+  const reports: RelayReport[] = [];
+  const events: NostrEvent[] = [];
+
+  const abort = () => pool.close(relays);
+  signal?.addEventListener('abort', abort, { once: true });
+
+  try {
+    await Promise.all(
+      relays.map(async (url) => {
+        const report: RelayReport = { url, connected: false, anchorCount: 0, locatorCount: 0 };
+
+        try {
+          const relay = await pool.ensureRelay(url, { connectionTimeout: CONNECT_TIMEOUT_MS });
+          report.connected = relay.connected;
+
+          const found = await pool.querySync([url], filter, { maxWait: QUERY_TIMEOUT_MS });
+          for (const event of found) {
+            if (event.kind === 30059) report.anchorCount += 1;
+            else if (event.kind === 30058) report.locatorCount += 1;
+            events.push(event);
+          }
+        } catch (error) {
+          report.connected = false;
+          report.error = error instanceof Error ? error.message : 'connection failed';
+        } finally {
+          reports.push(report);
+        }
+      }),
+    );
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    pool.close(relays);
+  }
+
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+  const unique = [...new Map(events.map((event) => [event.id, event])).values()];
+  return buildPanelSnapshot(unique, reports);
 }
 
 /** Accept a bech32 npub or a hex pubkey from the admin form. */

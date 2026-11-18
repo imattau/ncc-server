@@ -317,10 +317,10 @@ index 0000000..3245251
 +}
 diff --git a/src/routes/panel-settings.js b/src/routes/panel-settings.js
 new file mode 100644
-index 0000000..23dc455
+index 0000000..b7f6586
 --- /dev/null
 +++ b/src/routes/panel-settings.js
-@@ -0,0 +1,430 @@
+@@ -0,0 +1,493 @@
 +/**
 + * Node settings for the NCC admin panel.
 + *
@@ -336,6 +336,8 @@ index 0000000..23dc455
 + * does not block on Tor or endpoint probes.
 + */
 +
++import { SimplePool } from 'nostr-tools';
++import WebSocket from 'ws';
 +import { authorizePanelRequest } from '../panel-auth.js';
 +import {
 +  addLog, getConfig, getServices, setConfig, updateService,
@@ -421,6 +423,62 @@ index 0000000..23dc455
 +    : [];
 +
 +  return fallback.filter(Boolean);
++}
++
++const RECORD_CONNECT_TIMEOUT_MS = 5000;
++const RECORD_QUERY_TIMEOUT_MS = 7000;
++const RECORD_RELAY_LIMIT = 20;
++
++/**
++ * Query the node's own NCC records from its publication relays.
++ *
++ * The panel cannot do this itself: NCC Browser pages are not allowed to open
++ * WebSockets to public relays, so every relay would appear unreachable and
++ * the overview would be empty. The sidecar has normal network access and
++ * already knows which relays the node publishes to.
++ */
++async function queryPublishedRecords() {
++  const pubkey = operatorPubkey();
++  const relays = readRelays().slice(0, RECORD_RELAY_LIMIT);
++  if (!pubkey || relays.length === 0) return { relays: [], events: [] };
++
++  const pool = new SimplePool({ websocketImplementation: WebSocket });
++  const reports = [];
++  const events = [];
++
++  try {
++    await Promise.all(relays.map(async (url) => {
++      const report = { url, connected: false, anchorCount: 0, locatorCount: 0 };
++
++      try {
++        const relay = await pool.ensureRelay(url, { connectionTimeout: RECORD_CONNECT_TIMEOUT_MS });
++        report.connected = relay.connected;
++
++        const found = await pool.querySync([url], {
++          kinds: [30059, 30058],
++          authors: [pubkey],
++          limit: 200,
++        }, { maxWait: RECORD_QUERY_TIMEOUT_MS });
++
++        for (const event of found) {
++          if (event.pubkey !== pubkey) continue;
++          if (event.kind === 30059) report.anchorCount += 1;
++          else if (event.kind === 30058) report.locatorCount += 1;
++          events.push(event);
++        }
++      } catch (error) {
++        report.error = error instanceof Error ? error.message : 'connection failed';
++      }
++
++      reports.push(report);
++    }));
++  } finally {
++    pool.close(relays);
++  }
++
++  const unique = [...new Map(events.map((event) => [event.id, event])).values()];
++  reports.sort((a, b) => a.url.localeCompare(b.url));
++  return { relays: reports, events: unique };
 +}
 +
 +function normalizeRelays(value) {
@@ -639,6 +697,11 @@ index 0000000..23dc455
 +  server.get('/ncc-api/settings', async (request, reply) => {
 +    if (!authorizePanelRequest(request, reply)) return;
 +    return settingsPayload();
++  });
++
++  server.get('/ncc-api/records', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++    return queryPublishedRecords();
 +  });
 +
 +  server.put('/ncc-api/settings/relays', async (request, reply) => {

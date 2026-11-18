@@ -33,6 +33,7 @@ import {
   addPanelAdmin,
   cadenceProblem,
   listPanelAdmins,
+  loadPanelRecords,
   loadPanelSettings,
   relayInputToUrl,
   removePanelAdmin,
@@ -684,7 +685,20 @@ export default function AdminPanel() {
 
     const controller = new AbortController();
 
-    loadPanelSnapshot(operatorPubkey, readRelays, controller.signal)
+    // The sidecar queries relays because an ncc:// page cannot open a
+    // WebSocket to them; every relay would look unreachable in NCC Browser.
+    // An older sidecar without /records falls back to querying from here.
+    const request = apiBase && user
+      ? loadPanelRecords(apiBase, user.signer, controller.signal).catch((error: unknown) => {
+          const notServed = error instanceof PanelApiError && (error.status === 404 || error.status === 0);
+          if (!notServed) throw error;
+          return loadPanelSnapshot(operatorPubkey, readRelays, controller.signal).catch(() => {
+            throw error;
+          });
+        })
+      : loadPanelSnapshot(operatorPubkey, readRelays, controller.signal);
+
+    request
       .then((loaded) => {
         if (controller.signal.aborted) return;
         setSnapshot(loaded);
@@ -700,7 +714,7 @@ export default function AdminPanel() {
       });
 
     return () => controller.abort();
-  }, [config, operatorPubkey, authorized, refreshToken, readRelays]);
+  }, [config, operatorPubkey, authorized, refreshToken, readRelays, apiBase, user]);
 
   const handleExtension = async () => {
     setSignInError('');
@@ -1071,7 +1085,7 @@ export default function AdminPanel() {
   const publishedCount = services.filter((service) => service.status === 'published').length;
   const expiredCount = services.filter((service) => service.status === 'expired').length;
   const connectedRelays = snapshot?.relays.filter((relay) => relay.connected).length ?? 0;
-  const relayTotal = config?.relays.length ?? 0;
+  const relayTotal = readRelays.length;
   const newestExpiry = services
     .filter((service) => service.status === 'published' && service.expiresAt !== null)
     .reduce<number | null>((soonest, service) => {
@@ -1769,7 +1783,7 @@ export default function AdminPanel() {
                 <section className="settings-card">
                   <div className="settings-card-title">
                     <Radio size={17} />
-                    <div><h2>Publication relays</h2><p>Where this node publishes and reads its NCC records.</p></div>
+                    <div><h2>Publication relays</h2><p>Where this node publishes and reads its records. Reachability is checked by the node.</p></div>
                     {settingsUnavailable && <span className="inactive-badge">INACTIVE</span>}
                   </div>
 
