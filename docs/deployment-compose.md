@@ -42,7 +42,7 @@ Forward and allow these TCP ports:
 
 | Port | Destination | Purpose |
 | --- | --- | --- |
-| 8080 | VM port 8080 | Optional HTTP; local Tor onion target |
+| 8080 | VM port 8080 | Optional HTTP; local target for the web onion |
 | 8443 | VM port 8443 | Pinned HTTPS web content |
 | 8444 | VM port 8444 | Pinned WSS Ditto Relay |
 | 8445 | VM port 8445 | Pinned HTTPS npanel |
@@ -56,10 +56,11 @@ its own HTTPS origin on port 8445 because its frontend's instance probe does
 not work under the ncc:// origin.
 
 Do not forward ports 3000, 3200, 3201, 3220, 3230, 8081, 9050, 9051, 9200,
-or 13131. The sidecar admin port, Npanel backends, ncc-search's own
-containers, the admin panel's loopback listener, Tor, OpenSearch, and relay
-backend are local services. Onion access uses outbound Tor connections and
-needs no router forward.
+13131, or the `TOR_*_PORT` loopback listeners (18045-18048 by default). The
+sidecar admin port, Npanel backends, ncc-search's own containers, the admin
+panel's loopback listener, Tor, OpenSearch, and relay backend are local
+services. The onion listeners are reached only from the Tor process. Onion
+access uses outbound Tor connections and needs no router forward.
 
 If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
@@ -127,17 +128,25 @@ certificate files from matching paths. All six records use the operator
 identity -- including ncc-search's and the admin panel's, even though those
 processes never sign or publish an event themselves; they get records purely
 so they have discoverable ncc://<npub>/search/ and ncc://<npub>/admin/
-addresses, the same reasoning as Npanel/Ditto Web. The web profile advertises
-HTTPS on port 8443 and maps its onion service to local HTTP port 8080. Relay,
-Npanel, Ditto Web, ncc-search, and the admin panel advertise ports 8444, 8445,
-8446, 8447, and 8448 respectively. Each profile's published port matches its
-dedicated Caddy listener, avoiding cross-service fallback to the web content
-root. The admin panel service root opens /admin; leave it unreachable
-if you do not want the panel UI published.
+addresses, the same reasoning as Npanel/Ditto Web. Every public service also
+gets its own onion address: `web` maps onion port 80 to local HTTP port 8080,
+`relay` maps it to the loopback relay backend on 13131, and Npanel, Ditto Web,
+ncc-search and the admin panel map it to dedicated loopback HTTP listeners
+(`TOR_NPANEL_PORT`, `TOR_DITTO_WEB_PORT`, `TOR_SEARCH_PORT`,
+`TOR_ADMIN_PORT`). Those listeners keep the same Host rewriting as their
+public TLS counterparts, and are never published. The default `addr` profile
+serves the web page, so it advertises web's onion rather than creating a
+second address for the same content.
+
+Relay, Npanel, Ditto Web, ncc-search, and the admin panel advertise HTTPS or
+WSS ports 8444, 8445, 8446, 8447, and 8448 respectively. Each profile's
+published port matches its dedicated Caddy listener, avoiding cross-service
+fallback to the web content root. The admin panel service root opens /admin;
+leave it unreachable if you do not want the panel UI published.
 
 The bundle's default publication relays are wss://relay.primal.net/ and
-wss://relay.ditto.pub/. The manager profile does not create its own onion
-service; Tor is enabled for the web profile.
+wss://relay.ditto.pub/. The manager profile does not create an onion service
+of its own.
 
 ## 2. Deploy web content
 
@@ -218,14 +227,20 @@ Open the welcome page at `ncc://<npub>/`; this is the identity's default
 `ncc://<npub>/web/` and `ncc://<npub>/relay/`. Use the npub printed by the
 installer.
 
-To check the onion endpoint from the VM, use the address printed by service
-provisioning:
+To check any onion endpoint from the VM, use the addresses printed by service
+provisioning (`web`, `relay`, `npanel`, `ditto`, `search`, `admin`):
 
 ~~~sh
-curl --socks5-hostname 127.0.0.1:9050 -I http://<web-onion-address>.onion/
+curl --socks5-hostname 127.0.0.1:9050 -I http://<service-onion-address>.onion/
 ~~~
 
-Tor may need time to bootstrap and publish the onion descriptor. Do not open
+For the relay, check the WebSocket endpoint instead:
+
+~~~sh
+curl --socks5-hostname 127.0.0.1:9050 -I http://<relay-onion-address>.onion/
+~~~
+
+Tor may need time to bootstrap and publish the onion descriptors. Do not open
 or forward the SOCKS or control ports to the internet.
 
 ## Operations
@@ -295,6 +310,19 @@ you changed. `make bundle-pull` refreshes all configured images, and
 When a release adds a new sidecar service record (such as the `admin` panel),
 run `sudo make bundle-provision-services` once after upgrading to create and
 publish it; the script is idempotent for the existing records.
+
+Releases that add per-service onion endpoints require one extra step on an
+existing install. Deploy the release, recreate `caddy` so its loopback onion
+listeners exist, then run:
+
+~~~sh
+sudo make bundle-enable-tor
+~~~
+
+This merges Tor settings into the existing records without rewriting their
+profiles, publication relays or cadence, reuses the web onion for `addr`, and
+republishes. Fresh installs do this automatically. Adding a custom service
+with `make service-add` also creates its onion automatically.
 
 The legacy systemd installer and its TLS/Tor scripts are separate. Do not run
 them against a Compose deployment.

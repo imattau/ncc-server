@@ -159,6 +159,7 @@ The Compose bundle publishes the panel as the `admin` NCC service:
 
 - `ncc://<npub>/admin/` (resolves to the `admin` locator)
 - `https://<PUBLIC_IPV4>:8448/admin` directly
+- `http://<admin-onion>.onion/` over Tor (its own onion endpoint)
 - the service root returns a small 200 page that opens `/admin`; it cannot be
   an HTTP 302 because NCC Browser fetches endpoints with manual redirects and
   Electron reports those as "Redirect was cancelled"
@@ -169,6 +170,16 @@ web/Npanel/Ditto/search listeners. Set `ADMIN_PANEL_TLS_PORT` to change the
 port (default 8448). Re-run `sudo make bundle-provision-services` after
 upgrading to create and publish the record. Forward the port if clients
 should reach it; leave it closed to keep the panel off the network.
+
+The admin service also has its own onion endpoint. Its loopback listener
+(`TOR_ADMIN_PORT`, default 18048) serves the same page and `/ncc-api` proxy,
+but `/ncc-config.json` publishes `panelApi` from the request Host instead of
+the public HTTPS origin. A page opened through the onion therefore signs the
+onion URL, and its relative `/ncc-api` requests stay on the onion; the sidecar
+accepts that Host as a NIP-98 URL candidate. Sign-in still needs a NIP-07 or
+NIP-46 signer that can reach its relays over Tor. See
+[deployment](deployment-compose.md) for the one-time
+`make bundle-enable-tor` upgrade step.
 
 The service serves the tracked `public/` build, so deploy a build that
 includes the `/admin` route (`make build-test-app` and

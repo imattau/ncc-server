@@ -1,6 +1,8 @@
 *.env
 .env
 *.log
+__pycache__/
+*.pyc
 node_modules/
 .secrets/
 /test-app/.agents/

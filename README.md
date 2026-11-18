@@ -22,8 +22,10 @@ through their managed runtime configuration.
   and npm.
 
 Forward TCP 8443–8448 to expose the NCC services. Port 8080 is optional for
-plain HTTP web access; Tor's onion service reaches it locally. You can leave
-individual service ports closed if that service should not be reachable.
+plain HTTP web access; the web onion reaches it locally. Every public service
+also gets its own onion address: web, relay, Npanel, Ditto Web, ncc-search and
+the admin panel. You can leave individual service ports closed if that service
+should not be reachable.
 The admin panel is published as an NCC service on port 8448 and its root
 opens `/admin`. Sign in with the node operator key or an admin key; the Admins
 section adds and removes admin keys with NIP-98-signed requests to the sidecar.
@@ -33,7 +35,7 @@ access.
 
 | Port | Purpose |
 | --- | --- |
-| 8080 | HTTP web content and local Tor onion target |
+| 8080 | HTTP web content and local target for the web onion |
 | 8081 | Local-only admin panel (SSH tunnel) |
 | 8443 | Pinned HTTPS web content |
 | 8444 | Pinned WSS Ditto Relay |

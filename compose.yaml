@@ -292,6 +292,12 @@ services:
       DITTO_WEB_TLS_PORT: "${DITTO_WEB_TLS_PORT}"
       SEARCH_TLS_PORT: "${SEARCH_TLS_PORT}"
       NPANEL_TLS_PORT: "${NPANEL_TLS_PORT}"
+      # Loopback-only HTTP listeners whose onion services map onion port 80
+      # to one local port each. They are not published by Compose.
+      TOR_NPANEL_PORT: "${TOR_NPANEL_PORT:-18045}"
+      TOR_DITTO_WEB_PORT: "${TOR_DITTO_WEB_PORT:-18046}"
+      TOR_SEARCH_PORT: "${TOR_SEARCH_PORT:-18047}"
+      TOR_ADMIN_PORT: "${TOR_ADMIN_PORT:-18048}"
       ADMIN_PANEL_PORT: "${ADMIN_PANEL_PORT:-8081}"
       ADMIN_PANEL_TLS_PORT: "${ADMIN_PANEL_TLS_PORT:-8448}"
       CONTENT_ROOT: /srv/ncc-server/public

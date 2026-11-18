@@ -5,13 +5,17 @@ import hashlib
 import json
 import os
 import pathlib
-import re
-import secrets
-import socket
 import subprocess
 import sys
-import time
 import urllib.request
+
+import tor_control
+from tor_settings import (
+    RELAY_LOCAL_PORT,
+    enable_service_tor,
+    local_port_for,
+    reuse_onion_endpoint,
+)
 
 
 API = os.environ.get('SIDECAR_ADMIN_URL', 'http://127.0.0.1:3000').rstrip('/')
@@ -106,39 +110,6 @@ def spki_pin(cert_path):
     return base64.urlsafe_b64encode(hashlib.sha256(der).digest()).decode().rstrip('=')
 
 
-def configure_tor(project, torrc_path):
-    password = secrets.token_urlsafe(48)
-    compose = ['docker-compose', '-p', 'ncc-bundle', '-f', str(project / 'compose.yaml')]
-    result = subprocess.run(
-        compose + ['exec', '-T', 'tor', 'tor', '--hash-password', password],
-        check=True, capture_output=True, text=True,
-    )
-    hashed = next((line.strip() for line in result.stdout.splitlines()
-                   if re.fullmatch(r'16:[A-F0-9]{58}', line.strip())), None)
-    if not hashed:
-        raise RuntimeError('Tor did not return a valid HashedControlPassword')
-    torrc_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    torrc_path.write_text('\n'.join((
-        'SocksPort 127.0.0.1:9050',
-        'ControlPort 127.0.0.1:9051',
-        'CookieAuthentication 0',
-        f'HashedControlPassword {hashed}',
-        '',
-    )))
-    os.chown(torrc_path, 0, 0)
-    os.chmod(torrc_path, 0o644)
-    subprocess.run(compose + ['restart', 'tor'], check=True,
-                   stdout=subprocess.DEVNULL)
-    deadline = time.monotonic() + 90
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(('127.0.0.1', 9051), timeout=2):
-                return password
-        except OSError:
-            time.sleep(1)
-    raise RuntimeError('Tor control port 9051 did not become ready')
-
-
 def main():
     if os.geteuid() != 0:
         raise RuntimeError('run this service provisioner as root on the VM')
@@ -169,22 +140,34 @@ def main():
     admin_port = int(env.get('ADMIN_PANEL_TLS_PORT', '8448'))
     cert_dir = pathlib.Path(env.get('SIDECAR_CERT_DIR', '/opt/ncc-sidecar/certs'))
     project = pathlib.Path(__file__).parents[1]
-    tor_password = configure_tor(project, pathlib.Path(env.get('TOR_CONFIG_FILE', '/etc/tor/torrc')))
-
     services = request('/api/services')
+    tor_password = tor_control.configure(
+        project,
+        pathlib.Path(env.get('TOR_CONFIG_FILE', '/etc/tor/torrc')),
+        services,
+    )
+    # A rotated control password drops every live onion. Update services this
+    # script does not recreate (custom services) before publishing.
+    for service, control in tor_control.password_updates(services, tor_password):
+        request(f'/api/service/{service["id"]}', 'PUT', {
+            'config': {'tor_control': {**control, 'password': tor_password}},
+        })
+
     web_config = service_config(public_ip, https_port, 'https', self_signed=True)
-    web_config['protocols']['tor'] = True
-    web_config['local_port'] = http_port
-    web_config['tor_control'] = {
-        'enabled': True,
-        'host': '127.0.0.1',
-        'port': 9051,
-        'password': tor_password,
-    }
+    web_config = enable_service_tor(
+        web_config, password=tor_password,
+        local_port=local_port_for('web', env),
+    )
     web = ensure_service(services, identity, service_id='web', name='NCC Web', config=web_config)
     if int(web['id']) != 2:
         raise RuntimeError(f'web record must have ID 2 for the Caddy certificate path; got {web["id"]}')
     force_publish(web)
+
+    # The web onion is also the default `addr` endpoint, so remember it before
+    # provisioning the rest.
+    current_web = next((item for item in request('/api/services')
+                        if item.get('service_id') == 'web'), {})
+    web_onion = (current_web.get('state') or {}).get('last_onion_address')
 
     cert_path = cert_dir / '2' / 'server.crt'
     if not cert_path.is_file():
@@ -206,6 +189,9 @@ def main():
         'ncc02_expiry_days': 1,
         'refresh_interval_minutes': 30,
     })
+    relay_config = enable_service_tor(
+        relay_config, password=tor_password, local_port=RELAY_LOCAL_PORT,
+    )
     relay = ensure_service(
         services, identity, service_id='relay', name='Ditto Relay',
         config=relay_config, service_type='relay',
@@ -227,6 +213,9 @@ def main():
         'ncc02_expiry_days': 1,
         'refresh_interval_minutes': 30,
     })
+    relay_config = enable_service_tor(
+        relay_config, password=tor_password, local_port=RELAY_LOCAL_PORT,
+    )
     relay = ensure_service(
         request('/api/services'), identity, service_id='relay', name='Ditto Relay',
         config=relay_config, service_type='relay',
@@ -234,19 +223,27 @@ def main():
     force_publish(relay)
 
     services = request('/api/services')
+    npanel_config = service_config(
+        public_ip, npanel_port, 'https', self_signed=False, pin=pin,
+        probe_url='http://127.0.0.1:3200/api/instance',
+    )
+    npanel_config = enable_service_tor(
+        npanel_config, password=tor_password, local_port=local_port_for('npanel', env),
+    )
     npanel = ensure_service(
         services, identity, service_id='npanel', name='Npanel Dashboard',
-        config=service_config(
-            public_ip, npanel_port, 'https', self_signed=False, pin=pin,
-            probe_url='http://127.0.0.1:3200/api/instance',
-        ),
+        config=npanel_config,
+    )
+    ditto_config = service_config(
+        public_ip, ditto_port, 'https', self_signed=False, pin=pin,
+        probe_url='http://127.0.0.1:3210/',
+    )
+    ditto_config = enable_service_tor(
+        ditto_config, password=tor_password, local_port=local_port_for('ditto', env),
     )
     ditto = ensure_service(
         services, identity, service_id='ditto', name='Ditto Web',
-        config=service_config(
-            public_ip, ditto_port, 'https', self_signed=False, pin=pin,
-            probe_url='http://127.0.0.1:3210/',
-        ),
+        config=ditto_config,
     )
     # ncc-search (see ncc-search/README.md) needs no identity or signer of
     # its own -- it's read-only and never publishes an event -- but it
@@ -255,9 +252,13 @@ def main():
     # anything themselves. Only the UI is addressed, not its separate API
     # backend, matching how npanel/ditto-web's own backend ports aren't
     # published individually either.
+    search_config = service_config(public_ip, search_port, 'https', self_signed=False, pin=pin)
+    search_config = enable_service_tor(
+        search_config, password=tor_password, local_port=local_port_for('search', env),
+    )
     search = ensure_service(
         services, identity, service_id='search', name='ncc-search',
-        config=service_config(public_ip, search_port, 'https', self_signed=False, pin=pin),
+        config=search_config,
     )
     force_publish(npanel)
     force_publish(ditto)
@@ -269,35 +270,52 @@ def main():
     # content is served. The panel itself is a prototype; see
     # docs/admin-panel.md.
     services = request('/api/services')
+    admin_config = service_config(
+        public_ip, admin_port, 'https', self_signed=False, pin=pin,
+        probe_url=f'http://127.0.0.1:{http_port}/admin',
+    )
+    admin_config = enable_service_tor(
+        admin_config, password=tor_password, local_port=local_port_for('admin', env),
+    )
     admin = ensure_service(
         services, identity, service_id='admin', name='Admin Panel',
-        config=service_config(
-            public_ip, admin_port, 'https', self_signed=False, pin=pin,
-            probe_url=f'http://127.0.0.1:{http_port}/admin',
-        ),
+        config=admin_config,
     )
     force_publish(admin)
     # Bare ncc://<npub>/ resolves the default service `addr`. Keep this as a
     # distinct NCC-02 profile with its own d=addr locator, but point it at the
     # same public web endpoint and certificate as the named `web` service.
+    # It reuses web's onion address instead of creating a second address for
+    # the same page.
+    root_config = {
+        **service_config(public_ip, https_port, 'https', self_signed=False, pin=pin),
+        'locator_id': 'addr',
+    }
+    if web_onion:
+        root_config = reuse_onion_endpoint(root_config, web_onion)
+    else:
+        print('Warning: Tor did not return a web onion; addr will publish no onion endpoint.')
     services = request('/api/services')
     root = ensure_service(
         services, identity, service_id='addr', name='NCC Web Root',
-        config={
-            **service_config(public_ip, https_port, 'https', self_signed=False, pin=pin),
-            'locator_id': 'addr',
-        },
+        config=root_config,
     )
     force_publish(root)
     print(f'Provisioned shared-identity locators: web={web["id"]}, relay={relay["id"]}, '
           f'npanel={npanel["id"]}, ditto={ditto["id"]}, search={search["id"]}, '
           f'admin={admin["id"]}, addr={root["id"]}.')
     print(f'Web SPKI pin: {pin}')
-    current_web = next((item for item in request('/api/services')
-                        if item.get('service_id') == 'web'), {})
-    onion = (current_web.get('state') or {}).get('last_onion_address')
-    if onion:
-        print(f'Tor onion endpoint: http://{onion}/')
+    final_services = request('/api/services')
+    for service_id in ('web', 'relay', 'npanel', 'ditto', 'search', 'admin'):
+        record = next((item for item in final_services
+                       if item.get('service_id') == service_id), None)
+        onion = (record.get('state') or {}).get('last_onion_address') if record else None
+        if onion:
+            print(f'Tor onion for {service_id}: http://{onion}/')
+        else:
+            print(f'Warning: {service_id} has no onion address yet.')
+    if web_onion:
+        print(f'Tor onion for addr (shared with web): http://{web_onion}/')
     print(f'All service records use operator npub {identity["npub"]}.')
 
 

@@ -140,17 +140,31 @@ sudo docker-compose -p ncc-bundle -f compose.yaml logs --tail=100 tor
 sudo docker-compose -p ncc-bundle -f compose.yaml logs --tail=100 sidecar
 ~~~
 
-The standard provisioner enables Tor for the web service and maps onion port 80
-to local HTTP port 8080. Check the onion address printed by the provisioner
-against the current web locator. Test from the VM:
+The standard Compose provisioner enables Tor for every public service: web
+maps onion port 80 to local HTTP port 8080, the relay maps it to the loopback
+relay backend, and Npanel, Ditto Web, ncc-search and the admin panel map it to
+the loopback HTTP listeners in `container/Caddyfile`. Each service should
+show its own onion address. Check the addresses printed by the provisioner or
+`make bundle-enable-tor` against the current locators. Test from the VM:
 
 ~~~sh
-curl --socks5-hostname 127.0.0.1:9050 -I http://<web-onion-address>.onion/
+curl --socks5-hostname 127.0.0.1:9050 -I http://<service-onion-address>.onion/
 ~~~
 
 Tor can take several minutes to bootstrap or publish a descriptor. Onion
 services require no incoming router forward. Keep SOCKS port 9050 and control
 port 9051 bound to loopback; never forward them.
+
+If a service's onion address resolves but the page fails, check that its
+loopback listener is up and bound to 127.0.0.1:
+
+~~~sh
+sudo ss -ltn | grep -E ':(18045|18046|18047|18048|13131) '
+~~~
+
+These are the Npanel, Ditto Web, ncc-search, admin and relay targets. If they
+are missing, deploy the current `container/Caddyfile` and recreate `caddy`,
+then run `sudo make bundle-enable-tor`.
 
 ## Identity setup or migration fails
 

@@ -148,8 +148,26 @@ network. Keep TCP 9050 (SOCKS) and 9051 (control) bound to loopback; do not
 forward either port from the router. Continue forwarding 8080 and 8443 for the
 public clearnet endpoints.
 
-After the `web` service and its HTTP listener on 8080 are working, enable Tor
-for its numeric sidecar record ID:
+The Compose bundle enables Tor for every public service during first-run
+provisioning, so each of `web`, `relay`, `npanel`, `ditto`, `search` and
+`admin` publishes its own onion endpoint. `addr` serves the same page as
+`web`, so it advertises web's onion instead of creating a second address. The
+relay onion maps onion port 80 to its loopback backend on 13131; the others
+map to the loopback HTTP listeners in `container/Caddyfile`. A custom service
+installed with `make service-add` gets its own onion automatically, mapped to
+its loopback backend port. On an existing Compose install, deploy the release,
+recreate `caddy`, then run:
+
+```sh
+sudo make bundle-enable-tor
+```
+
+That merges Tor settings into the existing records without changing their
+profiles, relays or cadence, then republishes. Confirm every service shows an
+onion address in the sidecar UI or from service provisioning.
+
+For a native install of the web service and its HTTP listener on 8080, enable
+Tor for its numeric sidecar record ID:
 
 ```sh
 sudo make enable-tor SERVICE_RECORD_ID=2 TOR_TARGET_PORT=8080
@@ -159,9 +177,11 @@ The command installs Debian's Tor package, configures a password-authenticated
 control port on `127.0.0.1:9051`, writes the generated control password only to
 the sidecar's local database, enables the Tor protocol on the selected service,
 maps onion port 80 to the selected local HTTP port, and asks the sidecar to
-republish. It leaves the public HTTPS endpoint on 8443 intact. The project
-installer applies a small pinned-source patch so the sidecar does not write
-the Tor control password or onion private key into its journal.
+republish. It leaves the public HTTPS endpoint on 8443 intact. Run it again
+with another record ID and that service's loopback HTTP target to give that
+service its own onion. The project installer applies a small pinned-source
+patch so the sidecar does not write the Tor control password or onion private
+key into its journal.
 
 Check `systemctl status tor@default ncc-sidecar`, then verify the service
 record's Tor status and onion address in the sidecar. The published Kind 30058

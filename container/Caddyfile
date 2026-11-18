@@ -78,6 +78,18 @@
 	}
 }
 
+# The admin service also has an onion endpoint. A page fetched through an
+# onion must sign that onion origin, not the public HTTPS one, and Caddy can
+# only learn it from the request Host. The onion page's relative /ncc-api
+# requests stay on the onion, so the sidecar accepts the matching Host.
+(ncc_onion_config) {
+	handle /ncc-config.json {
+		header Content-Type "application/json"
+		header Cache-Control "no-store"
+		respond `{"pubkey":"{$NCC_OPERATOR_PUBKEY}","panelApi":"http://{http.request.host}/ncc-api"}`
+	}
+}
+
 :{$CONTENT_PORT} {
 	import cors_response
 	import ncc_public_config
@@ -247,6 +259,7 @@
 # loopback, for operators who reach it through an SSH tunnel. Admin writes use
 # the same NIP-98-authorized API as the public listener.
 http://127.0.0.1:{$ADMIN_PANEL_PORT} {
+	bind 127.0.0.1
 	import ncc_public_config
 	import ncc_admin_api
 	handle {
@@ -260,6 +273,77 @@ http://127.0.0.1:{$ADMIN_PANEL_PORT} {
 	}
 }
 
+# Loopback-only HTTP listeners for the Tor onion services. Tor's ADD_ONION
+# maps onion port 80 to one local port per service, so each service can have a
+# distinct onion address while keeping its normal public TLS endpoint and
+# Host-based routing. Onion clients use http:// and ws:// because the onion
+# address itself provides encryption; these ports are never published.
+http://:{$TOR_NPANEL_PORT} {
+	bind 127.0.0.1
+	import cors_response
+	reverse_proxy 127.0.0.1:3200 {
+		header_up Host {$PUBLIC_IPV4}
+	}
+	log {
+		output stdout
+	}
+}
+
+http://:{$TOR_DITTO_WEB_PORT} {
+	bind 127.0.0.1
+	import cors_response
+	reverse_proxy 127.0.0.1:3210 {
+		header_up Host {$PUBLIC_IPV4}
+	}
+	log {
+		output stdout
+	}
+}
+
+http://:{$TOR_SEARCH_PORT} {
+	bind 127.0.0.1
+	handle /search* {
+		reverse_proxy 127.0.0.1:3230 {
+			header_up Host {$PUBLIC_IPV4}
+		}
+	}
+	handle /status* {
+		reverse_proxy 127.0.0.1:3230 {
+			header_up Host {$PUBLIC_IPV4}
+		}
+	}
+	handle {
+		import cors_response
+		reverse_proxy 127.0.0.1:3220 {
+			header_up Host {$PUBLIC_IPV4}
+		}
+	}
+	log {
+		output stdout
+	}
+}
+
+http://:{$TOR_ADMIN_PORT} {
+	bind 127.0.0.1
+	import cors_response
+	import ncc_onion_config
+	import ncc_admin_api
+	root * {$CONTENT_ROOT}
+	encode gzip
+	handle / {
+		header Content-Type "text/html; charset=utf-8"
+		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/admin"><title>NCC Server Admin Panel</title></head><body><p><a href="/admin">Open the NCC Server Admin Panel</a></p></body></html>`
+	}
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+	log {
+		output stdout
+	}
+}
+
 # Custom services installed with `make service-add` get dedicated TLS ports
-# and use the bundle's pinned web certificate.
+# and use the bundle's pinned web certificate. Their onion services map
+# directly to the loopback backend port.
 import /etc/caddy/custom/*.caddy

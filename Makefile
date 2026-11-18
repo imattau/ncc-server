@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add
 
 install:
 	sudo ./scripts/install.sh
@@ -13,6 +13,9 @@ first-run-identity:
 
 bundle-provision-services:
 	sudo python3 ./scripts/provision-compose-services.py
+
+bundle-enable-tor:
+	sudo python3 ./scripts/enable-compose-tor.py
 
 bundle-reconcile-public-ip:
 	sudo ./scripts/reconcile-public-ip.py

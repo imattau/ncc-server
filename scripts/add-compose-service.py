@@ -14,6 +14,9 @@ import time
 import urllib.error
 import urllib.request
 
+import tor_control
+from tor_settings import enable_service_tor
+
 
 PROJECT = pathlib.Path(__file__).resolve().parents[1]
 IDENTITY_PATH = pathlib.Path(os.environ.get(
@@ -216,6 +219,20 @@ def main():
                            'priority': 1, 'k': cert_fingerprint}],
         }
         existing = api('/api/services')
+        tor_password = tor_control.configure(
+            PROJECT,
+            pathlib.Path(env_values.get('TOR_CONFIG_FILE', '/etc/tor/torrc')),
+            existing,
+        )
+        # A rotated control password drops every live onion; update other
+        # services before the republish below so they re-add theirs too.
+        for service, control in tor_control.password_updates(existing, tor_password):
+            api(f'/api/service/{service["id"]}', 'PUT', {
+                'config': {'tor_control': {**control, 'password': tor_password}},
+            })
+        config = enable_service_tor(
+            config, password=tor_password, local_port=backend_port,
+        )
         record = next((item for item in existing if item.get('service_id') == service_id), None)
         if record:
             record = api(f'/api/service/{record["id"]}', 'PUT', {
@@ -234,6 +251,9 @@ def main():
                        if str(item.get('serviceId')) == str(record.get('id'))), None)
         if not detail or not detail.get('success'):
             fail(f'locator publish failed: {(detail or {}).get("error", "no success response")}')
+        published_record = next((item for item in api('/api/services')
+                                 if item.get('service_id') == service_id), {})
+        onion = (published_record.get('state') or {}).get('last_onion_address')
         run(['curl', '--fail', '--silent', '--show-error', '--insecure',
              '--max-time', '15', '--resolve', f'{public_ip}:{public_port}:127.0.0.1',
              f'https://{public_ip}:{public_port}{probe_path}'])
@@ -245,6 +265,10 @@ def main():
     print(f'Installed {name} ({service_id}) from image {image}.')
     print(f'NCC address: ncc://{identity["npub"]}/{service_id}/')
     print(f'Public endpoint: {endpoint}')
+    if onion:
+        print(f'Tor onion endpoint: http://{onion}/')
+    else:
+        print('Warning: Tor did not return an onion address; inspect the sidecar logs.')
     print(f'Allow and forward TCP {public_port} if external access is intended.')
 
 

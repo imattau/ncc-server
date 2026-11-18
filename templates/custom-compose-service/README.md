@@ -20,6 +20,11 @@ operator identity and web certificate. It creates the sidecar service record,
 configures Caddy to proxy the public TLS port to the backend, and publishes a
 signed locator with the matching certificate fingerprint.
 
+The service also gets its own Tor onion endpoint automatically. The onion maps
+onion port 80 to the loopback backend port, so the backend must answer plain
+HTTP on that port (the template already does). Tor settings are merged into
+the new record without changing the rest of its configuration.
+
 The public TLS port must be allowed through the host firewall and forwarded
 through the router if the service should be reachable from the internet. The
 sidecar admin API remains local and is never exposed by this package.
