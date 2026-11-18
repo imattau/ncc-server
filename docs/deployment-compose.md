@@ -157,9 +157,11 @@ NCC_CONTENT_ROOT for a non-default remote path. A regular SSH account needs
 sudo access on the VM; root SSH does not.
 
 The deployment also republishes the server's public root npub as
-`ncc-config.json`. The welcome page reads it at runtime to build links for the
-identity created or imported during server setup. You can deploy your own
-static site instead. Keep the content directory readable by Caddy.
+`ncc-config.json`, but the Caddy listeners serve `/ncc-config.json` dynamically
+from `NCC_OPERATOR_PUBKEY` and the pages fall back to the npub in the `ncc://`
+address, so the generated file is only a fallback for plain HTTP access. You
+can deploy your own static site instead. Keep the content directory readable
+by Caddy.
 
 ## 3. Verify the install
 

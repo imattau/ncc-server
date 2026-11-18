@@ -1,14 +1,16 @@
 /**
  * Read-only data for the admin panel.
  *
- * The panel is served from the same content root as the welcome page, so it
- * reads the operator npub from /ncc-config.json and then queries the public
- * NCC records that node publishes (kind 30059 anchors and kind 30058
- * locators). Nothing here writes, and nothing trusts an unverified record:
- * every query is constrained to the operator pubkey from the node config.
+ * The panel reads the operator identity from /ncc-config.json (served by
+ * Caddy from NCC_OPERATOR_PUBKEY) or from the ncc:// address itself, then
+ * queries the public NCC records that node publishes (kind 30059 anchors and
+ * kind 30058 locators). Nothing here writes, and nothing trusts an
+ * unverified record: every query is constrained to the operator pubkey.
  */
 
 import { SimplePool, nip19, type NostrEvent } from 'nostr-tools';
+
+import { npubFromConfigRecord, npubFromLocation } from './nccAddress';
 
 export const FALLBACK_RELAYS = [
   'wss://relay.primal.net/',
@@ -96,23 +98,21 @@ export async function loadPanelConfig(signal?: AbortSignal): Promise<PanelConfig
   try {
     const response = await fetch(CONFIG_PATH, { cache: 'no-store', signal });
     if (response.ok) {
-      const payload: unknown = await response.json();
-      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-        const record = payload as Record<string, unknown>;
+      // A missing config file falls through to index.html on the SPA
+      // listeners. Only parse a real JSON response, so the HTML fallback is
+      // treated exactly like an absent file instead of throwing.
+      const contentType = response.headers.get('content-type') ?? '';
+      if (contentType.includes('json')) {
+        const payload: unknown = await response.json();
+        if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+          const record = payload as Record<string, unknown>;
+          npub = npubFromConfigRecord(record);
 
-        if (typeof record.npub === 'string') {
-          try {
-            const decoded = nip19.decode(record.npub);
-            if (decoded.type === 'npub') npub = record.npub;
-          } catch {
-            // An invalid npub is treated as no identity at all.
+          if (Array.isArray(record.relays)) {
+            relays = record.relays
+              .map(normalizeRelay)
+              .filter((relay): relay is string => relay !== null);
           }
-        }
-
-        if (Array.isArray(record.relays)) {
-          relays = record.relays
-            .map(normalizeRelay)
-            .filter((relay): relay is string => relay !== null);
         }
       }
     }
@@ -120,6 +120,10 @@ export async function loadPanelConfig(signal?: AbortSignal): Promise<PanelConfig
     // Missing config is a normal first-run state, and an abort is handled by
     // the caller. Fall through to the default relay set either way.
   }
+
+  // Under ncc:// the address itself names the operator, so a missing or
+  // wiped ncc-config.json never leaves the panel without an identity.
+  npub ??= npubFromLocation();
 
   return {
     npub,

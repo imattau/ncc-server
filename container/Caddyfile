@@ -36,12 +36,28 @@
 	header Access-Control-Allow-Origin "*"
 }
 
+# The welcome page and admin panel read the operator identity here. Compose
+# already passes the hex pubkey to Caddy, so this stays correct even when a
+# deploy removes the generated ncc-config.json file: the client encodes the
+# hex key to an npub. Under ncc:// both pages also fall back to the npub in
+# the address itself.
+(ncc_public_config) {
+	handle /ncc-config.json {
+		header Content-Type "application/json"
+		header Cache-Control "no-store"
+		respond `{"pubkey":"{$NCC_OPERATOR_PUBKEY}"}`
+	}
+}
+
 :{$CONTENT_PORT} {
 	import cors_response
-	root * {$CONTENT_ROOT}
-	encode gzip
-	try_files {path} /index.html
-	file_server
+	import ncc_public_config
+	handle {
+		root * {$CONTENT_ROOT}
+		encode gzip
+		try_files {path} /index.html
+		file_server
+	}
 	log {
 		output stdout
 	}
@@ -50,6 +66,7 @@
 :{$CONTENT_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
+	import ncc_public_config
 	handle /nsite/* {
 		reverse_proxy 127.0.0.1:3200 {
 			header_up Host {$PUBLIC_IPV4}
@@ -180,6 +197,7 @@
 :{$ADMIN_PANEL_TLS_PORT} {
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
+	import ncc_public_config
 	root * {$CONTENT_ROOT}
 	encode gzip
 	handle / {
@@ -199,10 +217,13 @@
 # only on loopback until real Nostr signer verification and admin authorization
 # are connected. Reach it remotely through an SSH tunnel.
 http://127.0.0.1:{$ADMIN_PANEL_PORT} {
-	root * /srv/ncc-server/admin-panel
-	encode gzip
-	try_files {path} /index.html
-	file_server
+	import ncc_public_config
+	handle {
+		root * /srv/ncc-server/admin-panel
+		encode gzip
+		try_files {path} /index.html
+		file_server
+	}
 	log {
 		output stdout
 	}

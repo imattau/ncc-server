@@ -236,7 +236,7 @@ function OperatorGate({
 
           {config !== null && !config.npub && (
             <>
-              <p className="gate-intro">This build expects the node to publish its operator key at <code>/ncc-config.json</code>.</p>
+              <p className="gate-intro">This build could not resolve the node's operator key. Open the panel over <code>ncc://</code> or make sure the node serves <code>/ncc-config.json</code>.</p>
               <div className="gate-note error" role="alert">
                 <CircleAlert size={14} />
                 <span>Node identity is not published yet. Deploy the current web build and re-run the host bootstrap, then reload this page.</span>
@@ -540,7 +540,7 @@ export default function AdminPanel() {
           <span>NCC <i>/</i> SERVER</span>
         </a>
 
-        <div className="panel-node" title="Node identity comes from /ncc-config.json">
+        <div className="panel-node" title="Node identity comes from ncc-config.json or the ncc:// address">
           <span className="node-avatar"><Server size={17} /></span>
           <span className="node-copy">
             <strong>NCC node</strong>
@@ -883,7 +883,7 @@ export default function AdminPanel() {
                 <div className="callout-shield"><ShieldCheck size={20} /></div>
                 <div>
                   <strong>Access follows the operator key.</strong>
-                  <p>Only the key published in <code>ncc-config.json</code> can open this panel. Additional admins and revocations are not implemented yet.</p>
+                  <p>Only the node's published operator key can open this panel. Additional admins and revocations are not implemented yet.</p>
                 </div>
                 <span>KEY-BASED ACCESS</span>
               </div>

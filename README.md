@@ -138,10 +138,12 @@ make build-test-app
 make bundle-deploy-test-app TARGET=operator@192.168.1.50
 ```
 
-Replace the target with the SSH account and server address used above. During
-first setup, the server writes its public root npub to
-`CONTENT_ROOT/ncc-config.json`; the page reads that config when it loads and
-builds links for the identity created or imported on that server.
+Replace the target with the SSH account and server address used above. The
+Caddy listeners serve the operator identity at `/ncc-config.json` from the
+bundle's environment, and the pages also read the npub from the `ncc://`
+address itself, so a wiped config file no longer breaks their links. The
+deployment still writes `CONTENT_ROOT/ncc-config.json` as a fallback for plain
+HTTP access.
 
 ## Operating the bundle
 

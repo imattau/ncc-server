@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useSeoMeta } from '@unhead/react';
 import { ArrowDownRight, ArrowUpRight, Globe2, LockKeyhole, Radio, Search, Server, ShieldCheck, Waves } from 'lucide-react';
 
+import { npubFromConfigRecord, npubFromLocation } from '@/lib/nccAddress';
+
 const services = [
   {
     id: 'web',
@@ -64,8 +66,8 @@ const services = [
 
 const serviceHref = (id: string, rootNpub: string | null) => {
   if (rootNpub) return `ncc://${rootNpub}/${id === 'web' ? '' : `${id}/`}`;
-  // The admin panel is also reachable on the loopback listener, where
-  // /ncc-config.json is absent and no npub is available for an ncc:// link.
+  // The loopback listener also serves /ncc-config.json, but keep a local
+  // admin link as a fallback when no identity can be resolved.
   return id === 'admin' ? '/admin' : undefined;
 };
 
@@ -80,22 +82,31 @@ const Index = () => {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/ncc-config.json', { cache: 'no-store', signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error('NCC server config unavailable');
-        return response.json() as Promise<{ npub?: unknown }>;
-      })
-      .then((config) => {
-        if (typeof config.npub === 'string' && /^npub1[0-9a-z]{20,}$/i.test(config.npub)) {
-          setRootNpub(config.npub);
-          setIdentityState('ready');
-          return;
-        }
+
+    const applyIdentity = (npub: string | null) => {
+      if (controller.signal.aborted) return;
+      if (npub) {
+        setRootNpub(npub);
+        setIdentityState('ready');
+      } else {
         setIdentityState('missing');
+      }
+    };
+
+    fetch('/ncc-config.json', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('NCC server config unavailable');
+        // Missing config falls through to index.html; do not try to parse it.
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!contentType.includes('json')) throw new Error('NCC server config unavailable');
+        const config: unknown = await response.json();
+        return config && typeof config === 'object' && !Array.isArray(config)
+          ? npubFromConfigRecord(config as Record<string, unknown>)
+          : null;
       })
-      .catch(() => {
-        if (!controller.signal.aborted) setIdentityState('missing');
-      });
+      .then((npub) => applyIdentity(npub ?? npubFromLocation()))
+      .catch(() => applyIdentity(npubFromLocation()));
+
     return () => controller.abort();
   }, []);
 

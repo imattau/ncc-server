@@ -3,9 +3,11 @@
 The static MKStack admin panel is built from `test-app/`. It is the same
 single-page app as the public welcome page, with the panel at `/admin`.
 
-The panel is read-only and operator-gated. It reads the operator npub from
-`ncc-config.json` and queries the publication relays for that key's NCC
-records (kind 30059 anchors and kind 30058 locators), then shows the real
+The panel is read-only and operator-gated. It resolves the operator npub
+from `/ncc-config.json` (Caddy serves it dynamically from
+`NCC_OPERATOR_PUBKEY`, so it survives a content deploy) or, under `ncc://`,
+from the address itself, then queries the publication relays for that key's
+NCC records (kind 30059 anchors and kind 30058 locators). It shows the real
 service list, endpoints, certificate pin, locator freshness, relay delivery
 and record timestamps.
 
@@ -84,8 +86,9 @@ page and the `/admin` route are part of the tracked `public/` build, which is
 deployed separately with `make build-test-app` and
 `make bundle-deploy-test-app`.
 
-The panel reads `/ncc-config.json` from the same content root.
-`scripts/publish-web-config.py` writes `{"npub": …, "relays": [...]}` during
-bootstrap, so re-run the bootstrap step after upgrading (or write the file
-manually) to give the panel the operator key and its relay set. When the
-`relays` field is missing, the panel falls back to its built-in relay list.
+The panel requests `/ncc-config.json` and accepts either the bech32 `npub` or
+the hex `pubkey`. The bundle's Caddy listeners answer that path from
+`NCC_OPERATOR_PUBKEY`, so no bootstrap re-run is needed after a content deploy;
+`scripts/publish-web-config.py` still writes a `{"npub": …, "relays": [...]}`
+file for plain HTTP use, and the deployment preserves it. When the `relays`
+field is missing, the panel falls back to its built-in relay list.
