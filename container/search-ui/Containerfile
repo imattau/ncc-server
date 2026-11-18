@@ -3,6 +3,10 @@ WORKDIR /src
 COPY ncc-search/ui/package.json ncc-search/ui/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY ncc-search/ui/ ./
+# The nsite edition imports the shared posted-at/Markdown rules from
+# ../shared, outside the UI package. Copy them to /shared so the tsconfig
+# "@shared/*" path resolves inside the image build.
+COPY ncc-search/shared/ /shared/
 # The generated UI uses same-origin API requests; relay configuration is
 # written at container startup so the image can be reused across deployments.
 RUN npm run build
