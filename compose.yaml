@@ -30,6 +30,9 @@ services:
       # Lets the panel admin API refuse to remove the operator key from the
       # admin list. Every admin write is authorized per request by NIP-98.
       NCC_OPERATOR_PUBKEY: "${NCC_OPERATOR_PUBKEY:-}"
+      # Canonical public origin the panel signs for, besides the request Host.
+      # Covers the loopback listener and a proxy in front of Caddy.
+      NCC_PANEL_PUBLIC_ORIGIN: "https://${PUBLIC_IPV4}:${ADMIN_PANEL_TLS_PORT}"
     depends_on:
       - tor
     restart: unless-stopped

@@ -1,9 +1,9 @@
 diff --git a/src/nip98.js b/src/nip98.js
 new file mode 100644
-index 0000000..a55e12d
+index 0000000..6ef530a
 --- /dev/null
 +++ b/src/nip98.js
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,189 @@
 +/**
 + * NIP-98 HTTP authentication for the NCC panel admin API.
 + *
@@ -71,20 +71,83 @@ index 0000000..a55e12d
 +}
 +
 +/**
-+ * The public URL of the request as the client signed it.
++ * Public URLs the sidecar may reconstruct for this request.
 + *
-+ * Caddy forwards the original Host header (with the port) and sets
-+ * X-Forwarded-Proto explicitly. X-Forwarded-Host is not used: Caddy's proxy
-+ * rewrites it to the bare hostname, which drops the port the client signed.
++ * Caddy forwards the original Host header (including the port) and sets
++ * X-Forwarded-Proto explicitly, so the Host candidate is the normal one.
++ * X-Forwarded-Host is also accepted for deployments behind another proxy, and
++ * NCC_PANEL_PUBLIC_ORIGIN covers a canonical public origin (for example when
++ * the page is opened through the loopback listener or a proxy hostname).
 + */
-+export function requestUrl(request) {
++export function requestUrlCandidates(request) {
 +  const forwardedProto = request.headers?.['x-forwarded-proto'];
 +  const proto = (typeof forwardedProto === 'string' && forwardedProto.split(',')[0].trim())
 +    || request.protocol
 +    || 'http';
-+  const host = request.headers?.host || '';
 +  const path = request.raw?.url || request.url || '/';
-+  return `${proto}://${host}${path}`;
++
++  const hosts = [];
++  const addHosts = (value) => {
++    if (typeof value !== 'string') return;
++    for (const entry of value.split(',')) {
++      const host = entry.trim();
++      if (host && !hosts.includes(host)) hosts.push(host);
++    }
++  };
++  addHosts(request.headers?.host);
++  addHosts(request.headers?.['x-forwarded-host']);
++
++  const candidates = hosts.map((host) => `${proto}://${host}${path}`);
++  const publicOrigin = String(process.env.NCC_PANEL_PUBLIC_ORIGIN || '').trim().replace(/\/+$/, '');
++  if (publicOrigin) candidates.push(`${publicOrigin}${path}`);
++
++  return [...new Set(candidates)];
++}
++
++/** The primary reconstructed URL, kept for callers that only need one. */
++export function requestUrl(request) {
++  return requestUrlCandidates(request)[0] || '';
++}
++
++function normalizeUrl(value) {
++  if (typeof value !== 'string') return null;
++
++  try {
++    const url = new URL(value);
++    const protocol = url.protocol.toLowerCase();
++    if (protocol !== 'https:' && protocol !== 'http:') return null;
++
++    return {
++      protocol,
++      hostname: url.hostname.toLowerCase(),
++      port: url.port || (protocol === 'https:' ? '443' : '80'),
++      pathname: url.pathname.replace(/\/+$/, '') || '/',
++      search: url.search,
++    };
++  } catch {
++    return null;
++  }
++}
++
++/**
++ * Compare a signed URL with a reconstructed one.
++ *
++ * The port may differ when one side is the scheme default, which is what a
++ * TLS-terminating proxy in front of Caddy produces; the host, path, query and
++ * scheme still have to match.
++ */
++function urlsMatch(signed, reconstructed) {
++  const left = normalizeUrl(signed);
++  const right = normalizeUrl(reconstructed);
++  if (!left || !right) return false;
++  if (left.protocol !== right.protocol) return false;
++  if (left.hostname !== right.hostname) return false;
++  if (left.pathname !== right.pathname) return false;
++  if (left.search !== right.search) return false;
++  if (left.port === right.port) return true;
++
++  const defaultPort = left.protocol === 'https:' ? '443' : '80';
++  return left.port === defaultPort || right.port === defaultPort;
 +}
 +
 +/**
@@ -112,8 +175,14 @@ index 0000000..a55e12d
 +  }
 +
 +  const url = tagValue(event, 'u');
-+  if (!url || url !== requestUrl(request)) {
-+    return { ok: false, status: 401, error: 'NIP-98 url tag does not match this request' };
++  const expected = requestUrlCandidates(request);
++  if (!url || !expected.some((candidate) => urlsMatch(url, candidate))) {
++    const shown = expected.slice(0, 3).join(' or ') || '(unknown)';
++    return {
++      ok: false,
++      status: 401,
++      error: `NIP-98 url tag does not match this request (signed ${url || '(none)'}; expected ${shown})`,
++    };
 +  }
 +
 +  pruneAccepted(nowMs);
@@ -850,6 +919,156 @@ index e0a9d9b..fc1ba18 100644
    await server.register(serviceRoutes);
    await server.register(configRoutes);
    await server.register(dbRoutes);
+diff --git a/test/nip98.test.js b/test/nip98.test.js
+new file mode 100644
+index 0000000..6a7749f
+--- /dev/null
++++ b/test/nip98.test.js
+@@ -0,0 +1,144 @@
++import { test } from 'node:test';
++import assert from 'node:assert';
++import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
++
++import { verifyNip98 } from '../src/nip98.js';
++
++const secretKey = generateSecretKey();
++let counter = 0;
++
++function authorization(url, method = 'GET', { age = 0, key = secretKey } = {}) {
++  const event = finalizeEvent({
++    kind: 27235,
++    created_at: Math.floor(Date.now() / 1000) + age,
++    tags: [['u', url], ['method', method], ['nonce', String(counter += 1)]],
++    content: '',
++  }, key);
++
++  return `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`;
++}
++
++function request(host, path, {
++  method = 'GET', proto = 'http', headers = {},
++} = {}) {
++  return {
++    method,
++    protocol: proto,
++    raw: { url: path },
++    headers: { host, authorization: authorization(`https://${host}${path}`, method), ...headers },
++  };
++}
++
++function withAuth(req, url, method = req.method) {
++  return { ...req, headers: { ...req.headers, authorization: authorization(url, method) } };
++}
++
++test('NIP-98 URL: exact public URL matches', () => {
++  const req = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++
++  const result = verifyNip98(req);
++  assert.strictEqual(result.ok, true, result.error);
++});
++
++test('NIP-98 URL: trailing slash does not break the match', () => {
++  const req = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++  const signed = 'https://node.example:8448/ncc-api/admins/';
++
++  const result = verifyNip98(withAuth(req, signed));
++  assert.strictEqual(result.ok, true, result.error);
++});
++
++test('NIP-98 URL: default port may be omitted by a proxy', () => {
++  const req = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++
++  const result = verifyNip98(withAuth(req, 'https://node.example/ncc-api/admins'));
++  assert.strictEqual(result.ok, true, result.error);
++});
++
++test('NIP-98 URL: X-Forwarded-Host is accepted', () => {
++  const req = request('127.0.0.1:3000', '/ncc-api/admins', {
++    method: 'GET',
++    headers: { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'node.example:8448' },
++    proto: 'http',
++  });
++
++  const result = verifyNip98(withAuth(req, 'https://node.example:8448/ncc-api/admins'));
++  assert.strictEqual(result.ok, true, result.error);
++});
++
++test('NIP-98 URL: canonical public origin is accepted', () => {
++  const previous = process.env.NCC_PANEL_PUBLIC_ORIGIN;
++  process.env.NCC_PANEL_PUBLIC_ORIGIN = 'https://node.example:8448';
++
++  try {
++    const req = request('127.0.0.1:3000', '/ncc-api/admins');
++    const result = verifyNip98(withAuth(req, 'https://node.example:8448/ncc-api/admins'));
++    assert.strictEqual(result.ok, true, result.error);
++  } finally {
++    if (previous === undefined) delete process.env.NCC_PANEL_PUBLIC_ORIGIN;
++    else process.env.NCC_PANEL_PUBLIC_ORIGIN = previous;
++  }
++});
++
++test('NIP-98 URL: a different host is rejected with both URLs in the error', () => {
++  const req = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++
++  const result = verifyNip98(withAuth(req, 'https://other.example:8448/ncc-api/admins'));
++  assert.strictEqual(result.ok, false);
++  assert.strictEqual(result.status, 401);
++  assert.match(result.error, /signed https:\/\/other\.example:8448/);
++  assert.match(result.error, /expected https:\/\/node\.example:8448/);
++});
++
++test('NIP-98 URL: a different scheme is rejected', () => {
++  const req = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++
++  const result = verifyNip98(withAuth(req, 'http://node.example:8448/ncc-api/admins'));
++  assert.strictEqual(result.ok, false);
++});
++
++test('NIP-98 URL: method mismatch is rejected', () => {
++  const req = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++
++  const result = verifyNip98(withAuth(req, 'https://node.example:8448/ncc-api/admins', 'POST'));
++  assert.strictEqual(result.ok, false);
++  assert.match(result.error, /method/);
++});
++
++test('NIP-98 URL: stale events and replays are rejected', () => {
++  const stale = request('node.example:8448', '/ncc-api/admins', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++  stale.headers.authorization = authorization(
++    'https://node.example:8448/ncc-api/admins',
++    'GET',
++    { age: -600 },
++  );
++  assert.strictEqual(verifyNip98(stale).ok, false);
++
++  const fresh = request('node.example:8448', '/ncc-api/settings', {
++    proto: 'https',
++    headers: { 'x-forwarded-proto': 'https' },
++  });
++  assert.strictEqual(verifyNip98(fresh).ok, true);
++  assert.strictEqual(verifyNip98(fresh).ok, false);
++});
 diff --git a/test/panel-settings.test.js b/test/panel-settings.test.js
 new file mode 100644
 index 0000000..c124cba

@@ -64,6 +64,13 @@ otherwise collide with the replay cache. The sidecar then requires the signer
 to be on the admin list. The operator key is protected from removal, and the
 last admin cannot be removed.
 
+URL matching accepts the request `Host`, `X-Forwarded-Host`, and the
+canonical `NCC_PANEL_PUBLIC_ORIGIN` that Compose passes to the sidecar. It
+ignores a trailing slash and tolerates a proxy that omits the default port,
+so a TLS-terminating proxy in front of Caddy does not break the signature. A
+mismatch now reports both the signed URL and the URLs the sidecar expected,
+which is what made the mobile "url tag does not match" failure diagnosable.
+
 ### Settings writes
 
 All settings apply to the whole node, because every standard service shares
