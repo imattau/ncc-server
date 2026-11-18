@@ -1,0 +1,866 @@
+diff --git a/src/routes/panel-catalogue.js b/src/routes/panel-catalogue.js
+new file mode 100644
+index 0000000..5ebfa33
+--- /dev/null
++++ b/src/routes/panel-catalogue.js
+@@ -0,0 +1,752 @@
++/* global AbortSignal, Buffer, fetch */
++/**
++ * npack service catalogue for the NCC admin panel.
++ *
++ * npack distributes signed service descriptors as kind:9900 release events
++ * with the artifact bytes on Blossom; the OCI image stays in its registry.
++ * This module asks a local `npack daemon` (npackd) for the catalogue and
++ * verifies downloaded artifacts itself before the host installer or the
++ * panel sees them.
++ *
++ * The daemon runs in its own container and listens on a Unix socket. It is
++ * never installed into and never started by the sidecar. When it is absent,
++ * the panel's catalogue reports itself unavailable and the rest of the panel
++ * keeps working.
++ *
++ * `/ncc-api/catalogue*` is authorized per request by NIP-98, like the other
++ * panel routes. `/api/npack*` is loopback-only and exists for the root host
++ * installer, which talks to the sidecar over 127.0.0.1.
++ */
++
++import { createHash } from 'node:crypto';
++import { execFile } from 'node:child_process';
++import fs from 'node:fs';
++import net from 'node:net';
++import os from 'node:os';
++import path from 'node:path';
++import { promisify } from 'node:util';
++
++import { nip19 } from 'nostr-tools';
++
++import { authorizePanelRequest } from '../panel-auth.js';
++import { addLog, getConfig, setConfig } from '../db.js';
++
++const execFileAsync = promisify(execFile);
++
++const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
++const SOCKET_PATH = process.env.NCC_NPACK_SOCKET || '/run/npack/npackd.sock';
++const OFFICIAL_PUBLISHER = normalizePubkey(process.env.NCC_NPACK_OFFICIAL_PUBLISHER || '');
++const KIND = 'ncc-service';
++
++const DAEMON_TIMEOUT_MS = 20_000;
++const DOWNLOAD_TIMEOUT_MS = 30_000;
++const CATALOGUE_TTL_MS = 60_000;
++const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
++const MAX_UNPACKED_BYTES = 128 * 1024 * 1024;
++const MAX_ARCHIVE_MEMBERS = 2_000;
++const MAX_DESCRIPTOR_BYTES = 1024 * 1024;
++const MAX_README_BYTES = 64 * 1024;
++const SEARCH_PAGE_SIZE = 500;
++const MAX_CATALOGUE_ENTRIES = 5000;
++const MAX_ARTIFACT_URLS = 5;
++
++let requestId = 0;
++let catalogueCache = { at: 0, entries: [], status: null };
++let catalogueInFlight = null;
++
++/** Accept a bech32 npub or hex key; return lowercase hex or null. */
++function normalizePubkey(value) {
++  if (typeof value !== 'string') return null;
++  const trimmed = value.trim();
++  if (PUBKEY_PATTERN.test(trimmed)) return trimmed.toLowerCase();
++  if (!trimmed.toLowerCase().startsWith('npub1')) return null;
++  try {
++    const decoded = nip19.decode(trimmed.toLowerCase());
++    return decoded.type === 'npub' ? decoded.data.toLowerCase() : null;
++  } catch {
++    return null;
++  }
++}
++
++function npubOf(pubkey) {
++  try {
++    return nip19.npubEncode(pubkey);
++  } catch {
++    return null;
++  }
++}
++
++function text(value, maximum) {
++  if (typeof value !== 'string') return null;
++  const trimmed = value.trim();
++  if (!trimmed) return null;
++  return trimmed.length > maximum ? trimmed.slice(0, maximum) : trimmed;
++}
++
++function httpUrl(value) {
++  const candidate = text(value, 500);
++  if (!candidate) return null;
++  try {
++    const url = new URL(candidate);
++    return url.protocol === 'https:' || url.protocol === 'http:' ? candidate : null;
++  } catch {
++    return null;
++  }
++}
++
++function stringList(value, maximum, itemLength = 200) {
++  if (!Array.isArray(value)) return [];
++  return value
++    .map((entry) => text(entry, itemLength))
++    .filter(Boolean)
++    .slice(0, maximum);
++}
++
++/**
++ * One newline-delimited JSON request to npackd. Each request opens its own
++ * connection, which is what the daemon's protocol expects.
++ */
++function daemonCall(method, params = {}, timeoutMs = DAEMON_TIMEOUT_MS) {
++  return new Promise((resolve, reject) => {
++    const id = ++requestId;
++    const socket = net.createConnection({ path: SOCKET_PATH });
++    let buffer = '';
++    let settled = false;
++
++    const finish = (error, response) => {
++      if (settled) return;
++      settled = true;
++      socket.destroy();
++      if (error) reject(error);
++      else resolve(response);
++    };
++
++    socket.setTimeout(timeoutMs, () => {
++      const error = new Error('The npack catalogue service timed out');
++      error.code = 'timeout';
++      finish(error);
++    });
++    socket.on('connect', () => {
++      socket.write(`${JSON.stringify({ id, method, params })}\n`);
++    });
++    socket.on('data', (chunk) => {
++      buffer += chunk.toString('utf8');
++      if (buffer.length > 8 * 1024 * 1024) {
++        const error = new Error('The npack catalogue response is too large');
++        error.code = 'too_large';
++        finish(error);
++        return;
++      }
++      const newline = buffer.indexOf('\n');
++      if (newline === -1) return;
++      const line = buffer.slice(0, newline);
++      try {
++        const payload = JSON.parse(line);
++        if (payload.id !== id) {
++          const error = new Error('The npack catalogue service sent a mismatched response');
++          error.code = 'protocol';
++          finish(error);
++          return;
++        }
++        finish(null, payload);
++      } catch {
++        const error = new Error('The npack catalogue service sent invalid JSON');
++        error.code = 'protocol';
++        finish(error);
++      }
++    });
++    socket.on('error', (cause) => {
++      const error = new Error(
++        cause.code === 'ENOENT' || cause.code === 'ECONNREFUSED'
++          ? 'The npack catalogue service is not running'
++          : `Could not reach the npack catalogue service: ${cause.message}`);
++      error.code = cause.code === 'ENOENT' || cause.code === 'ECONNREFUSED'
++        ? 'unavailable'
++        : 'unreachable';
++      finish(error);
++    });
++  });
++}
++
++async function npack(method, params = {}, timeoutMs) {
++  const response = await daemonCall(method, params, timeoutMs);
++  if (response.error) {
++    const error = new Error(response.error);
++    error.code = response.error_code || 'npack_error';
++    throw error;
++  }
++  return response.result;
++}
++
++function trustedPublishers() {
++  const configured = getConfig('npack_trust');
++  const stored = Array.isArray(configured?.publishers)
++    ? configured.publishers
++    : (Array.isArray(configured) ? configured : []);
++  const publishers = stored.map(normalizePubkey).filter(Boolean);
++  if (OFFICIAL_PUBLISHER) publishers.unshift(OFFICIAL_PUBLISHER);
++  return [...new Set(publishers)];
++}
++
++function isTrusted(publisher, trusted) {
++  return Boolean(OFFICIAL_PUBLISHER && publisher === OFFICIAL_PUBLISHER)
++    || trusted.includes(publisher);
++}
++
++function readListing(app) {
++  const record = app && typeof app === 'object' && !Array.isArray(app) ? app : {};
++  const icon = record.icon && typeof record.icon === 'object' ? record.icon : null;
++  const iconUrl = icon ? httpUrl(icon.url) : null;
++  const iconSha = icon && typeof icon.sha256 === 'string' && /^[0-9a-f]{64}$/.test(icon.sha256)
++    ? icon.sha256
++    : null;
++
++  return {
++    summary: text(record.summary, 140),
++    description: text(record.description, 4000),
++    homepage: httpUrl(record.homepage),
++    license: text(record.license, 128),
++    categories: stringList(record.categories, 8, 32),
++    screenshots: stringList(record.screenshots, 6, 500).filter((url) => httpUrl(url)),
++    icon: iconUrl && iconSha ? { url: iconUrl, sha256: iconSha } : null,
++    releaseNotes: text(record.release_notes, 2000),
++    supportUrl: httpUrl(record.support_url),
++    downloadSize: Number.isFinite(record.download_size) ? record.download_size : null,
++    installedSize: Number.isFinite(record.installed_size) ? record.installed_size : null,
++    releaseDate: text(record.release_date, 40),
++  };
++}
++
++function readDetails(details) {
++  const record = details && typeof details === 'object' && !Array.isArray(details) ? details : {};
++  return {
++    repo: text(record.repo, 300),
++    commit: text(record.commit, 100),
++    depends: stringList(record.depends, 32, 200),
++    requires: stringList(record.requires, 32, 200),
++    postInstall: stringList(record.post_install, 32, 300),
++  };
++}
++
++function readEntry(result, trusted) {
++  const publisher = String(result.publisher || '').toLowerCase();
++  if (!PUBKEY_PATTERN.test(publisher)) return null;
++  const releaseEventId = text(result.release_event_id, 64);
++  if (!releaseEventId) return null;
++
++  const name = text(result.name, 100);
++  const version = text(result.version, 64);
++  if (!name || !version) return null;
++
++  const app = readListing(result.app);
++  return {
++    releaseEventId,
++    publisher,
++    npub: npubOf(publisher),
++    name,
++    version,
++    kind: result.kind === KIND ? KIND : (text(result.kind, 40) || 'package'),
++    sha256: text(result.sha256, 64),
++    publishedAt: Number.isFinite(result.published_at) ? result.published_at : null,
++    compatible: result.compatible === true,
++    official: Boolean(OFFICIAL_PUBLISHER && publisher === OFFICIAL_PUBLISHER),
++    trusted: isTrusted(publisher, trusted),
++    ...app,
++    details: readDetails(result.details),
++  };
++}
++
++async function searchCatalogue() {
++  const trusted = trustedPublishers();
++  const entries = [];
++
++  // npackd's Search does not filter by artifact kind and caps paging after
++  // its own filters, so read the catalogue in pages and keep only NCC service
++  // releases here. The bound stops a very large catalogue from filling the
++  // sidecar's memory; 5000 releases is far beyond a plausible service list.
++  for (let offset = 0; offset < MAX_CATALOGUE_ENTRIES; offset += SEARCH_PAGE_SIZE) {
++    const page = await npack('Search', {
++      query: '',
++      include_untrusted: true,
++      limit: SEARCH_PAGE_SIZE,
++      offset,
++    }, 30_000);
++
++    if (!Array.isArray(page) || !page.length) break;
++    entries.push(...page.map((entry) => readEntry(entry, trusted))
++      .filter((entry) => entry && entry.kind === KIND));
++    if (page.length < SEARCH_PAGE_SIZE) break;
++  }
++
++  // A release may appear once per compatible platform artifact in a paged
++  // catalogue; the panel lists packages, not artifacts.
++  const seen = new Set();
++  return entries.filter((entry) => {
++    if (seen.has(entry.releaseEventId)) return false;
++    seen.add(entry.releaseEventId);
++    return true;
++  });
++}
++
++async function loadCatalogue({ refresh = false } = {}) {
++  if (!refresh && catalogueCache.at && Date.now() - catalogueCache.at < CATALOGUE_TTL_MS) {
++    return { ...catalogueCache, available: true, error: null };
++  }
++  if (catalogueInFlight) return catalogueInFlight;
++
++  catalogueInFlight = (async () => {
++    try {
++      if (refresh) {
++        await npack('RefreshCatalogue', {}, 120_000);
++      }
++
++      let entries;
++      try {
++        entries = await searchCatalogue();
++      } catch (error) {
++        if (error.code !== 'no_catalogue') throw error;
++        // First run after the daemon starts: build the catalogue once.
++        await npack('RefreshCatalogue', {}, 120_000);
++        entries = await searchCatalogue();
++      }
++
++      const status = await npack('CatalogueStatus', {}).catch(() => null);
++      catalogueCache = {
++        at: Date.now(),
++        entries,
++        status: status && typeof status === 'object' ? {
++          present: status.present === true,
++          ageSeconds: Number.isFinite(status.age_seconds) ? status.age_seconds : null,
++          stale: status.stale === true,
++          staleAfterSeconds: Number.isFinite(status.stale_after_seconds)
++            ? status.stale_after_seconds
++            : null,
++          releases: Number.isFinite(status.releases) ? status.releases : null,
++        } : null,
++      };
++      return { ...catalogueCache, available: true, error: null };
++    } finally {
++      catalogueInFlight = null;
++    }
++  })();
++
++  return catalogueInFlight;
++}
++
++function parseReference(value) {
++  if (typeof value !== 'string' || !value.trim()) {
++    throw new Error('A package reference is required');
++  }
++  const trimmed = value.trim();
++  const at = trimmed.lastIndexOf('@');
++  const reference = at > 0 ? trimmed.slice(0, at) : trimmed;
++  const version = at > 0 ? trimmed.slice(at + 1) : null;
++  if (version && !/^[0-9A-Za-z.+-]+$/.test(version)) {
++    throw new Error('Version must be a Semantic Version');
++  }
++  if (!reference || reference.includes('..') || reference.startsWith('/')) {
++    throw new Error('Package reference must be <publisher>/<name> or <name>');
++  }
++  return { reference, version };
++}
++
++async function fetchArtifact(urls, expectedSha) {
++  const candidates = stringList(urls, MAX_ARTIFACT_URLS, 800)
++    .filter((url) => httpUrl(url));
++  let lastError = null;
++
++  for (const url of candidates) {
++    try {
++      const response = await fetch(url, {
++        redirect: 'follow',
++        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
++        headers: { Accept: 'application/zstd, application/octet-stream', 'User-Agent': 'ncc-npack/1' },
++      });
++      if (!response.ok) throw new Error(`HTTP ${response.status}`);
++
++      const declared = Number(response.headers.get('content-length') || 0);
++      if (declared && declared > MAX_ARTIFACT_BYTES) throw new Error('artifact is too large');
++
++      const buffer = Buffer.from(await response.arrayBuffer());
++      if (buffer.length > MAX_ARTIFACT_BYTES) throw new Error('artifact is too large');
++
++      const actual = createHash('sha256').update(buffer).digest('hex');
++      if (actual !== expectedSha) {
++        throw new Error('downloaded bytes do not match the signed SHA-256');
++      }
++      return { buffer, url, sha256: actual };
++    } catch (error) {
++      lastError = error;
++    }
++  }
++
++  throw new Error(
++    `Could not download a verified artifact${lastError ? `: ${lastError.message}` : ''}`);
++}
++
++/** Reject absolute paths, `..`, and a decompressed size that is implausible. */
++async function inspectArchive(file) {
++  const { stdout } = await execFileAsync('tar', ['--zstd', '-tf', file], {
++    maxBuffer: 4 * 1024 * 1024,
++  });
++  const members = stdout.split('\n').filter(Boolean);
++  if (members.length > MAX_ARCHIVE_MEMBERS) throw new Error('package contains too many files');
++
++  for (const member of members) {
++    if (member.startsWith('/') || member.split('/').includes('..')) {
++      throw new Error('package contains an unsafe path');
++    }
++  }
++  return members;
++}
++
++/** Refuse a symlinked path; a package must not point outside its own tree. */
++async function regularFile(candidate) {
++  const stat = await fs.promises.lstat(candidate).catch(() => null);
++  return stat && stat.isFile() ? stat : null;
++}
++
++async function totalBytes(directory) {
++  let total = 0;
++  const entries = await fs.promises.readdir(directory, { withFileTypes: true });
++  for (const entry of entries) {
++    const candidate = path.join(directory, entry.name);
++    if (entry.isSymbolicLink()) continue;
++    if (entry.isDirectory()) {
++      total += await totalBytes(candidate);
++    } else if (entry.isFile()) {
++      total += (await fs.promises.lstat(candidate)).size;
++    }
++    if (total > MAX_UNPACKED_BYTES) break;
++  }
++  return total;
++}
++
++async function readVerifiedDescriptor(buffer) {
++  const workdir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ncc-npk-'));
++  const file = path.join(workdir, 'artifact.npk');
++  const root = path.join(workdir, 'unpacked');
++
++  try {
++    await fs.promises.writeFile(file, buffer, { mode: 0o600 });
++    await inspectArchive(file);
++    await fs.promises.mkdir(root, { recursive: true });
++    await execFileAsync('tar', [
++      '--zstd', '-xf', file, '-C', root, '--no-same-owner', '--no-same-permissions',
++    ], { maxBuffer: 1024 * 1024 });
++
++    if (await totalBytes(root) > MAX_UNPACKED_BYTES) {
++      throw new Error('package expands to an implausible size');
++    }
++
++    const servicesDir = path.join(root, 'share', 'ncc-server', 'services');
++    const servicesStat = await fs.promises.lstat(servicesDir).catch(() => null);
++    if (!servicesStat || !servicesStat.isDirectory() || servicesStat.isSymbolicLink()) {
++      throw new Error('package does not contain an NCC service descriptor');
++    }
++
++    const entries = await fs.promises.readdir(servicesDir, { withFileTypes: true });
++    const directories = entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink());
++    if (directories.length !== 1) {
++      throw new Error('package must contain exactly one NCC service');
++    }
++
++    const directory = path.join(servicesDir, directories[0].name);
++    const descriptorPath = path.join(directory, 'service.json');
++    const stat = await regularFile(descriptorPath);
++    if (!stat || stat.size > MAX_DESCRIPTOR_BYTES) {
++      throw new Error('package service.json is missing or too large');
++    }
++
++    let descriptor;
++    try {
++      descriptor = JSON.parse(await fs.promises.readFile(descriptorPath, 'utf8'));
++    } catch {
++      throw new Error('package service.json is not valid JSON');
++    }
++    if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
++      throw new Error('package service.json must be a JSON object');
++    }
++    if (descriptor.service_id !== directories[0].name) {
++      throw new Error('service.json service_id does not match its package directory');
++    }
++
++    const readmePath = path.join(directory, 'README.md');
++    const readmeStat = await regularFile(readmePath);
++    const readme = readmeStat && readmeStat.size <= MAX_README_BYTES
++      ? await fs.promises.readFile(readmePath, 'utf8')
++      : null;
++
++    return { descriptor, readme };
++  } finally {
++    await fs.promises.rm(workdir, { recursive: true, force: true });
++  }
++}
++
++async function resolveService({ reference, version, eventId }) {
++  let publisher = null;
++  let requirement = version ? `=${version}` : undefined;
++  let packageName = reference;
++
++  if (eventId) {
++    const catalogue = await loadCatalogue();
++    const entry = catalogue.entries.find((item) => item.releaseEventId === eventId);
++    if (!entry) throw new Error('That release is no longer in the catalogue');
++    publisher = entry.publisher;
++    packageName = `${entry.publisher}/${entry.name}`;
++    requirement = `=${entry.version}`;
++  } else if (reference.includes('/')) {
++    const [prefix, ...rest] = reference.split('/');
++    const normalized = normalizePubkey(prefix);
++    if (!normalized) throw new Error('Publisher must be an npub or 64-character hex key');
++    publisher = normalized;
++    packageName = `${normalized}/${rest.join('/')}`;
++  }
++
++  const params = {
++    package: packageName,
++    live: true,
++    include_untrusted: true,
++  };
++  if (requirement) params.requirement = requirement;
++
++  const resolved = await npack('GetPackage', params, 30_000);
++  if (!resolved || typeof resolved !== 'object') {
++    throw new Error('The npack catalogue returned no package');
++  }
++  if (resolved.kind !== KIND) {
++    throw new Error(`${packageName} is not an NCC service package`);
++  }
++  if (publisher && String(resolved.publisher).toLowerCase() !== publisher) {
++    throw new Error('The resolved publisher does not match the requested publisher');
++  }
++  if (version && resolved.version !== version) {
++    throw new Error(`The catalogue returned version ${resolved.version}, not ${version}`);
++  }
++  const sha256 = String(resolved.sha256 || '').toLowerCase();
++  if (!/^[0-9a-f]{64}$/.test(sha256)) {
++    throw new Error('The release has no valid artifact SHA-256');
++  }
++
++  const warnings = [];
++  if (eventId && resolved.release_event_id !== eventId) {
++    warnings.push('The publisher republished this version; using the newest signed release.');
++  }
++
++  const artifact = await fetchArtifact(resolved.artifact_urls, sha256);
++  const { descriptor, readme } = await readVerifiedDescriptor(artifact.buffer);
++
++  return {
++    provenance: {
++      publisher: String(resolved.publisher || '').toLowerCase(),
++      npub: npubOf(String(resolved.publisher || '').toLowerCase()),
++      name: resolved.name,
++      version: resolved.version,
++      releaseEventId: resolved.release_event_id,
++      artifactEventId: resolved.artifact_event_id || null,
++      sha256,
++      os: resolved.os || null,
++      arch: resolved.arch || null,
++      verified: resolved.verification?.release_signature_valid === true
++        && resolved.verification?.artifact_event_signature_valid === true,
++    },
++    descriptor,
++    readme,
++    artifact: {
++      sha256,
++      size: artifact.buffer.length,
++      url: artifact.url,
++      urls: stringList(resolved.artifact_urls, MAX_ARTIFACT_URLS, 800),
++    },
++    catalogue: readListing(resolved.app),
++    details: readDetails(resolved.details),
++    warnings,
++  };
++}
++
++function trustPayload() {
++  return {
++    official: OFFICIAL_PUBLISHER ? {
++      publisher: OFFICIAL_PUBLISHER,
++      npub: npubOf(OFFICIAL_PUBLISHER),
++    } : null,
++    trusted: trustedPublishers().map((publisher) => ({
++      publisher,
++      npub: npubOf(publisher),
++      official: publisher === OFFICIAL_PUBLISHER,
++    })),
++  };
++}
++
++function readBody(request) {
++  const body = request.body;
++  return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
++}
++
++export default async function panelCatalogueRoutes(server) {
++  server.get('/ncc-api/catalogue', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    const refresh = request.query?.refresh === '1' || request.query?.refresh === 'true';
++    try {
++      const catalogue = await loadCatalogue({ refresh });
++      return {
++        available: true,
++        error: null,
++        ...trustPayload(),
++        status: catalogue.status,
++        entries: catalogue.entries,
++      };
++    } catch (error) {
++      return {
++        available: false,
++        error: error.message || 'The npack catalogue service is unavailable',
++        ...trustPayload(),
++        status: null,
++        entries: [],
++      };
++    }
++  });
++
++  server.get('/ncc-api/catalogue/icon/:id', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    // Icons are fetched by the panel with its NIP-98 header and turned into a
++    // blob URL, so this route never has to be public.
++    try {
++      const catalogue = await loadCatalogue();
++      const entry = catalogue.entries.find((item) => item.releaseEventId === request.params.id);
++      if (!entry) return reply.code(404).send({ error: 'Release not found' });
++
++      const icon = await npack('GetIcon', { release_event_id: entry.releaseEventId }, 20_000);
++      const data = Buffer.from(String(icon?.data || ''), 'base64');
++      if (!data.length || data.length > 256 * 1024) {
++        return reply.code(404).send({ error: 'No icon for this release' });
++      }
++      const digest = createHash('sha256').update(data).digest('hex');
++      if (entry.icon?.sha256 && digest !== entry.icon.sha256) {
++        return reply.code(502).send({ error: 'The icon did not match its signed hash' });
++      }
++
++      reply.header('Content-Type', icon.media_type === 'image/svg+xml'
++        ? 'image/svg+xml'
++        : 'image/png');
++      reply.header('Cache-Control', 'private, max-age=3600');
++      return reply.send(data);
++    } catch (error) {
++      return reply.code(404).send({ error: error.message || 'No icon for this release' });
++    }
++  });
++
++  server.get('/ncc-api/catalogue/service', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    const eventId = typeof request.query?.event === 'string' ? request.query.event : '';
++    if (!/^[0-9a-f]{64}$/.test(eventId)) {
++      return reply.code(400).send({ error: 'event must be a release event ID' });
++    }
++
++    try {
++      return await resolveService({ reference: '', eventId });
++    } catch (error) {
++      return reply.code(502).send({ error: error.message || 'Could not load the service package' });
++    }
++  });
++
++  server.get('/ncc-api/catalogue/trust', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++    return trustPayload();
++  });
++
++  server.put('/ncc-api/catalogue/trust', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const body = readBody(request);
++    const publisher = normalizePubkey(body.publisher);
++    if (!publisher) {
++      return reply.code(400).send({ error: 'publisher must be an npub or hex key' });
++    }
++    if (OFFICIAL_PUBLISHER && publisher === OFFICIAL_PUBLISHER) {
++      return reply.code(409).send({ error: 'The official publisher is always trusted' });
++    }
++
++    const trusted = new Set(trustedPublishers());
++    if (body.trusted === true) trusted.add(publisher);
++    else if (body.trusted === false) trusted.delete(publisher);
++    else return reply.code(400).send({ error: 'trusted must be true or false' });
++
++    const publishers = [...trusted].filter((entry) => entry !== OFFICIAL_PUBLISHER);
++    setConfig('npack_trust', { publishers });
++    catalogueCache = { ...catalogueCache, at: 0 };
++    addLog('info', `npack publisher ${body.trusted ? 'trusted' : 'untrusted'} from the NCC admin panel`, {
++      publisher,
++      changedBy: caller.pubkey,
++    });
++
++    return trustPayload();
++  });
++
++  // Loopback-only surface for the root installer. It trusts the binding, like
++  // the rest of /api/*; the sidecar has already verified the artifact.
++  server.get('/api/npack/status', async (request, reply) => {
++    try {
++      const catalogue = await loadCatalogue({ refresh: request.query?.refresh === '1' });
++      return {
++        available: true,
++        error: null,
++        status: catalogue.status,
++        releases: catalogue.entries.length,
++      };
++    } catch (error) {
++      return reply.code(503).send({ error: error.message || 'npack is unavailable' });
++    }
++  });
++
++  server.get('/api/npack/search', async (request, reply) => {
++    const query = typeof request.query?.q === 'string' ? request.query.q : '';
++    try {
++      const catalogue = await loadCatalogue({ refresh: request.query?.refresh === '1' });
++      const needle = query.trim().toLowerCase();
++      const entries = needle
++        ? catalogue.entries.filter((entry) => [
++          entry.name, entry.summary, entry.description, ...entry.categories,
++        ].filter(Boolean).join(' ').toLowerCase().includes(needle))
++        : catalogue.entries;
++      return { entries };
++    } catch (error) {
++      return reply.code(503).send({ error: error.message || 'npack is unavailable' });
++    }
++  });
++
++  server.get('/api/npack/service', async (request, reply) => {
++    const eventId = typeof request.query?.event === 'string' ? request.query.event : '';
++    const ref = typeof request.query?.ref === 'string' ? request.query.ref : '';
++    if (!eventId && !ref) {
++      return reply.code(400).send({ error: 'ref or event is required' });
++    }
++
++    try {
++      if (eventId) {
++        if (!/^[0-9a-f]{64}$/.test(eventId)) {
++          return reply.code(400).send({ error: 'event must be a release event ID' });
++        }
++        return await resolveService({ reference: '', eventId });
++      }
++      const { reference, version } = parseReference(ref);
++      return await resolveService({ reference, version });
++    } catch (error) {
++      return reply.code(502).send({ error: error.message || 'Could not load the service package' });
++    }
++  });
++}
++
++// Pure helpers are exported for the unit tests; the routes are the only
++// runtime entry points.
++export {
++  normalizePubkey,
++  parseReference,
++  readDetails,
++  readEntry,
++  readListing,
++};
+diff --git a/src/web.js b/src/web.js
+index 113d745..40c893c 100644
+--- a/src/web.js
++++ b/src/web.js
+@@ -14,6 +14,7 @@ import adminRoutes from './routes/admin.js';
+ import panelAdminRoutes from './routes/panel-admin.js';
+ import panelSettingsRoutes from './routes/panel-settings.js';
+ import panelServicesRoutes from './routes/panel-services.js';
++import panelCatalogueRoutes from './routes/panel-catalogue.js';
+ import serviceRoutes from './routes/services.js';
+ import configRoutes from './routes/config.js';
+ import dbRoutes from './routes/db.js';
+@@ -87,6 +88,7 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+   await server.register(panelAdminRoutes);
+   await server.register(panelSettingsRoutes);
+   await server.register(panelServicesRoutes);
++  await server.register(panelCatalogueRoutes);
+   await server.register(serviceRoutes);
+   await server.register(configRoutes);
+   await server.register(dbRoutes);
+diff --git a/test/panel-catalogue.test.js b/test/panel-catalogue.test.js
+new file mode 100644
+index 0000000..1894454
+--- /dev/null
++++ b/test/panel-catalogue.test.js
+@@ -0,0 +1,82 @@
++import { test } from 'node:test';
++import assert from 'node:assert';
++
++import {
++  normalizePubkey, parseReference, readEntry, readListing,
++} from '../src/routes/panel-catalogue.js';
++
++const PUBLISHER = 'a'.repeat(64);
++const OTHER = 'b'.repeat(64);
++
++test('Publisher keys: accept hex and npub, reject everything else', () => {
++  assert.strictEqual(normalizePubkey(PUBLISHER.toUpperCase()), PUBLISHER);
++  assert.strictEqual(
++    normalizePubkey('npub1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq'),
++    null,
++  );
++  assert.strictEqual(normalizePubkey('not-a-key'), null);
++  assert.strictEqual(normalizePubkey(undefined), null);
++});
++
++test('Package reference: split publisher, name and version', () => {
++  assert.deepStrictEqual(parseReference('hello'), { reference: 'hello', version: null });
++  assert.deepStrictEqual(
++    parseReference(`${PUBLISHER}/hello`), { reference: `${PUBLISHER}/hello`, version: null });
++  assert.deepStrictEqual(
++    parseReference(`${PUBLISHER}/hello@1.2.0`),
++    { reference: `${PUBLISHER}/hello`, version: '1.2.0' },
++  );
++  assert.throws(() => parseReference(''), /required/);
++  assert.throws(() => parseReference('../etc'), /must be/);
++  assert.throws(() => parseReference('hello@../1'), /Semantic Version/);
++});
++
++test('Catalogue entry: keep only ncc-service releases with a version', () => {
++  const base = {
++    release_event_id: 'c'.repeat(64),
++    publisher: PUBLISHER,
++    name: 'hello',
++    version: '1.0.0',
++    kind: 'ncc-service',
++    sha256: 'd'.repeat(64),
++    published_at: 1_700_000_000,
++    compatible: true,
++  };
++
++  const entry = readEntry(base, [OTHER]);
++  assert.ok(entry);
++  assert.strictEqual(entry.kind, 'ncc-service');
++  assert.strictEqual(entry.trusted, false);
++  assert.strictEqual(entry.official, false);
++
++  assert.strictEqual(readEntry({ ...base, kind: 'package' }, []).kind, 'package');
++  assert.strictEqual(readEntry({ ...base, name: '' }, []), null);
++  assert.strictEqual(readEntry({ ...base, publisher: 'nope' }, []), null);
++
++  const trusted = readEntry(base, [PUBLISHER]);
++  assert.strictEqual(trusted.trusted, true);
++});
++
++test('Listing: drop unsafe URLs and icons without a signed hash', () => {
++  const listing = readListing({
++    summary: 'A friendly service',
++    homepage: 'javascript:alert(1)',
++    support_url: 'https://example.com/help',
++    screenshots: ['https://example.com/a.png', 'file:///etc/passwd'],
++    icon: { url: 'https://example.com/icon.png', sha256: 'not-a-hash' },
++    categories: ['Social', 'Social', 'Utility'],
++  });
++
++  assert.strictEqual(listing.summary, 'A friendly service');
++  assert.strictEqual(listing.homepage, null);
++  assert.strictEqual(listing.supportUrl, 'https://example.com/help');
++  assert.deepStrictEqual(listing.screenshots, ['https://example.com/a.png']);
++  assert.strictEqual(listing.icon, null);
++  assert.deepStrictEqual(listing.categories, ['Social', 'Social', 'Utility']);
++});
++
++test('Listing: cap long publisher text instead of trusting it', () => {
++  const listing = readListing({ summary: 'x'.repeat(200), description: 'y'.repeat(5000) });
++  assert.strictEqual(listing.summary.length, 140);
++  assert.strictEqual(listing.description.length, 4000);
++});

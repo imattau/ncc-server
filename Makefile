@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package
 
 install:
 	sudo ./scripts/install.sh
@@ -123,4 +123,17 @@ bundle-health:
 service-add:
 	@test -n "$(PACKAGE)" || (echo 'Usage: sudo make service-add PACKAGE=/path/to/service-package' >&2; exit 2)
 	sudo ./scripts/add-compose-service.py "$(PACKAGE)"
+
+# Install a signed npack service package (REF=npub/name[@version]) or a local
+# .npk descriptor (NPK=/path/file.npk). Pass YES=1 to skip the publisher
+# confirmation prompt.
+service-install:
+	@test -n "$(REF)$(NPK)" || (echo 'Usage: sudo make service-install REF=<publisher>/<name>[@version]  OR  NPK=/path/file.npk' >&2; exit 2)
+	sudo ./scripts/add-compose-service.py $(if $(REF),--ref "$(REF)",--npk "$(NPK)") $(if $(YES),--yes)
+
+# Build and publish an NCC service descriptor with npack. Requires the npack
+# CLI and a publisher key; see docs/npack-services.md.
+service-package:
+	@test -n "$(SERVICE_DIR)" -a -n "$(VERSION)" -a -n "$(PUBLISHER)" -a -n "$(OUTPUT)" || (echo 'Usage: make service-package SERVICE_DIR=dir VERSION=1.0.0 PUBLISHER=npub... OUTPUT=name.npk' >&2; exit 2)
+	./scripts/npack-service.py build --service-dir "$(SERVICE_DIR)" --version "$(VERSION)" --publisher "$(PUBLISHER)" --output "$(OUTPUT)" $(if $(IMAGE),--image "$(IMAGE)") $(if $(ARCH),--arch "$(ARCH)") $(if $(REPO),--repo "$(REPO)") $(if $(COMMIT),--commit "$(COMMIT)")
 

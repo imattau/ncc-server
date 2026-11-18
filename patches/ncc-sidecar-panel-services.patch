@@ -1,9 +1,9 @@
 diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
 new file mode 100644
-index 0000000..51b5a9a
+index 0000000..bb96999
 --- /dev/null
 +++ b/src/routes/panel-services.js
-@@ -0,0 +1,516 @@
+@@ -0,0 +1,528 @@
 +/* global AbortController, fetch */
 +/**
 + * Installed-service controls for the NCC admin panel.
@@ -364,6 +364,17 @@ index 0000000..51b5a9a
 +      const containers = compose.flatMap((name) => byCompose.get(name) || []);
 +      const publication = publicationState(service);
 +      const probeResult = probes[index];
++      const provenance = service.config?.npack && typeof service.config.npack === 'object'
++        ? {
++          publisher: typeof service.config.npack.publisher === 'string'
++            ? service.config.npack.publisher : null,
++          npub: typeof service.config.npack.npub === 'string'
++            ? service.config.npack.npub : null,
++          version: typeof service.config.npack.version === 'string'
++            ? service.config.npack.version : null,
++          verified: service.config.npack.verified === true,
++        }
++        : null;
 +
 +      return {
 +        serviceId: service.service_id,
@@ -383,6 +394,7 @@ index 0000000..51b5a9a
 +          }
 +          : null,
 +        publication,
++        package: provenance,
 +        restartable: Boolean(agent.available && containers.length),
 +        health: overallHealth({ probeResult, containers, publication }),
 +      };

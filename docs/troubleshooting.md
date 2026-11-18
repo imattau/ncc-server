@@ -160,6 +160,41 @@ state. `Unreachable` with a running container usually means the probe target
 in the service record is wrong; `Degraded` usually means a relay publish
 failed or the record is older than twice the publish interval.
 
+## App catalogue is empty or unavailable
+
+The **Apps** page reads signed service packages from the node's `npack`
+container. Check the container and the socket:
+
+~~~sh
+sudo docker-compose -p ncc-bundle ps npack
+sudo docker-compose -p ncc-bundle logs --tail=100 npack sidecar
+sudo docker-compose -p ncc-bundle exec npack test -S /run/npack/npackd.sock
+~~~
+
+- “The npack catalogue service is not running” means the sidecar cannot see
+  the socket. Both containers mount the `npack-run` volume; recreate them
+  with `sudo docker-compose -p ncc-bundle up -d npack sidecar`.
+- A daemon error about relays means `NPACK_RELAYS` is unreachable or set to
+  an empty list. The public defaults are `wss://relay.damus.io`,
+  `wss://nos.lol` and `wss://relay.primal.net`.
+- An empty catalogue can simply mean no one has published an
+  `ncc-service` package yet on those relays. **Refresh catalogue** in the
+  panel rebuilds it. Publishers can check discovery with
+  `npack search --kind ncc-service --refresh --relay …`.
+- “Unknown publisher” is normal until an admin presses **Trust publisher**, or
+  the key is set in `NCC_NPACK_OFFICIAL_PUBLISHER`.
+- A package that fails to resolve with a hash or signature error is not a
+  bug in the node: the release event, the artifact hash, or the download URL
+  is inconsistent. Ask the publisher to republish a corrected release; npack
+  never accepts bytes that do not match the signed SHA-256.
+
+Installing a local `.npk` with `NPK=` needs `zstd` on the host. The
+`REF=` path extracts inside the sidecar and does not.
+
+The published npack image is amd64-only (upstream npack ships amd64 Linux
+packages). An arm64 host will report the catalogue as unavailable; the panel
+and service controls still work.
+
 ## Onion endpoint does not load
 
 Tor has to bootstrap and publish an onion descriptor. Check the Tor and

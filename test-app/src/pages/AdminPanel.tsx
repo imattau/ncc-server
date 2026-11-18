@@ -34,6 +34,9 @@ import {
   addPanelAdmin,
   cadenceProblem,
   listPanelAdmins,
+  loadPanelCatalogue,
+  loadPanelCatalogueIcon,
+  loadPanelCatalogueService,
   loadPanelRecords,
   loadPanelServiceLogs,
   loadPanelServices,
@@ -46,13 +49,18 @@ import {
   savePanelCadence,
   savePanelIdentity,
   savePanelRelays,
+  setPanelCatalogueTrust,
   type PanelAdmin,
   type PanelCadence,
+  type PanelCatalogue,
+  type PanelCatalogueEntry,
+  type PanelCatalogueService,
   type PanelServiceHealth,
   type PanelServiceLogs,
   type PanelServiceStatus,
   type PanelSettings,
 } from '@/lib/nccPanelApi';
+import type { PanelSigner } from '@/lib/nip98';
 import './admin-panel.css';
 
 type Section = 'Overview' | 'Apps' | 'Installed' | 'Activity' | 'Admins' | 'Settings';
@@ -135,12 +143,6 @@ const UNKNOWN_SERVICE: ServiceMeta = {
 function serviceMeta(id: string): ServiceMeta {
   return SERVICE_META[id] ?? { ...UNKNOWN_SERVICE, label: id, route: id };
 }
-
-const catalog = [
-  { name: 'Nostr Relay', category: 'NOSTR', description: 'A private or public relay for your community.', image: 'ghcr.io/ditto/ncc-relay', icon: Radio, tint: 'blue' as Tint, meta: '1 container · 1 port' },
-  { name: 'Nsite Gateway', category: 'PUBLISHING', description: 'Host Nostr websites on your own domains.', image: 'ghcr.io/soapbox/npanel', icon: Globe2, tint: 'violet' as Tint, meta: '1 container · persistent storage' },
-  { name: 'Community Chat', category: 'SOCIAL', description: 'A Nostr-powered home for your community.', image: 'ghcr.io/soapbox/ditto-web', icon: Waves, tint: 'green' as Tint, meta: '1 container · 1 port' },
-];
 
 const navItems: { label: Section; icon: LucideIcon }[] = [
   { label: 'Overview', icon: Activity },
@@ -253,6 +255,89 @@ function logTimestamp(value: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+const catalogueIconCache = new Map<string, string>();
+const catalogueIconFailures = new Set<string>();
+
+/** Store icon, delivered through the node so the page signs each fetch. */
+function ReleaseIcon({
+  base,
+  signer,
+  release,
+}: {
+  base: string;
+  signer: PanelSigner;
+  release: PanelCatalogueEntry;
+}) {
+  const [url, setUrl] = useState<string | null>(
+    () => catalogueIconCache.get(release.releaseEventId) ?? null,
+  );
+
+  useEffect(() => {
+    if (url || !release.icon || catalogueIconFailures.has(release.releaseEventId)) return undefined;
+
+    let cancelled = false;
+    loadPanelCatalogueIcon(base, signer, release.releaseEventId)
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        catalogueIconCache.set(release.releaseEventId, objectUrl);
+        if (!cancelled) setUrl(objectUrl);
+      })
+      .catch(() => {
+        // The package still lists fine without an icon.
+        catalogueIconFailures.add(release.releaseEventId);
+      });
+
+    return () => { cancelled = true; };
+  }, [base, signer, release, url]);
+
+  if (url) {
+    return <img className="catalog-icon" src={url} alt="" loading="lazy" />;
+  }
+  return <IconBox icon={Layers3} tint="green" />;
+}
+
+function publisherLabel(entry: PanelCatalogueEntry): string {
+  if (entry.official) return 'Official publisher';
+  if (entry.trusted) return 'Trusted publisher';
+  return 'Unknown publisher';
+}
+
+function shortPublisher(entry: PanelCatalogueEntry): string {
+  const value = entry.npub ?? entry.publisher;
+  return value.length > 20 ? `${value.slice(0, 12)}…${value.slice(-6)}` : value;
+}
+
+function byteSize(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value) || value <= 0) return null;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function catalogueAge(catalogue: PanelCatalogue | null): string {
+  const seconds = catalogue?.status?.ageSeconds;
+  if (seconds === null || seconds === undefined) return 'not refreshed yet';
+  if (seconds < 90) return 'just now';
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} hr ago`;
+  return `${Math.round(seconds / 86400)} d ago`;
+}
+
+function installCommand(entry: PanelCatalogueEntry): string {
+  const publisher = entry.npub ?? entry.publisher;
+  return `sudo make service-install REF=${publisher}/${entry.name}@${entry.version}`;
+}
+
+function safeLink(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function safeHref(endpoint: string | null): string | null {
@@ -556,7 +641,18 @@ export default function AdminPanel() {
   const [mobileNav, setMobileNav] = useState(false);
   const [notice, setNotice] = useState('');
   const [appQuery, setAppQuery] = useState('');
-  const [selectedApp, setSelectedApp] = useState<typeof catalog[number] | null>(null);
+  const [appCategory, setAppCategory] = useState('all');
+  const [catalogue, setCatalogue] = useState<PanelCatalogue | null>(null);
+  const [catalogueState, setCatalogueState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [catalogueError, setCatalogueError] = useState('');
+  const [catalogueToken, setCatalogueToken] = useState(0);
+  const catalogueRefresh = useRef(false);
+  const [selectedRelease, setSelectedRelease] = useState<PanelCatalogueEntry | null>(null);
+  const [releaseDetails, setReleaseDetails] = useState<PanelCatalogueService | null>(null);
+  const [releaseState, setReleaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [releaseError, setReleaseError] = useState('');
+  const [releaseToken, setReleaseToken] = useState(0);
+  const [trustBusy, setTrustBusy] = useState(false);
 
   const [signInBusy, setSignInBusy] = useState<SignInMethod | null>(null);
   const [signInError, setSignInError] = useState('');
@@ -793,6 +889,67 @@ export default function AdminPanel() {
 
     return () => controller.abort();
   }, [logsFor, logsToken, authorized, apiBase, user]);
+
+  // The catalogue is read from the node's npack service, not from the
+  // browser: an ncc:// page cannot open relay WebSockets, and a browser
+  // should not be the thing that verifies package metadata.
+  useEffect(() => {
+    if (section !== 'Apps' || !authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+    const refresh = catalogueRefresh.current;
+    catalogueRefresh.current = false;
+
+    loadPanelCatalogue(apiBase, user.signer, refresh, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setCatalogue(loaded);
+        setCatalogueState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setCatalogueState('error');
+        setCatalogueError(error instanceof Error ? error.message : 'Could not read the App catalogue');
+      });
+
+    return () => controller.abort();
+  }, [section, authorized, apiBase, user, catalogueToken]);
+
+  // Descriptor fields and the verified artifact are loaded only when the
+  // details dialog opens; listing the catalogue stays one request.
+  useEffect(() => {
+    if (!selectedRelease || !authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadPanelCatalogueService(apiBase, user.signer, selectedRelease.releaseEventId, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setReleaseDetails(loaded);
+        setReleaseState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setReleaseState('error');
+        setReleaseError(error instanceof Error ? error.message : 'Could not load the service package');
+      });
+
+    return () => controller.abort();
+  }, [selectedRelease, releaseToken, authorized, apiBase, user]);
+
+  useEffect(() => {
+    if (!selectedRelease) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setSelectedRelease(null);
+      setReleaseDetails(null);
+      setReleaseState('idle');
+      setReleaseError('');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedRelease]);
 
   useEffect(() => {
     if (!logsFor) return undefined;
@@ -1255,6 +1412,56 @@ export default function AdminPanel() {
     setLogsToken((value) => value + 1);
   };
 
+  const refreshCatalogue = () => {
+    catalogueRefresh.current = true;
+    setCatalogueError('');
+    setCatalogueState('loading');
+    setCatalogueToken((value) => value + 1);
+  };
+
+  const openRelease = (entry: PanelCatalogueEntry) => {
+    setReleaseDetails(null);
+    setReleaseError('');
+    setReleaseState('loading');
+    setSelectedRelease(entry);
+    setReleaseToken((value) => value + 1);
+  };
+
+  const closeRelease = () => {
+    setSelectedRelease(null);
+    setReleaseDetails(null);
+    setReleaseState('idle');
+    setReleaseError('');
+    setTrustBusy(false);
+  };
+
+  const handleTrustPublisher = async (entry: PanelCatalogueEntry, trusted: boolean) => {
+    if (!apiBase || !user) return;
+
+    setTrustBusy(true);
+    setReleaseError('');
+    try {
+      const publishers = await setPanelCatalogueTrust(apiBase, user.signer, entry.publisher, trusted);
+      const trustedKeys = new Set(publishers.map((publisher) => publisher.publisher));
+      setCatalogue((current) => current ? {
+        ...current,
+        trusted: publishers,
+        entries: current.entries.map((item) => ({
+          ...item,
+          trusted: item.publisher === entry.publisher ? trusted : trustedKeys.has(item.publisher),
+        })),
+      } : current);
+      setSelectedRelease((current) => current && current.publisher === entry.publisher
+        ? { ...current, trusted }
+        : current);
+      notify(trusted ? 'Publisher trusted' : 'Publisher untrusted');
+    } catch (error) {
+      setReleaseError(error instanceof Error ? error.message : 'Could not update the publisher trust list');
+    } finally {
+      setTrustBusy(false);
+    }
+  };
+
   const handleRepublish = async (service: PanelService) => {
     if (!apiBase || !user) return;
 
@@ -1335,9 +1542,25 @@ export default function AdminPanel() {
     ),
   );
 
-  const filteredCatalog = catalog.filter((app) =>
-    `${app.name} ${app.category} ${app.description}`.toLowerCase().includes(appQuery.trim().toLowerCase()),
-  );
+  const catalogueEntries = catalogue?.entries ?? [];
+  const catalogueCategories = [...new Set(
+    catalogueEntries.flatMap((entry) => entry.categories),
+  )].sort((left, right) => left.localeCompare(right));
+  const filteredCatalog = catalogueEntries.filter((entry) => {
+    const needle = appQuery.trim().toLowerCase();
+    const haystack = `${entry.name} ${entry.summary ?? ''} ${entry.description ?? ''} `
+      + `${entry.categories.join(' ')} ${entry.publisher}`;
+    const matchesQuery = !needle || haystack.toLowerCase().includes(needle);
+    const matchesCategory = appCategory === 'all'
+      || entry.categories.some((category) => category.toLowerCase() === appCategory.toLowerCase());
+    return matchesQuery && matchesCategory;
+  });
+  const catalogueHeading = catalogue?.available
+    ? `${filteredCatalog.length} AVAILABLE`
+    : 'CATALOGUE UNAVAILABLE';
+  const catalogueLoading = catalogueState === 'idle' || catalogueState === 'loading';
+  const releaseHomepage = selectedRelease ? safeLink(selectedRelease.homepage) : null;
+  const releaseSupport = selectedRelease ? safeLink(selectedRelease.supportUrl) : null;
 
   const adminRows: PanelAdmin[] = admins ?? (operatorNpub
     ? [{ npub: operatorNpub, pubkey: operatorPubkey ?? '', status: 'active', createdAt: null }]
@@ -1562,11 +1785,11 @@ export default function AdminPanel() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow">APP CATALOG <span>·</span> READ-ONLY PREVIEW</div>
+                  <div className="eyebrow">APP CATALOGUE <span>·</span> NOSTR PACKAGES</div>
                   <h1>Give your server a new purpose.</h1>
-                  <p>Provisioning is inactive in this build. You can review what each package would add.</p>
+                  <p>Signed service packages discovered from relays. Installing one is a single verified command.</p>
                 </div>
-                <span className="catalog-count">{filteredCatalog.length} READY TO REVIEW</span>
+                <span className="catalog-count">{catalogueHeading}</span>
               </div>
 
               <div className="catalog-toolbar">
@@ -1579,38 +1802,85 @@ export default function AdminPanel() {
                     onChange={(event) => setAppQuery(event.target.value)}
                   />
                 </div>
-                <button className="filter-button" disabled title="Category filters are inactive in this build">All categories <ChevronDown size={14} /></button>
-                <button className="package-button" disabled title="Package import is inactive in this build"><ArrowDownToLine size={15} /> Import package</button>
+                <select
+                  className="catalog-select"
+                  aria-label="Filter by category"
+                  value={appCategory}
+                  onChange={(event) => setAppCategory(event.target.value)}
+                >
+                  <option value="all">All categories</option>
+                  {catalogueCategories.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+                <button
+                  className="package-button"
+                  onClick={refreshCatalogue}
+                  disabled={catalogueLoading || !apiBase}
+                  title="Ask the npack service to rebuild its catalogue from relays"
+                >
+                  <RefreshCw size={15} className={catalogueLoading ? 'spin' : undefined} /> Refresh catalogue
+                </button>
               </div>
 
-              <div className="catalog-grid">
-                {filteredCatalog.map((app) => {
-                  const Icon = app.icon;
-                  return (
-                    <article className="catalog-card" key={app.name}>
+              {catalogueState === 'error' && (
+                <div className="panel-banner error" role="alert">
+                  <CircleAlert size={14} />
+                  <span>Could not read the App catalogue: {catalogueError}</span>
+                  <button className="text-button" onClick={refreshCatalogue}>Try again</button>
+                </div>
+              )}
+
+              {catalogue && !catalogue.available && catalogueState !== 'error' && (
+                <div className="panel-banner" role="status">
+                  <CircleAlert size={14} />
+                  <span>
+                    The App catalogue needs the npack service on this host
+                    {catalogue.error ? `: ${catalogue.error}` : ''}. Other panel sections keep working.
+                  </span>
+                </div>
+              )}
+
+              {catalogueLoading && catalogueEntries.length === 0 ? (
+                <div className="empty-state">Reading service packages from relays…</div>
+              ) : filteredCatalog.length === 0 ? (
+                <div className="empty-state">
+                  {catalogue?.available
+                    ? 'No published service packages match this search.'
+                    : 'No service packages were found on the configured relays.'}
+                </div>
+              ) : (
+                <div className="catalog-grid">
+                  {filteredCatalog.map((entry) => (
+                    <article className="catalog-card" key={entry.releaseEventId}>
                       <div className="catalog-card-top">
-                        <IconBox icon={Icon} tint={app.tint} />
-                        <span className="category-tag">{app.category}</span>
+                        {apiBase && user
+                          ? <ReleaseIcon base={apiBase} signer={user.signer} release={entry} />
+                          : <IconBox icon={Layers3} tint="green" />}
+                        <span className="category-tag">{entry.categories[0] ?? 'SERVICE'}</span>
                       </div>
-                      <h3>{app.name}</h3>
-                      <p>{app.description}</p>
+                      <h3>{entry.name}</h3>
+                      <p>{entry.summary ?? entry.description ?? 'No description was published.'}</p>
                       <div className="catalog-meta">
-                        <span>{app.meta}</span>
-                        <button onClick={() => setSelectedApp(app)}>Details <ArrowUpRight size={12} /></button>
+                        <span title={entry.npub ?? entry.publisher}>
+                          {publisherLabel(entry)} · v{entry.version}
+                        </span>
+                        <button onClick={() => openRelease(entry)}>Details <ArrowUpRight size={12} /></button>
                       </div>
-                      <button className="catalog-install" disabled title="Provisioning is inactive in this read-only build">
-                        <Plus size={15} /> Install (inactive)
+                      <button className="catalog-install" onClick={() => openRelease(entry)}>
+                        <ArrowDownToLine size={15} /> Review &amp; install
                       </button>
                     </article>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
 
               <div className="catalog-note">
                 <Shield size={17} />
                 <span>
-                  <strong>Read-only catalog.</strong> Installing a service needs an authenticated provisioning API,
-                  which this build does not include. Catalog entries are shown for review only.
+                  <strong>Signed by their publisher.</strong> Entries come from npack release events and
+                  Blossom artifacts; this node verifies the release signature and artifact hash before
+                  installing, then pulls the image from its registry. Catalogue updated {catalogueAge(catalogue)}.
                 </span>
               </div>
             </>
@@ -1700,7 +1970,11 @@ export default function AdminPanel() {
                               <strong>{meta.label}</strong>
                               <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
                             </div>
-                            <small>{service.pin ? `pin ${service.pin.slice(0, 16)}…` : 'No certificate pin published'}</small>
+                            <small>
+                              {health?.package?.version
+                                ? `npack v${health.package.version}${health.package.npub ? ` · ${shortNpub(health.package.npub)}` : ''}`
+                                : service.pin ? `pin ${service.pin.slice(0, 16)}…` : 'No certificate pin published'}
+                            </small>
                           </div>
                         </div>
                         <div className="installed-details">
@@ -2268,41 +2542,161 @@ export default function AdminPanel() {
 
       {mobileNav && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
 
-      {selectedApp && (
+      {selectedRelease && (
         <div
           className="modal-scrim"
           role="presentation"
-          onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedApp(null); }}
+          onMouseDown={(event) => { if (event.target === event.currentTarget) closeRelease(); }}
         >
-          <section className="install-modal" role="dialog" aria-modal="true" aria-labelledby="install-title">
+          <section className="install-modal catalog-modal" role="dialog" aria-modal="true" aria-labelledby="install-title">
             <div className="modal-top">
-              <div className="eyebrow">SERVICE REVIEW <span>·</span> READ-ONLY</div>
-              <button className="icon-quiet" onClick={() => setSelectedApp(null)} aria-label="Close"><X size={19} /></button>
+              <div className="eyebrow">
+                SERVICE PACKAGE <span>·</span>{' '}
+                {selectedRelease.official
+                  ? 'OFFICIAL PUBLISHER'
+                  : selectedRelease.trusted ? 'TRUSTED PUBLISHER' : 'UNKNOWN PUBLISHER'}
+              </div>
+              <button className="icon-quiet" onClick={closeRelease} aria-label="Close"><X size={19} /></button>
             </div>
-            <h2 id="install-title">Review {selectedApp.name}</h2>
-            <p className="modal-intro">What this package would add to your server. Provisioning is inactive in this build.</p>
-            <div className="modal-app">
-              <IconBox icon={selectedApp.icon} tint={selectedApp.tint} />
-              <div><strong>{selectedApp.name}</strong><small>{selectedApp.description}</small></div>
-              <span className="inactive-badge">INACTIVE</span>
-            </div>
+            <h2 id="install-title">{selectedRelease.name}</h2>
+            <p className="modal-intro">
+              {selectedRelease.summary ?? selectedRelease.description ?? 'No description was published.'}
+            </p>
+
+            {releaseError && (
+              <div className="panel-banner error" role="alert">
+                <CircleAlert size={14} />
+                <span>{releaseError}</span>
+              </div>
+            )}
+
             <div className="install-spec">
-              <div><span>CONTAINER IMAGE</span><strong>{selectedApp.image}</strong></div>
-              <div><span>PUBLIC ENDPOINT</span><strong>Assigned by the node during provisioning</strong></div>
-              <div><span>DATA STORAGE</span><strong>/srv/ncc/apps/{selectedApp.name.toLowerCase().replaceAll(' ', '-')} · persistent</strong></div>
-              <div><span>NETWORK ACCESS</span><strong>One public HTTPS port · backend loopback only</strong></div>
+              <div><span>PUBLISHER</span><strong title={selectedRelease.npub ?? selectedRelease.publisher}>{shortPublisher(selectedRelease)}</strong></div>
+              <div><span>VERSION</span><strong>v{selectedRelease.version}</strong></div>
+              <div><span>PACKAGE HASH</span><strong>{selectedRelease.sha256 ? `${selectedRelease.sha256.slice(0, 16)}…` : '—'}</strong></div>
+              <div>
+                <span>PLATFORM</span>
+                <strong>
+                  {releaseDetails
+                    ? `${releaseDetails.provenance.os ?? 'linux'}/${releaseDetails.provenance.arch ?? 'x86_64'}`
+                    : selectedRelease.compatible ? 'Compatible' : 'Other platform'}
+                </strong>
+              </div>
+              {releaseDetails && (
+                <>
+                  <div><span>CONTAINER IMAGE</span><strong className="mono-wrap">{releaseDetails.descriptor.image}</strong></div>
+                  <div><span>PUBLIC PORT</span><strong>{releaseDetails.descriptor.publicPort ?? '—'}</strong></div>
+                  <div>
+                    <span>BACKEND</span>
+                    <strong>
+                      127.0.0.1:{releaseDetails.descriptor.backendPort ?? '—'} → {releaseDetails.descriptor.containerPort ?? '—'}
+                    </strong>
+                  </div>
+                  <div><span>PROBE</span><strong>{releaseDetails.descriptor.probePath}</strong></div>
+                  <div><span>LICENCE</span><strong>{selectedRelease.license ?? 'Not stated'}</strong></div>
+                  <div><span>DOWNLOAD</span><strong>{byteSize(selectedRelease.downloadSize) ?? 'Not stated'}</strong></div>
+                </>
+              )}
             </div>
+
+            {releaseState === 'loading' && (
+              <p className="empty-note">Downloading and verifying the package…</p>
+            )}
+
+            {releaseDetails?.warnings.map((warning) => (
+              <div className="panel-banner" role="status" key={warning}>
+                <CircleAlert size={14} />
+                <span>{warning}</span>
+              </div>
+            ))}
+
+            {releaseDetails && (releaseDetails.descriptor.volumes.length > 0
+              || releaseDetails.descriptor.envKeys.length > 0) && (
+              <div className="install-spec">
+                {releaseDetails.descriptor.volumes.length > 0 && (
+                  <div>
+                    <span>PERSISTENT VOLUMES</span>
+                    <strong>
+                      {releaseDetails.descriptor.volumes
+                        .map((volume) => `${volume.name} → ${volume.path}`)
+                        .join(' · ')}
+                    </strong>
+                  </div>
+                )}
+                {releaseDetails.descriptor.envKeys.length > 0 && (
+                  <div>
+                    <span>ENVIRONMENT</span>
+                    <strong>{releaseDetails.descriptor.envKeys.join(', ')}</strong>
+                  </div>
+                )}
+                {releaseDetails.descriptor.minBundleVersion && (
+                  <div>
+                    <span>MINIMUM BUNDLE</span>
+                    <strong>{releaseDetails.descriptor.minBundleVersion}</strong>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedRelease.description && selectedRelease.description !== selectedRelease.summary && (
+              <p className="modal-copy">{selectedRelease.description}</p>
+            )}
+
+            {releaseDetails?.readme && (
+              <pre className="catalog-readme">{releaseDetails.readme}</pre>
+            )}
+
             <div className="install-security">
               <LockKeyhole size={15} />
-              <span>Secrets stay on this server. The service locator publishes only its public endpoint.</span>
+              <span>
+                Installed with a read-only filesystem, no added capabilities and one loopback port.
+                The container image is pulled from its registry; npack supplies only the signed descriptor.
+              </span>
             </div>
-            <div className="modal-buttons">
-              <button className="button-secondary" onClick={() => setSelectedApp(null)}>Close</button>
-              <button className="button-primary" disabled title="Provisioning is inactive in this read-only build">
-                <Plus size={15} /> Install (inactive)
+
+            {!selectedRelease.official && (
+              <div className="catalogue-trust">
+                <div>
+                  <strong>{selectedRelease.trusted ? 'Trusted publisher' : 'Unknown publisher'}</strong>
+                  <small>{selectedRelease.npub ?? selectedRelease.publisher}</small>
+                </div>
+                <button
+                  className="button-secondary"
+                  onClick={() => handleTrustPublisher(selectedRelease, !selectedRelease.trusted)}
+                  disabled={trustBusy || !apiBase || !user}
+                >
+                  {trustBusy
+                    ? <span className="button-spinner" />
+                    : selectedRelease.trusted ? <Trash2 size={14} /> : <ShieldCheck size={14} />}
+                  {selectedRelease.trusted ? 'Stop trusting' : 'Trust publisher'}
+                </button>
+              </div>
+            )}
+
+            <div className="catalog-command">
+              <span>INSTALL ON THE HOST</span>
+              <code>{installCommand(selectedRelease)}</code>
+              <button
+                className="text-button"
+                onClick={() => copy(installCommand(selectedRelease), 'Install command')}
+              >
+                <Copy size={13} /> Copy
               </button>
             </div>
-            <div className="install-step-hint">Read-only review · no containers are changed</div>
+
+            <div className="modal-buttons">
+              {releaseHomepage && (
+                <a className="button-secondary" href={releaseHomepage} target="_blank" rel="noreferrer">
+                  Homepage <ExternalLink size={13} />
+                </a>
+              )}
+              {releaseSupport && (
+                <a className="button-secondary" href={releaseSupport} target="_blank" rel="noreferrer">
+                  Support <ExternalLink size={13} />
+                </a>
+              )}
+              <button className="button-secondary" onClick={closeRelease}>Close</button>
+            </div>
           </section>
         </div>
       )}

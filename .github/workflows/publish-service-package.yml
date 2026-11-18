@@ -1,0 +1,172 @@
+# Build and publish an NCC service descriptor as a signed npack artifact.
+#
+# This workflow does not build the container image. Your repository keeps its
+# existing image build and push job; this one runs afterwards, reads the
+# pushed image reference, pins its digest, packs the .npk and publishes the
+# release event.
+#
+# Usage in a service repository:
+#
+#   jobs:
+#     publish-package:
+#       needs: build-image
+#       uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.0
+#       with:
+#         version: 1.0.0
+#         publisher: npub1...
+#         image: ghcr.io/acme/hello:1.0.0
+#       secrets:
+#         NOSTR_SECRET_KEY: ${{ secrets.NOSTR_SECRET_KEY }}
+#
+# Set the repository variable NOSTR_SECRET_KEY (a dedicated publisher key) or
+# pass it as a secret. Without it the artifact is built and uploaded as a
+# workflow artifact but nothing is published to Nostr.
+
+name: Publish NCC service package
+
+on:
+  workflow_call:
+    inputs:
+      service_dir:
+        description: Directory containing service.json and the icon
+        type: string
+        default: .
+      version:
+        description: Package Semantic Version
+        type: string
+        required: true
+      publisher:
+        description: Publisher npub or 64-character hex key
+        type: string
+        required: true
+      image:
+        description: Image reference to pin (registry/repository:tag)
+        type: string
+        required: true
+      output:
+        description: Output .npk filename
+        type: string
+        default: service.npk
+      arch:
+        description: Target architecture, or any for multi-arch images
+        type: string
+        default: x86_64
+      os:
+        description: Target operating system
+        type: string
+        default: linux
+      repo:
+        description: Optional NIP-34 repository address
+        type: string
+        default: ''
+      commit:
+        description: Optional source commit
+        type: string
+        default: ''
+      relays:
+        description: Comma-separated relay URLs
+        type: string
+        default: wss://relay.damus.io,wss://nos.lol
+      blossom:
+        description: Comma-separated Blossom server URLs
+        type: string
+        default: https://blossom.primal.net
+      npack_version:
+        description: Pinned npack release
+        type: string
+        default: '0.10.1'
+      tool_ref:
+        description: ncc-server ref that provides the packaging script
+        type: string
+        default: main
+      publish:
+        description: Publish to relays and Blossom (requires NOSTR_SECRET_KEY)
+        type: boolean
+        default: true
+    secrets:
+      NOSTR_SECRET_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: imattau/ncc-server
+          ref: ${{ inputs.tool_ref }}
+          path: .ncc-server
+          sparse-checkout: scripts
+
+      - name: Install npack
+        shell: bash
+        env:
+          NPACK_VERSION: ${{ inputs.npack_version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/npack.deb \
+            "https://github.com/imattau/npack/releases/download/v${NPACK_VERSION}/npack_${NPACK_VERSION}_amd64.deb"
+          sudo dpkg -i /tmp/npack.deb
+
+      - name: Build the service package
+        id: build
+        shell: bash
+        env:
+          SERVICE_DIR: ${{ inputs.service_dir }}
+          VERSION: ${{ inputs.version }}
+          PUBLISHER: ${{ inputs.publisher }}
+          IMAGE: ${{ inputs.image }}
+          OUTPUT: ${{ inputs.output }}
+          ARCH: ${{ inputs.arch }}
+          OS: ${{ inputs.os }}
+          REPO: ${{ inputs.repo }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          args=(
+            build
+            --service-dir "$SERVICE_DIR"
+            --version "$VERSION"
+            --publisher "$PUBLISHER"
+            --image "$IMAGE"
+            --output "$OUTPUT"
+            --os "$OS"
+            --arch "$ARCH"
+          )
+          [ -n "$REPO" ] && args+=(--repo "$REPO")
+          [ -n "$COMMIT" ] && args+=(--commit "$COMMIT")
+          python3 .ncc-server/scripts/npack-service.py "${args[@]}"
+          echo "manifest=${OUTPUT%.npk}.manifest.json" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to relays and Blossom
+        if: ${{ inputs.publish }}
+        shell: bash
+        env:
+          NOSTR_SECRET_KEY: ${{ secrets.NOSTR_SECRET_KEY }}
+          RELAYS: ${{ inputs.relays }}
+          BLOSSOM: ${{ inputs.blossom }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NOSTR_SECRET_KEY:-}" ]; then
+            echo "NOSTR_SECRET_KEY is not configured; built the package but did not publish it."
+            exit 0
+          fi
+          args=(publish --manifest "${{ steps.build.outputs.manifest }}" --secret-key "$NOSTR_SECRET_KEY")
+          IFS=',' read -ra relays <<< "$RELAYS"
+          for relay in "${relays[@]}"; do args+=(--relay "$relay"); done
+          IFS=',' read -ra servers <<< "$BLOSSOM"
+          for server in "${servers[@]}"; do args+=(--server "$server"); done
+          python3 .ncc-server/scripts/npack-service.py "${args[@]}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ncc-service-package
+          path: |
+            ${{ inputs.output }}
+            ${{ steps.build.outputs.manifest }}
+          if-no-files-found: error

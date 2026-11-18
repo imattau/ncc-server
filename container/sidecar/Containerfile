@@ -13,6 +13,7 @@ COPY patches/ncc-sidecar-tor-auth-log.patch /tmp/ncc-sidecar-tor-auth-log.patch
 COPY patches/ncc-sidecar-tor-control-close.patch /tmp/ncc-sidecar-tor-control-close.patch
 COPY patches/ncc-sidecar-panel-admin-api.patch /tmp/ncc-sidecar-panel-admin-api.patch
 COPY patches/ncc-sidecar-panel-services.patch /tmp/ncc-sidecar-panel-services.patch
+COPY patches/ncc-sidecar-npack.patch /tmp/ncc-sidecar-npack.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -30,6 +31,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-services.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-services.patch; \
      fi \
+  && if [ ! -f src/routes/panel-catalogue.js ]; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-npack.patch \
+       && patch -p1 < /tmp/ncc-sidecar-npack.patch; \
+     fi \
   && npm ci \
   && npm --prefix ui ci \
   && npm --prefix ui run build \
@@ -45,7 +50,7 @@ ENV NODE_ENV=production \
     NCC_SIDECAR_ALLOW_REMOTE=false \
     ADMIN_HOST=127.0.0.1 \
     ADMIN_PORT=3000
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 zstd \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd --gid "$SIDECAR_GID" ncc-sidecar \
   && useradd --uid "$SIDECAR_UID" --gid "$SIDECAR_GID" --home-dir /app --shell /usr/sbin/nologin ncc-sidecar \

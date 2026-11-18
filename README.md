@@ -31,6 +31,10 @@ opens `/admin`. Sign in with the node operator key or an admin key; the Admins
 section adds and removes admin keys, Settings edits the published identity,
 relays and cadence, and Installed shows health, logs, republish and container
 restart controls. Every change is a NIP-98-signed request to the sidecar.
+The **Apps** page lists service packages published with
+[npack](docs/npack-services.md), a Nostr-native index for signed `.npk`
+descriptors; installing one is `sudo make service-install REF=…` and the
+container image still comes from its registry.
 The optional panel Caddy image also serves the panel on loopback port 8081,
 and the node-agent listens on loopback 3010 for container controls; neither
 needs a router forward. See [admin panel](docs/admin-panel.md) for SSH access.
@@ -49,7 +53,9 @@ needs a router forward. See [admin panel](docs/admin-panel.md) for SSH access.
 
 Do not forward the internal service ports. Onion access uses Tor and needs no
 router port forward. Port forwarding requires a public IP; it will not work
-through CGNAT without an external tunnel.
+through CGNAT without an external tunnel. The App catalogue's npack daemon
+publishes no port at all: the sidecar reaches it through a Unix socket in a
+shared volume.
 
 ## Install
 

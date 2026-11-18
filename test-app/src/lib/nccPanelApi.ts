@@ -482,6 +482,12 @@ export interface PanelServiceStatus {
   probe: PanelServiceProbe;
   container: PanelServiceContainer | null;
   publication: PanelServicePublication;
+  package: {
+    publisher: string | null;
+    npub: string | null;
+    version: string | null;
+    verified: boolean;
+  } | null;
   restartable: boolean;
   health: ServiceHealthState;
 }
@@ -581,6 +587,17 @@ function readPublication(value: unknown): PanelServicePublication {
   };
 }
 
+function readPackageProvenance(value: unknown): PanelServiceStatus['package'] {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    publisher: stringOrNull(record.publisher),
+    npub: stringOrNull(record.npub),
+    version: stringOrNull(record.version),
+    verified: record.verified === true,
+  };
+}
+
 function readServiceStatus(value: unknown): PanelServiceStatus | null {
   const record = objectValue(value);
   if (!record || typeof record.serviceId !== 'string' || !record.serviceId) return null;
@@ -597,6 +614,7 @@ function readServiceStatus(value: unknown): PanelServiceStatus | null {
     probe: readProbe(record.probe),
     container: readContainer(record.container),
     publication: readPublication(record.publication),
+    package: readPackageProvenance(record.package),
     restartable: record.restartable === true,
     health: health === 'healthy' || health === 'degraded'
       || health === 'unreachable' || health === 'unknown'
@@ -742,3 +760,337 @@ export async function restartPanelService(
     containers,
   };
 }
+
+// --- npack service catalogue ------------------------------------------------
+
+export interface PanelCatalogueIcon {
+  url: string;
+  sha256: string;
+}
+
+export interface PanelCatalogueEntry {
+  releaseEventId: string;
+  publisher: string;
+  npub: string | null;
+  name: string;
+  version: string;
+  kind: string;
+  sha256: string | null;
+  publishedAt: number | null;
+  compatible: boolean;
+  official: boolean;
+  trusted: boolean;
+  summary: string | null;
+  description: string | null;
+  homepage: string | null;
+  license: string | null;
+  categories: string[];
+  screenshots: string[];
+  icon: PanelCatalogueIcon | null;
+  releaseNotes: string | null;
+  supportUrl: string | null;
+  downloadSize: number | null;
+  installedSize: number | null;
+  releaseDate: string | null;
+  details: {
+    repo: string | null;
+    commit: string | null;
+    depends: string[];
+    requires: string[];
+    postInstall: string[];
+  };
+}
+
+export interface PanelCatalogueStatus {
+  present: boolean;
+  ageSeconds: number | null;
+  stale: boolean;
+  staleAfterSeconds: number | null;
+  releases: number | null;
+}
+
+export interface PanelCataloguePublisher {
+  publisher: string;
+  npub: string | null;
+  official: boolean;
+}
+
+export interface PanelCatalogue {
+  available: boolean;
+  error: string | null;
+  official: { publisher: string; npub: string | null } | null;
+  trusted: PanelCataloguePublisher[];
+  status: PanelCatalogueStatus | null;
+  entries: PanelCatalogueEntry[];
+}
+
+export interface PanelServiceDescriptor {
+  serviceId: string;
+  name: string;
+  summary: string | null;
+  description: string | null;
+  image: string;
+  publicPort: number | null;
+  backendPort: number | null;
+  containerPort: number | null;
+  probePath: string;
+  categories: string[];
+  minBundleVersion: string | null;
+  volumes: { name: string; path: string }[];
+  envKeys: string[];
+}
+
+export interface PanelCatalogueService {
+  provenance: {
+    publisher: string;
+    npub: string | null;
+    name: string;
+    version: string;
+    releaseEventId: string;
+    artifactEventId: string | null;
+    sha256: string;
+    os: string | null;
+    arch: string | null;
+    verified: boolean;
+  };
+  descriptor: PanelServiceDescriptor;
+  readme: string | null;
+  artifact: { sha256: string; size: number; url: string; urls: string[] };
+  warnings: string[];
+}
+
+function stringArray(value: unknown, maximum = 32): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .slice(0, maximum);
+}
+
+function readCatalogueEntry(value: unknown): PanelCatalogueEntry | null {
+  const record = objectValue(value);
+  if (!record
+    || typeof record.releaseEventId !== 'string' || !record.releaseEventId
+    || typeof record.publisher !== 'string' || !record.publisher
+    || typeof record.name !== 'string' || !record.name
+    || typeof record.version !== 'string' || !record.version) {
+    return null;
+  }
+
+  const icon = objectValue(record.icon);
+  const details = objectValue(record.details) ?? {};
+
+  return {
+    releaseEventId: record.releaseEventId,
+    publisher: record.publisher,
+    npub: stringOrNull(record.npub),
+    name: record.name,
+    version: record.version,
+    kind: typeof record.kind === 'string' ? record.kind : 'ncc-service',
+    sha256: stringOrNull(record.sha256),
+    publishedAt: numberOrNull(record.publishedAt),
+    compatible: record.compatible === true,
+    official: record.official === true,
+    trusted: record.trusted === true,
+    summary: stringOrNull(record.summary),
+    description: stringOrNull(record.description),
+    homepage: stringOrNull(record.homepage),
+    license: stringOrNull(record.license),
+    categories: stringArray(record.categories, 8),
+    screenshots: stringArray(record.screenshots, 6),
+    icon: icon && typeof icon.url === 'string' && typeof icon.sha256 === 'string'
+      ? { url: icon.url, sha256: icon.sha256 }
+      : null,
+    releaseNotes: stringOrNull(record.releaseNotes),
+    supportUrl: stringOrNull(record.supportUrl),
+    downloadSize: numberOrNull(record.downloadSize),
+    installedSize: numberOrNull(record.installedSize),
+    releaseDate: stringOrNull(record.releaseDate),
+    details: {
+      repo: stringOrNull(details.repo),
+      commit: stringOrNull(details.commit),
+      depends: stringArray(details.depends),
+      requires: stringArray(details.requires),
+      postInstall: stringArray(details.postInstall),
+    },
+  };
+}
+
+function readCataloguePublisher(value: unknown): PanelCataloguePublisher | null {
+  const record = objectValue(value);
+  if (!record || typeof record.publisher !== 'string') return null;
+  return {
+    publisher: record.publisher,
+    npub: stringOrNull(record.npub),
+    official: record.official === true,
+  };
+}
+
+function readCatalogueStatus(value: unknown): PanelCatalogueStatus | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    present: record.present === true,
+    ageSeconds: numberOrNull(record.ageSeconds),
+    stale: record.stale === true,
+    staleAfterSeconds: numberOrNull(record.staleAfterSeconds),
+    releases: numberOrNull(record.releases),
+  };
+}
+
+function readCatalogue(payload: unknown): PanelCatalogue {
+  const record = objectValue(payload);
+  if (!record) {
+    throw new PanelApiError(0, 'The node returned an unexpected catalogue response');
+  }
+
+  const official = objectValue(record.official);
+  const trusted = Array.isArray(record.trusted) ? record.trusted : [];
+  const entries = Array.isArray(record.entries) ? record.entries : [];
+
+  return {
+    available: record.available === true,
+    error: stringOrNull(record.error),
+    official: official && typeof official.publisher === 'string'
+      ? { publisher: official.publisher, npub: stringOrNull(official.npub) }
+      : null,
+    trusted: trusted
+      .map(readCataloguePublisher)
+      .filter((entry): entry is PanelCataloguePublisher => entry !== null),
+    status: readCatalogueStatus(record.status),
+    entries: entries
+      .map(readCatalogueEntry)
+      .filter((entry): entry is PanelCatalogueEntry => entry !== null),
+  };
+}
+
+function readDescriptor(value: unknown): PanelServiceDescriptor {
+  const record = objectValue(value) ?? {};
+  const volumes = objectValue(record.volumes) ?? {};
+  const env = objectValue(record.env) ?? {};
+
+  return {
+    serviceId: typeof record.service_id === 'string' ? record.service_id : '',
+    name: typeof record.name === 'string' ? record.name : '',
+    summary: stringOrNull(record.summary),
+    description: stringOrNull(record.description),
+    image: typeof record.image === 'string' ? record.image : '',
+    publicPort: numberOrNull(record.public_port),
+    backendPort: numberOrNull(record.backend_port),
+    containerPort: numberOrNull(record.container_port),
+    probePath: typeof record.probe_path === 'string' ? record.probe_path : '/',
+    categories: stringArray(record.categories, 8),
+    minBundleVersion: stringOrNull(record.min_bundle_version),
+    volumes: Object.entries(volumes).flatMap(([name, path]) => (
+      typeof path === 'string' ? [{ name, path }] : []
+    )),
+    envKeys: Object.keys(env).slice(0, 64),
+  };
+}
+
+function readCatalogueService(payload: unknown): PanelCatalogueService {
+  const record = objectValue(payload);
+  const provenance = objectValue(record?.provenance);
+  const descriptor = objectValue(record?.descriptor);
+  if (!record || !provenance || !descriptor) {
+    throw new PanelApiError(0, 'The node returned an unexpected service package');
+  }
+
+  const artifact = objectValue(record.artifact) ?? {};
+  return {
+    provenance: {
+      publisher: typeof provenance.publisher === 'string' ? provenance.publisher : '',
+      npub: stringOrNull(provenance.npub),
+      name: typeof provenance.name === 'string' ? provenance.name : '',
+      version: typeof provenance.version === 'string' ? provenance.version : '',
+      releaseEventId: typeof provenance.releaseEventId === 'string' ? provenance.releaseEventId : '',
+      artifactEventId: stringOrNull(provenance.artifactEventId),
+      sha256: typeof provenance.sha256 === 'string' ? provenance.sha256 : '',
+      os: stringOrNull(provenance.os),
+      arch: stringOrNull(provenance.arch),
+      verified: provenance.verified === true,
+    },
+    descriptor: readDescriptor(descriptor),
+    readme: stringOrNull(record.readme),
+    artifact: {
+      sha256: typeof artifact.sha256 === 'string' ? artifact.sha256 : '',
+      size: numberOrNull(artifact.size) ?? 0,
+      url: typeof artifact.url === 'string' ? artifact.url : '',
+      urls: stringArray(artifact.urls, 8),
+    },
+    warnings: stringArray(record.warnings, 16),
+  };
+}
+
+/** Catalogue entries from the node's npack service. */
+export async function loadPanelCatalogue(
+  base: string,
+  signer: PanelSigner,
+  refresh: boolean,
+  signal?: AbortSignal,
+): Promise<PanelCatalogue> {
+  const query = refresh ? '?refresh=1' : '';
+  return readCatalogue(
+    await requestJson(base, signer, 'GET', `/catalogue${query}`, undefined, signal),
+  );
+}
+
+/** Verify and unpack one release, for the details dialog and install command. */
+export async function loadPanelCatalogueService(
+  base: string,
+  signer: PanelSigner,
+  releaseEventId: string,
+  signal?: AbortSignal,
+): Promise<PanelCatalogueService> {
+  const path = `/catalogue/service?event=${encodeURIComponent(releaseEventId)}`;
+  return readCatalogueService(
+    await requestJson(base, signer, 'GET', path, undefined, signal),
+  );
+}
+
+/** Trust or untrust a publisher. The official publisher is always trusted. */
+export async function setPanelCatalogueTrust(
+  base: string,
+  signer: PanelSigner,
+  publisher: string,
+  trusted: boolean,
+  signal?: AbortSignal,
+): Promise<PanelCataloguePublisher[]> {
+  const payload = objectValue(
+    await requestJson(base, signer, 'PUT', '/catalogue/trust', { publisher, trusted }, signal),
+  );
+  const list = Array.isArray(payload?.trusted) ? payload.trusted : [];
+  return list
+    .map(readCataloguePublisher)
+    .filter((entry): entry is PanelCataloguePublisher => entry !== null);
+}
+
+/** Fetch a verified store icon as a blob; the panel turns it into an object URL. */
+export async function loadPanelCatalogueIcon(
+  base: string,
+  signer: PanelSigner,
+  releaseEventId: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const path = `/catalogue/icon/${encodeURIComponent(releaseEventId)}`;
+  const authorization = await nip98Authorization(signer, `${base}${path}`, 'GET');
+
+  let response: Response;
+  try {
+    response = await fetch(`/ncc-api${path}`, {
+      headers: { Authorization: authorization },
+      cache: 'no-store',
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new PanelApiError(0, 'The node admin API is unreachable');
+  }
+
+  if (!response.ok) {
+    throw new PanelApiError(response.status, 'The release icon is unavailable');
+  }
+  return response.blob();
+}
+
+// Exported for the parser tests; the public API above is the supported surface.
+export { readCatalogue, readCatalogueEntry, readCatalogueService };

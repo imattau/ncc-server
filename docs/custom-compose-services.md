@@ -9,6 +9,12 @@ server:
 sudo make service-add PACKAGE=/path/to/your-service-package
 ```
 
+This page describes an **operator-authored** package: you write the Compose
+fragment yourself and install it from a path on the host. To distribute a
+service to other nodes, publish it as a signed npack package instead; the node
+then generates the Compose fragment from the descriptor and will not accept
+publisher-supplied Compose text. See [npack services](npack-services.md).
+
 The package has two files:
 
 - `service.json` describes the NCC service ID and name, the Compose service

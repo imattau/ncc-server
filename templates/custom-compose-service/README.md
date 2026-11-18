@@ -32,3 +32,8 @@ work for the new service without another mapping step.
 The public TLS port must be allowed through the host firewall and forwarded
 through the router if the service should be reachable from the internet. The
 sidecar admin API remains local and is never exposed by this package.
+
+This template is for an operator-authored local package. To distribute the
+service to other nodes, publish it as a signed npack descriptor instead: see
+[docs/npack-services.md](../../docs/npack-services.md) and
+`templates/ncc-service-npk/`.

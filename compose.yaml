@@ -38,6 +38,10 @@ services:
       # to health from probes and node logs only.
       NCC_NODE_AGENT_URL: "http://127.0.0.1:${NODE_AGENT_PORT:-3010}"
       NCC_NODE_AGENT_TOKEN: "${NODE_AGENT_TOKEN:-}"
+      # Read-only npack catalogue for the App catalogue. The daemon runs in
+      # the `npack` service; the sidecar only reads its Unix socket.
+      NCC_NPACK_SOCKET: /run/npack/npackd.sock
+      NCC_NPACK_OFFICIAL_PUBLISHER: "${NCC_NPACK_OFFICIAL_PUBLISHER:-}"
       CONTENT_PORT: "${CONTENT_PORT:-8080}"
     depends_on:
       - tor
@@ -52,6 +56,7 @@ services:
     volumes:
       - "${SIDECAR_DATA_DIR}:/data"
       - "${SIDECAR_CERT_DIR}:/app/certs"
+      - npack-run:/run/npack:ro
     healthcheck:
       test:
         - CMD
@@ -96,6 +101,36 @@ services:
         - -e
         - "fetch('http://127.0.0.1:${NODE_AGENT_PORT:-3010}/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: *bounded-logs
+
+  # Read-only npack catalogue daemon for the admin panel's App catalogue.
+  # npack publishes signed service descriptors on Nostr and their .npk bytes
+  # on Blossom; this daemon only answers catalogue queries. It never installs
+  # packages, never touches Docker, and is reached over a Unix socket volume
+  # that the sidecar mounts read-only.
+  npack:
+    image: "${NPACK_IMAGE:-ghcr.io/imattau/ncc-server-npack:latest}"
+    environment:
+      NPACK_RELAYS: "${NPACK_RELAYS:-wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net}"
+      NPACK_BLOSSOM_SERVERS: "${NPACK_BLOSSOM_SERVERS:-https://blossom.primal.net,https://cdn.satellite.earth}"
+      NPACK_SOCKET: /run/npack/npackd.sock
+    volumes:
+      - npack-data:/data
+      - npack-run:/run/npack
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/npack/npackd.sock"]
+      interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
@@ -374,3 +409,7 @@ volumes:
     name: "${CADDY_DATA_VOLUME:-ncc-bundle_caddy-data}"
   caddy-config:
     name: "${CADDY_CONFIG_VOLUME:-ncc-bundle_caddy-config}"
+  npack-data:
+    name: "${NPACK_DATA_VOLUME:-ncc-bundle_npack-data}"
+  npack-run:
+    name: "${NPACK_RUN_VOLUME:-ncc-bundle_npack-run}"

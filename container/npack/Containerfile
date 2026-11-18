@@ -1,0 +1,42 @@
+# npackd, the catalogue service behind the admin panel's App catalogue.
+#
+# This image only runs npack's read-only daemon. It never installs packages
+# and never touches the Docker socket: it answers `Search`, `GetPackage`,
+# `CatalogueStatus`, `RefreshCatalogue` and `GetIcon` over a Unix socket that
+# the sidecar mounts read-only.
+#
+# The npack protocol is a project protocol, not a registered NIP yet, so the
+# version is pinned here and in docs/npack-services.md. Bump both together.
+ARG DEBIAN_IMAGE=debian:12-slim
+FROM ${DEBIAN_IMAGE}
+
+ARG NPACK_VERSION=0.10.1
+ARG TARGETARCH=amd64
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl zstd libssl3 \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL -o /tmp/npack.deb \
+       "https://github.com/imattau/npack/releases/download/v${NPACK_VERSION}/npack_${NPACK_VERSION}_${TARGETARCH}.deb" \
+  && dpkg-deb -x /tmp/npack.deb / \
+  && rm /tmp/npack.deb \
+  && npack --version
+
+COPY container/npack/entrypoint.sh /usr/local/bin/ncc-npack-entrypoint
+RUN chmod 0755 /usr/local/bin/ncc-npack-entrypoint
+
+ARG NPACK_UID=996
+ARG NPACK_GID=995
+RUN groupadd --gid "$NPACK_GID" ncc-npack \
+  && useradd --uid "$NPACK_UID" --gid "$NPACK_GID" \
+       --home-dir /data --shell /usr/sbin/nologin ncc-npack \
+  && mkdir -p /data /run/npack \
+  && chown -R "$NPACK_UID:$NPACK_GID" /data /run/npack
+
+ENV HOME=/data \
+    XDG_DATA_HOME=/data \
+    XDG_CONFIG_HOME=/data/config \
+    XDG_RUNTIME_DIR=/run/npack
+
+USER ${NPACK_UID}:${NPACK_GID}
+ENTRYPOINT ["/usr/local/bin/ncc-npack-entrypoint"]

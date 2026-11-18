@@ -5,9 +5,10 @@ verification, and recovery on a dedicated Debian 12 or Ubuntu host.
 
 The bundle uses Docker Compose for the NCC-06 sidecar, Caddy, Npanel, Ditto
 Relay, Ditto Web, ncc-search (the Nostr content search engine and its UI),
-OpenSearch, Tor, and a small node-agent for the admin panel's container
-controls. Caddy and the sidecar use host networking. Do not install the
-bundle where another service owns the ports or Caddy configuration.
+OpenSearch, Tor, a small node-agent for the admin panel's container controls,
+and a read-only npack daemon for the App catalogue. Caddy and the sidecar use
+host networking. Do not install the bundle where another service owns the
+ports or Caddy configuration.
 
 ## Requirements and network preparation
 
@@ -59,9 +60,10 @@ Do not forward ports 3000, 3010, 3200, 3201, 3220, 3230, 8081, 9050, 9051,
 9200, 13131, or the `TOR_*_PORT` loopback listeners (18045-18048 by default).
 The sidecar admin port, node-agent, Npanel backends, ncc-search's own
 containers, the admin panel's loopback listener, Tor, OpenSearch, and relay
-backend are local services. The onion listeners are reached only from the Tor
-process. Onion access uses outbound Tor connections and needs no router
-forward.
+backend are local services. `npack` has no published port at all: the sidecar
+reaches it through a volume-mounted Unix socket. The onion listeners are
+reached only from the Tor process. Onion access uses outbound Tor connections
+and needs no router forward.
 
 If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
@@ -300,13 +302,14 @@ it again.
 
 Each service has its own image and image tag in `.env` (`TOR_IMAGE`,
 `SIDECAR_IMAGE`, `RELAY_IMAGE`, `NPANEL_IMAGE`, `DITTO_WEB_IMAGE`,
-`SEARCH_IMAGE`, and `SEARCH_UI_IMAGE`). The `Publish component images`
-workflow builds and publishes linux/amd64 and linux/arm64 images. A `v*` Git
-tag publishes a coordinated set; `workflow_dispatch` can publish one
-component at a time. The default tags are `latest`; for controlled upgrades,
-pin images to version tags in `.env`, then pull and recreate only the service
-you changed. `make bundle-pull` refreshes all configured images, and
-`make bundle-up` pulls before starting the stack.
+`SEARCH_IMAGE`, `SEARCH_UI_IMAGE`, and `NPACK_IMAGE`). The `Publish component
+images` workflow builds and publishes linux/amd64 and linux/arm64 images,
+except the App catalogue's npack daemon, which upstream npack publishes for
+amd64 only. A `v*` Git tag publishes a coordinated set; `workflow_dispatch`
+can publish one component at a time. The default tags are `latest`; for
+controlled upgrades, pin images to version tags in `.env`, then pull and
+recreate only the service you changed. `make bundle-pull` refreshes all
+configured images, and `make bundle-up` pulls before starting the stack.
 
 When a release adds a new sidecar service record (such as the `admin` panel),
 run `sudo make bundle-provision-services` once after upgrading to create and
@@ -341,6 +344,32 @@ containers labelled `com.docker.compose.project=ncc-bundle`. If it is absent,
 the panel still shows probe and record health and the node-event log tab. The
 agent runs from `SIDECAR_IMAGE`, so pin that image to a release that includes
 `node-agent.mjs` before starting it.
+
+The App catalogue uses the `npack` container, which runs npackd read-only and
+answers the sidecar over `/run/npack/npackd.sock`. It has no Docker access and
+no published port. Set `NPACK_IMAGE` to a release that exists in your
+registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
+marked as official:
+
+~~~sh
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.0
+NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
+~~~
+
+`NPACK_RELAYS` and `NPACK_BLOSSOM_SERVERS` control discovery; their defaults
+are npack's public relays and Blossom servers. If the container is missing or
+cannot reach the relays, the panel reports the catalogue as unavailable and
+every other section keeps working. The catalogue's local state lives in the
+`npack-data` volume; keep it with the other bundle volumes.
+
+Installing a service package needs the same release as the sidecar:
+
+~~~sh
+sudo make service-install REF=npub1.../hello@1.0.0
+~~~
+
+See [npack services](npack-services.md) for the package format and publisher
+workflow.
 
 The legacy systemd installer and its TLS/Tor scripts are separate. Do not run
 them against a Compose deployment.

@@ -21,13 +21,14 @@ signer on another device.
 The operator key opens the panel directly. Any other key is checked against
 the node's admin list in the sidecar, so an operator can add another admin
 from the **Admins** section. Admin management, the editable **Settings**
-(public identity, publication relays, publication cadence) and the
-**Installed** service controls are the write actions in the panel; all are
-authorized server-side by a NIP-98 signature from the connected key (see
-below). Provisioning and package import stay visible but disabled. The panel
-asks the sidecar to republish a record or restart a container; it never
-changes containers itself. Host metrics such as CPU and storage are still not
-collected, so the panel shows "not collected" rather than invented values.
+(public identity, publication relays, publication cadence), the **Installed**
+service controls and the **Apps** catalogue's publisher trust list are the
+write actions in the panel; all are authorized server-side by a NIP-98
+signature from the connected key (see below). The panel asks the sidecar to
+republish a record or restart a container; it never changes containers
+itself, and package installation stays a host command. Host metrics such as
+CPU and storage are still not collected, so the panel shows "not collected"
+rather than invented values.
 
 NCC records are public, so gating the panel is a usability and honesty
 measure, not a confidentiality boundary. Every management action must go
@@ -49,6 +50,11 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/services/<id>/logs?limit=200` — node events and container output
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
+- `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
+- `GET /ncc-api/catalogue/service?event=<id>` — verify and unpack one release
+- `GET /ncc-api/catalogue/icon/<id>` — verified store icon (PNG or SVG)
+- `PUT /ncc-api/catalogue/trust` with `{"publisher": "npub1…", "trusted": true}`
+  — add or remove a trusted package publisher
 - `PUT /ncc-api/settings/relays` with `{"relays": ["wss://…"]}` — replace the
   publication relays
 - `PUT /ncc-api/settings/identity` with `{"displayName", "about", "picture",
@@ -144,8 +150,10 @@ Standard services map to the bundle's containers: `web`, `addr` and `admin`
 use `caddy`; `relay` uses `relay`; `npanel` uses `npanel`; `ditto` uses
 `ditto-web`; and `search` uses `search` and `search-ui`. A custom service
 stores its `compose_services` when it is installed with `make service-add`,
-so later services are restartable without extra configuration. Restarting
-`web`, `addr` or `admin` restarts Caddy, which briefly interrupts all three.
+so later services are restartable without extra configuration. A service
+installed from an npack package also shows its package version and publisher
+under the service name. Restarting `web`, `addr` or `admin` restarts Caddy,
+which briefly interrupts all three.
 
 The Docker socket is not mounted into the sidecar. A small **node-agent**
 companion container reuses the sidecar image, mounts the socket, and exposes
@@ -155,6 +163,37 @@ with `NODE_AGENT_TOKEN`. The agent replies before restarting, so restarting
 Caddy cannot cut the response that is proxied through it. Without the agent,
 the page still shows probe and publication health and node logs; restart and
 container logs are disabled with an explanation.
+
+### App catalogue
+
+The **Apps** page lists service packages published with
+[npack](npack-services.md). The node's `npack` container reads signed
+`kind:9900` release events from relays, and the sidecar serves them at
+`GET /ncc-api/catalogue` after the usual NIP-98 check.
+
+Each entry shows the store listing the publisher signed (name, summary,
+categories, icon, version, publisher) without downloading the artifact. The
+details dialog resolves and verifies the `.npk` before showing the image
+digest, ports, volumes and environment variable names. Store icons are
+fetched by the panel with its NIP-98 header and rendered as blob URLs, so the
+icon route is not public.
+
+Trust is per publisher: the key in `NCC_NPACK_OFFICIAL_PUBLISHER` is marked
+**Official** and always trusted; other keys show as **Unknown publisher**
+until an admin presses **Trust publisher** (a NIP-98 `PUT
+/ncc-api/catalogue/trust`). Trusting a publisher trusts its metadata, not its
+container image.
+
+The panel does not install packages itself. It shows the verified install
+command:
+
+```sh
+sudo make service-install REF=<publisher>/<name>@<version>
+```
+
+which re-checks the release, artifact hash and descriptor on the node before
+touching Compose. Without the `npack` container the catalogue reports itself
+unavailable; the rest of the panel keeps working.
 
 ### Sign-in on mobile
 
@@ -179,11 +218,12 @@ Caddy answers the CORS preflight (including `PUT`), strips `Origin` (the NCC
 protocol handler rewrites it to a public origin that the sidecar's CORS policy
 rejects), and forwards the original `Host` so the sidecar can rebuild the
 signed URL. The routes come from
-`patches/ncc-sidecar-panel-admin-api.patch` and
-`patches/ncc-sidecar-panel-services.patch`, applied when the sidecar image is
+`patches/ncc-sidecar-panel-admin-api.patch`,
+`patches/ncc-sidecar-panel-services.patch` and
+`patches/ncc-sidecar-npack.patch`, applied when the sidecar image is
 built. A sidecar image without the patches answers 401/404, and the panel
-falls back to operator-only access with the Admins, Settings and service
-controls marked inactive; deploy the matching sidecar and Caddy images to
+falls back to operator-only access with the Admins, Settings, service controls
+and catalogue marked inactive; deploy the matching sidecar and Caddy images to
 enable them.
 
 `/ncc-config.json` publishes `panelApi`, the absolute base the panel signs.
