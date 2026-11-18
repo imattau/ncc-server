@@ -439,3 +439,306 @@ export async function savePanelCadence(
 ): Promise<PanelSettings> {
   return readSettings(await requestJson(base, signer, 'PUT', '/settings/cadence', { ...cadence }, signal));
 }
+
+export type ServiceHealthState = 'healthy' | 'degraded' | 'unreachable' | 'unknown';
+
+export interface PanelServiceProbe {
+  url: string | null;
+  ok: boolean | null;
+  status: number | null;
+  latencyMs: number | null;
+  error: string | null;
+}
+
+export interface PanelServiceContainer {
+  state: string;
+  health: string | null;
+  restartCount: number;
+  names: string[];
+}
+
+export interface PanelServiceRelayResult {
+  url: string;
+  success: boolean;
+  error?: string;
+  timestamp?: number;
+}
+
+export interface PanelServicePublication {
+  lastPublishedAt: number | null;
+  intervalMinutes: number | null;
+  onionAddress: string | null;
+  ncc02Id: string | null;
+  ncc05Id: string | null;
+  relays: PanelServiceRelayResult[];
+}
+
+export interface PanelServiceStatus {
+  serviceId: string;
+  name: string;
+  recordId: number;
+  status: string;
+  composeServices: string[];
+  probe: PanelServiceProbe;
+  container: PanelServiceContainer | null;
+  publication: PanelServicePublication;
+  restartable: boolean;
+  health: ServiceHealthState;
+}
+
+export interface PanelServiceHealth {
+  agent: { available: boolean; error: string | null };
+  services: PanelServiceStatus[];
+}
+
+export interface PanelNodeLog {
+  level: string;
+  message: string;
+  timestamp: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface PanelContainerLog {
+  service: string;
+  container: string;
+  stream: string;
+  timestamp: string | null;
+  message: string;
+}
+
+export interface PanelServiceLogs {
+  serviceId: string;
+  node: PanelNodeLog[];
+  container: { available: boolean; error: string | null; logs: PanelContainerLog[] };
+}
+
+export interface PanelRestartResult {
+  serviceId: string;
+  accepted: boolean;
+  containers: { service: string; name: string; state: string }[];
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value ? value : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readProbe(value: unknown): PanelServiceProbe {
+  const record = objectValue(value) ?? {};
+  return {
+    url: stringOrNull(record.url),
+    ok: typeof record.ok === 'boolean' ? record.ok : null,
+    status: numberOrNull(record.status),
+    latencyMs: numberOrNull(record.latencyMs),
+    error: stringOrNull(record.error),
+  };
+}
+
+function readContainer(value: unknown): PanelServiceContainer | null {
+  const record = objectValue(value);
+  if (!record) return null;
+
+  return {
+    state: typeof record.state === 'string' ? record.state : 'unknown',
+    health: stringOrNull(record.health),
+    restartCount: numberOrNull(record.restartCount) ?? 0,
+    names: Array.isArray(record.names)
+      ? record.names.filter((name): name is string => typeof name === 'string')
+      : [],
+  };
+}
+
+function readPublication(value: unknown): PanelServicePublication {
+  const record = objectValue(value) ?? {};
+  const relays = Array.isArray(record.relays) ? record.relays : [];
+
+  return {
+    lastPublishedAt: numberOrNull(record.lastPublishedAt),
+    intervalMinutes: numberOrNull(record.intervalMinutes),
+    onionAddress: stringOrNull(record.onionAddress),
+    ncc02Id: stringOrNull(record.ncc02Id),
+    ncc05Id: stringOrNull(record.ncc05Id),
+    relays: relays.flatMap((entry): PanelServiceRelayResult[] => {
+      const relay = objectValue(entry);
+      const url = relay ? normalizeRelay(relay.url) : null;
+      if (!relay || !url) return [];
+      return [{
+        url,
+        success: relay.success === true,
+        ...(stringOrNull(relay.error) ? { error: stringOrNull(relay.error) as string } : {}),
+        ...(numberOrNull(relay.timestamp) !== null ? { timestamp: numberOrNull(relay.timestamp) as number } : {}),
+      }];
+    }),
+  };
+}
+
+function readServiceStatus(value: unknown): PanelServiceStatus | null {
+  const record = objectValue(value);
+  if (!record || typeof record.serviceId !== 'string' || !record.serviceId) return null;
+
+  const health = record.health;
+  return {
+    serviceId: record.serviceId,
+    name: typeof record.name === 'string' ? record.name : record.serviceId,
+    recordId: numberOrNull(record.recordId) ?? 0,
+    status: typeof record.status === 'string' ? record.status : 'active',
+    composeServices: Array.isArray(record.composeServices)
+      ? record.composeServices.filter((name): name is string => typeof name === 'string')
+      : [],
+    probe: readProbe(record.probe),
+    container: readContainer(record.container),
+    publication: readPublication(record.publication),
+    restartable: record.restartable === true,
+    health: health === 'healthy' || health === 'degraded'
+      || health === 'unreachable' || health === 'unknown'
+      ? health
+      : 'unknown',
+  };
+}
+
+function readServiceHealth(payload: unknown): PanelServiceHealth {
+  const record = objectValue(payload);
+  if (!record || !Array.isArray(record.services)) {
+    throw new PanelApiError(0, 'The node returned an unexpected services response');
+  }
+
+  const agent = objectValue(record.agent) ?? {};
+  return {
+    agent: {
+      available: agent.available === true,
+      error: stringOrNull(agent.error),
+    },
+    services: record.services
+      .map(readServiceStatus)
+      .filter((status): status is PanelServiceStatus => status !== null),
+  };
+}
+
+function readServiceLogs(payload: unknown): PanelServiceLogs {
+  const record = objectValue(payload);
+  if (!record || typeof record.serviceId !== 'string' || !Array.isArray(record.node)) {
+    throw new PanelApiError(0, 'The node returned an unexpected logs response');
+  }
+
+  const container = objectValue(record.container) ?? {};
+  const logs = Array.isArray(container.logs) ? container.logs : [];
+
+  return {
+    serviceId: record.serviceId,
+    node: record.node.flatMap((entry): PanelNodeLog[] => {
+      const log = objectValue(entry);
+      if (!log || typeof log.message !== 'string') return [];
+      return [{
+        level: typeof log.level === 'string' ? log.level : 'info',
+        message: log.message,
+        timestamp: stringOrNull(log.timestamp),
+        metadata: objectValue(log.metadata),
+      }];
+    }),
+    container: {
+      available: container.available === true,
+      error: stringOrNull(container.error),
+      logs: logs.flatMap((entry): PanelContainerLog[] => {
+        const log = objectValue(entry);
+        if (!log || typeof log.message !== 'string') return [];
+        return [{
+          service: typeof log.service === 'string' ? log.service : '',
+          container: typeof log.container === 'string' ? log.container : '',
+          stream: typeof log.stream === 'string' ? log.stream : 'stdout',
+          timestamp: stringOrNull(log.timestamp),
+          message: log.message,
+        }];
+      }),
+    },
+  };
+}
+
+/** Health, probe and container state for every configured service. */
+export async function loadPanelServices(
+  base: string,
+  signer: PanelSigner,
+  signal?: AbortSignal,
+): Promise<PanelServiceHealth> {
+  return readServiceHealth(await requestJson(base, signer, 'GET', '/services', undefined, signal));
+}
+
+/** Node events and recent container output for one service. */
+export async function loadPanelServiceLogs(
+  base: string,
+  signer: PanelSigner,
+  serviceId: string,
+  signal?: AbortSignal,
+): Promise<PanelServiceLogs> {
+  const path = `/services/${encodeURIComponent(serviceId)}/logs?limit=200`;
+  return readServiceLogs(await requestJson(base, signer, 'GET', path, undefined, signal));
+}
+
+/** Force one service through a publish cycle. */
+export async function republishPanelService(
+  base: string,
+  signer: PanelSigner,
+  serviceId: string,
+  signal?: AbortSignal,
+): Promise<{ serviceId: string; publishedAt: number }> {
+  const payload = await requestJson(
+    base, signer, 'POST',
+    `/services/${encodeURIComponent(serviceId)}/republish`,
+    undefined,
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || typeof record.serviceId !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the republish');
+  }
+
+  return {
+    serviceId: record.serviceId,
+    publishedAt: numberOrNull(record.publishedAt) ?? Date.now(),
+  };
+}
+
+/** Restart the Compose container(s) that back one service. */
+export async function restartPanelService(
+  base: string,
+  signer: PanelSigner,
+  serviceId: string,
+  signal?: AbortSignal,
+): Promise<PanelRestartResult> {
+  const payload = await requestJson(
+    base, signer, 'POST',
+    `/services/${encodeURIComponent(serviceId)}/restart`,
+    undefined,
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || typeof record.serviceId !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the restart');
+  }
+
+  const containers = Array.isArray(record.containers)
+    ? record.containers.flatMap((entry) => {
+        const container = objectValue(entry);
+        if (!container || typeof container.name !== 'string') return [];
+        return [{
+          service: typeof container.service === 'string' ? container.service : '',
+          name: container.name,
+          state: typeof container.state === 'string' ? container.state : 'unknown',
+        }];
+      })
+    : [];
+
+  return {
+    serviceId: record.serviceId,
+    accepted: record.accepted === true,
+    containers,
+  };
+}

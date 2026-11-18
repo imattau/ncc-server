@@ -1,0 +1,542 @@
+diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
+new file mode 100644
+index 0000000..51b5a9a
+--- /dev/null
++++ b/src/routes/panel-services.js
+@@ -0,0 +1,516 @@
++/* global AbortController, fetch */
++/**
++ * Installed-service controls for the NCC admin panel.
++ *
++ * The panel is a static page. Caddy publishes these routes at `/ncc-api/*`
++ * and every request is authorized by its own NIP-98 signature, exactly like
++ * the admin and settings routes. This module adds the read/act surface for
++ * the Installed page: health, recent logs, a forced republish for one
++ * service, and a container restart.
++ *
++ * Docker is not reachable from this process. The optional node-agent
++ * companion container performs restarts and returns container logs; the
++ * sidecar only asks it for services it already knows about. When the agent is
++ * not installed, health still works from the local probe and publication
++ * state, and the panel keeps container actions disabled.
++ */
++
++import http from 'node:http';
++import https from 'node:https';
++import net from 'node:net';
++
++import { authorizePanelRequest } from '../panel-auth.js';
++import { addLog, getConfig, getLogs, getServices } from '../db.js';
++import { runPublishCycle } from '../app.js';
++
++const AGENT_URL = (process.env.NCC_NODE_AGENT_URL || 'http://127.0.0.1:3010').replace(/\/+$/, '');
++const AGENT_TOKEN = process.env.NCC_NODE_AGENT_TOKEN || '';
++const CONTENT_PORT = Number.parseInt(process.env.CONTENT_PORT || '8080', 10) || 8080;
++const COMPOSE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
++const PROBE_TIMEOUT_MS = 3500;
++const AGENT_TIMEOUT_MS = 5000;
++const MAX_LOG_LINES = 500;
++
++/**
++ * Compose services that back each standard NCC service. Custom services store
++ * `compose_services` in their record when they are installed; the fallback is
++ * the NCC service ID, which matches the default package layout.
++ */
++const STANDARD_COMPOSE = {
++  web: ['caddy'],
++  addr: ['caddy'],
++  admin: ['caddy'],
++  relay: ['relay'],
++  npanel: ['npanel'],
++  ditto: ['ditto-web'],
++  search: ['search', 'search-ui'],
++};
++
++/**
++ * Local probe target. Standard records often point `probe_url` at the public
++ * endpoint, which can fail behind NAT hairpin; these local listeners prove
++ * the process itself is serving. Custom records already use a loopback
++ * `probe_url`.
++ */
++function healthTarget(service) {
++  const config = service.config || {};
++  if (typeof config.health_url === 'string' && config.health_url) return config.health_url;
++
++  switch (service.service_id) {
++    case 'web':
++    case 'addr':
++      return `http://127.0.0.1:${CONTENT_PORT}/`;
++    case 'admin':
++      return `http://127.0.0.1:${CONTENT_PORT}/admin`;
++    case 'relay':
++      return 'http://127.0.0.1:13131/';
++    case 'npanel':
++      return 'http://127.0.0.1:3200/api/instance';
++    case 'ditto':
++      return 'http://127.0.0.1:3210/';
++    case 'search':
++      return 'http://127.0.0.1:3220/';
++    default:
++      return typeof config.probe_url === 'string' && config.probe_url ? config.probe_url : null;
++  }
++}
++
++function composeServices(service) {
++  const configured = Array.isArray(service.config?.compose_services)
++    ? service.config.compose_services.filter((name) => typeof name === 'string' && COMPOSE_NAME.test(name))
++    : [];
++  if (configured.length) return [...new Set(configured)];
++
++  const standard = STANDARD_COMPOSE[service.service_id];
++  if (standard) return standard;
++  return COMPOSE_NAME.test(service.service_id || '') ? [service.service_id] : [];
++}
++
++function findService(id) {
++  const services = getServices();
++  return services.find((service) => service.service_id === id)
++    || services.find((service) => String(service.id) === String(id))
++    || null;
++}
++
++function probe(target, timeoutMs = PROBE_TIMEOUT_MS) {
++  return new Promise((resolve) => {
++    let settled = false;
++    const finish = (result) => {
++      if (settled) return;
++      settled = true;
++      resolve(result);
++    };
++
++    if (!target) {
++      finish({ url: null, ok: null, status: null, latencyMs: null, error: 'No probe target' });
++      return;
++    }
++
++    let url;
++    try {
++      url = new URL(target);
++    } catch {
++      finish({ url: target, ok: false, status: null, latencyMs: null, error: 'Invalid probe URL' });
++      return;
++    }
++
++    const started = Date.now();
++
++    if (url.protocol === 'ws:' || url.protocol === 'wss:') {
++      let socket;
++      try {
++        socket = net.connect({
++          host: url.hostname,
++          port: Number(url.port || (url.protocol === 'wss:' ? 443 : 80)),
++        });
++      } catch (error) {
++        finish({
++          url: target, ok: false, status: null,
++          latencyMs: Date.now() - started,
++          error: error instanceof Error ? error.message : 'Invalid probe target',
++        });
++        return;
++      }
++      socket.setTimeout(timeoutMs, () => {
++        socket.destroy();
++        finish({
++          url: target, ok: false, status: null,
++          latencyMs: Date.now() - started, error: 'connection timed out',
++        });
++      });
++      socket.once('connect', () => {
++        socket.destroy();
++        finish({ url: target, ok: true, status: null, latencyMs: Date.now() - started, error: null });
++      });
++      socket.once('error', (error) => {
++        finish({
++          url: target, ok: false, status: null,
++          latencyMs: Date.now() - started, error: error.message,
++        });
++      });
++      return;
++    }
++
++    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
++      finish({
++        url: target, ok: false, status: null,
++        latencyMs: null, error: `Unsupported probe scheme ${url.protocol}`,
++      });
++      return;
++    }
++
++    const client = url.protocol === 'https:' ? https : http;
++    let request;
++    try {
++      request = client.request({
++        protocol: url.protocol,
++        hostname: url.hostname,
++        port: url.port || undefined,
++        path: `${url.pathname}${url.search}`,
++        method: 'GET',
++        timeout: timeoutMs,
++        // Service certificates are self-signed by design; reachability is what
++        // this probe measures, not certificate trust.
++        rejectUnauthorized: false,
++        headers: { Accept: '*/*', 'User-Agent': 'ncc-panel-health/1' },
++      }, (response) => {
++        const status = response.statusCode || null;
++        response.resume();
++        finish({
++          url: target,
++          ok: status !== null && status < 500,
++          status,
++          latencyMs: Date.now() - started,
++          error: status !== null && status < 500 ? null : `HTTP ${status}`,
++        });
++      });
++    } catch (error) {
++      finish({
++        url: target, ok: false, status: null,
++        latencyMs: Date.now() - started,
++        error: error instanceof Error ? error.message : 'Invalid probe target',
++      });
++      return;
++    }
++
++    request.on('timeout', () => request.destroy(new Error('connection timed out')));
++    request.on('error', (error) => {
++      finish({
++        url: target, ok: false, status: null,
++        latencyMs: Date.now() - started, error: error.message,
++      });
++    });
++    request.end();
++  });
++}
++
++async function agentRequest(path, { method = 'GET', body } = {}) {
++  if (!AGENT_TOKEN) throw new Error('Host control agent is not configured');
++
++  const controller = new AbortController();
++  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
++  try {
++    const response = await fetch(`${AGENT_URL}${path}`, {
++      method,
++      headers: {
++        Authorization: `Bearer ${AGENT_TOKEN}`,
++        ...(body ? { 'Content-Type': 'application/json' } : {}),
++      },
++      body: body ? JSON.stringify(body) : undefined,
++      cache: 'no-store',
++      signal: controller.signal,
++    });
++    const payload = await response.json().catch(() => null);
++    if (!response.ok) {
++      const message = payload && typeof payload.error === 'string'
++        ? payload.error
++        : `Host control agent returned HTTP ${response.status}`;
++      throw new Error(message);
++    }
++    return payload;
++  } catch (error) {
++    if (error?.name === 'AbortError') throw new Error('Host control agent timed out');
++    throw error;
++  } finally {
++    clearTimeout(timer);
++  }
++}
++
++async function agentContainers(services) {
++  if (!AGENT_TOKEN) {
++    return { available: false, error: 'Host control agent is not configured', containers: [] };
++  }
++
++  const query = services.length ? `?services=${encodeURIComponent([...new Set(services)].join(','))}` : '';
++  try {
++    const payload = await agentRequest(`/v1/containers${query}`);
++    return {
++      available: true,
++      error: null,
++      containers: Array.isArray(payload?.containers) ? payload.containers : [],
++    };
++  } catch (error) {
++    return {
++      available: false,
++      error: error instanceof Error ? error.message : 'Host control agent is unreachable',
++      containers: [],
++    };
++  }
++}
++
++function publicationState(service) {
++  const state = service.state || {};
++  const config = service.config || {};
++  const configured = Array.isArray(config.publication_relays)
++    ? config.publication_relays.filter((url) => typeof url === 'string' && url)
++    : [];
++  const appRelays = getConfig('app_config')?.publication_relays;
++  const current = new Set(configured.length
++    ? configured
++    : (Array.isArray(appRelays) ? appRelays.filter((url) => typeof url === 'string' && url) : []));
++
++  const relays = Object.entries(state.last_success_per_relay || {})
++    // A removed relay stays in the last-success map forever. Only report the
++    // relays this service publishes to now, or health would stay degraded.
++    .filter(([url]) => current.size === 0 || current.has(url))
++    .map(([url, result]) => ({
++      url,
++      success: result === true || result?.success === true,
++      ...(typeof result?.error === 'string' ? { error: result.error } : {}),
++      ...(typeof result === 'object' && Number.isFinite(result?.timestamp)
++        ? { timestamp: result.timestamp }
++        : {}),
++    }));
++
++  return {
++    lastPublishedAt: Number.isFinite(state.last_full_publish_timestamp)
++      ? state.last_full_publish_timestamp
++      : null,
++    intervalMinutes: Number.isFinite(config.refresh_interval_minutes)
++      ? config.refresh_interval_minutes
++      : null,
++    onionAddress: typeof state.last_onion_address === 'string' ? state.last_onion_address : null,
++    ncc02Id: typeof state.last_published_ncc02_id === 'string' ? state.last_published_ncc02_id : null,
++    ncc05Id: typeof state.last_published_ncc05_id === 'string' ? state.last_published_ncc05_id : null,
++    relays,
++  };
++}
++
++function overallHealth({ probeResult, containers, publication }) {
++  if (probeResult.ok === false) return 'unreachable';
++  if (containers.length && containers.some((container) => container.state !== 'running')) {
++    return 'unreachable';
++  }
++  if (containers.some((container) => container.health === 'unhealthy')) return 'degraded';
++
++  if (publication.relays.some((relay) => !relay.success)) return 'degraded';
++
++  if (publication.lastPublishedAt && publication.intervalMinutes) {
++    const staleAfter = publication.intervalMinutes * 60_000 * 2;
++    if (Date.now() - publication.lastPublishedAt > staleAfter) return 'degraded';
++  }
++
++  if (probeResult.ok === true) return 'healthy';
++  if (containers.length && containers.every((container) => container.state === 'running')) {
++    return 'healthy';
++  }
++  return 'unknown';
++}
++
++function nodeLogMatches(log, service) {
++  const metadata = log.metadata && typeof log.metadata === 'object' ? log.metadata : {};
++  const value = metadata.serviceId;
++  if (value === undefined || value === null) return false;
++  return String(value) === String(service.id) || String(value) === service.service_id;
++}
++
++function readLimit(value, fallback = 200) {
++  const parsed = Number.parseInt(value || '', 10);
++  if (!Number.isFinite(parsed)) return fallback;
++  return Math.min(Math.max(parsed, 1), MAX_LOG_LINES);
++}
++
++export default async function panelServicesRoutes(server) {
++  server.get('/ncc-api/services', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    const services = getServices().filter((service) => service.type !== 'sidecar');
++    const targets = new Map();
++    const wanted = [];
++    for (const service of services) {
++      targets.set(service.service_id, healthTarget(service));
++      wanted.push(...composeServices(service));
++    }
++
++    const agent = await agentContainers(wanted);
++    const byCompose = new Map();
++    for (const container of agent.containers) {
++      const list = byCompose.get(container.service) || [];
++      list.push(container);
++      byCompose.set(container.service, list);
++    }
++
++    const probes = await Promise.all(services.map((service) => probe(targets.get(service.service_id))));
++
++    const payload = services.map((service, index) => {
++      const compose = composeServices(service);
++      const containers = compose.flatMap((name) => byCompose.get(name) || []);
++      const publication = publicationState(service);
++      const probeResult = probes[index];
++
++      return {
++        serviceId: service.service_id,
++        name: service.name,
++        recordId: service.id,
++        status: service.status || 'active',
++        composeServices: compose,
++        probe: probeResult,
++        container: containers.length
++          ? {
++            state: containers.every((container) => container.state === 'running') ? 'running' : 'stopped',
++            health: containers.some((container) => container.health === 'unhealthy')
++              ? 'unhealthy'
++              : containers.find((container) => container.health)?.health || null,
++            restartCount: containers.reduce((total, container) => total + (container.restartCount || 0), 0),
++            names: containers.map((container) => container.name),
++          }
++          : null,
++        publication,
++        restartable: Boolean(agent.available && containers.length),
++        health: overallHealth({ probeResult, containers, publication }),
++      };
++    });
++
++    payload.sort((left, right) => left.serviceId.localeCompare(right.serviceId));
++    return { agent: { available: agent.available, error: agent.error }, services: payload };
++  });
++
++  server.get('/ncc-api/services/:id/logs', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    const service = findService(request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++
++    const limit = readLimit(request.query?.limit);
++    const node = getLogs(MAX_LOG_LINES * 10)
++      .filter((log) => nodeLogMatches(log, service))
++      .slice(0, limit)
++      .map((log) => ({
++        level: log.level || 'info',
++        message: log.message || '',
++        timestamp: log.timestamp || null,
++        metadata: log.metadata || null,
++      }));
++
++    let container = { available: false, error: null, logs: [] };
++    if (AGENT_TOKEN) {
++      const compose = composeServices(service);
++      if (compose.length) {
++        try {
++          const payload = await agentRequest(
++            `/v1/logs?services=${encodeURIComponent(compose.join(','))}&tail=${limit}`,
++          );
++          container = {
++            available: true,
++            error: null,
++            logs: Array.isArray(payload?.logs) ? payload.logs : [],
++          };
++        } catch (error) {
++          container = {
++            available: false,
++            error: error instanceof Error ? error.message : 'Host control agent is unreachable',
++            logs: [],
++          };
++        }
++      } else {
++        container.error = 'No container is mapped to this service';
++      }
++    } else {
++      container.error = 'Host control agent is not configured';
++    }
++
++    return { serviceId: service.service_id, node, container };
++  });
++
++  server.post('/ncc-api/services/:id/republish', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const service = findService(request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++    if (service.status !== 'active') {
++      return reply.code(409).send({ error: 'Only active services can be republished' });
++    }
++
++    try {
++      await runPublishCycle(service, { forcePublish: true });
++    } catch (error) {
++      addLog('error', `Manual republish failed for ${service.name} from the NCC admin panel`, {
++        serviceId: service.id,
++        error: error instanceof Error ? error.message : 'publish failed',
++        changedBy: caller.pubkey,
++      });
++      return reply.code(502).send({
++        error: error instanceof Error ? error.message : 'The publish cycle failed',
++      });
++    }
++
++    addLog('info', `Manual republish for ${service.name} from the NCC admin panel`, {
++      serviceId: service.id,
++      changedBy: caller.pubkey,
++    });
++
++    return {
++      success: true,
++      serviceId: service.service_id,
++      publishedAt: Date.now(),
++    };
++  });
++
++  server.post('/ncc-api/services/:id/restart', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const service = findService(request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++
++    const compose = composeServices(service);
++    if (!compose.length) {
++      return reply.code(409).send({ error: 'No container is mapped to this service' });
++    }
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++
++    try {
++      const payload = await agentRequest('/v1/restart', {
++        method: 'POST',
++        body: { services: compose },
++      });
++
++      addLog('info', `Restart requested for ${service.name} from the NCC admin panel`, {
++        serviceId: service.id,
++        containers: compose,
++        changedBy: caller.pubkey,
++      });
++
++      return {
++        success: true,
++        serviceId: service.service_id,
++        accepted: payload?.accepted === true,
++        containers: Array.isArray(payload?.containers) ? payload.containers : [],
++      };
++    } catch (error) {
++      addLog('error', `Restart failed for ${service.name} from the NCC admin panel`, {
++        serviceId: service.id,
++        containers: compose,
++        error: error instanceof Error ? error.message : 'restart failed',
++        changedBy: caller.pubkey,
++      });
++      return reply.code(503).send({
++        error: error instanceof Error ? error.message : 'The host control agent is unavailable',
++      });
++    }
++  });
++}
+diff --git a/src/web.js b/src/web.js
+index fc1ba18..113d745 100644
+--- a/src/web.js
++++ b/src/web.js
+@@ -13,6 +13,7 @@ import { isLocalHostname, isLocalAddress, shouldAllowRemoteAccess } from './secu
+ import adminRoutes from './routes/admin.js';
+ import panelAdminRoutes from './routes/panel-admin.js';
+ import panelSettingsRoutes from './routes/panel-settings.js';
++import panelServicesRoutes from './routes/panel-services.js';
+ import serviceRoutes from './routes/services.js';
+ import configRoutes from './routes/config.js';
+ import dbRoutes from './routes/db.js';
+@@ -85,6 +86,7 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+   await server.register(adminRoutes, { onInitialized });
+   await server.register(panelAdminRoutes);
+   await server.register(panelSettingsRoutes);
++  await server.register(panelServicesRoutes);
+   await server.register(serviceRoutes);
+   await server.register(configRoutes);
+   await server.register(dbRoutes);

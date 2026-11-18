@@ -63,3 +63,23 @@
 .gate-connect-copy .button-primary,.gate-connect-copy .button-secondary{height:32px;padding:0 10px;font-size:10px;text-decoration:none}
 .gate-detail{display:block;margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;color:#8a6f37;word-break:break-word}
 @media(max-width:760px){.cadence-grid{grid-template-columns:1fr 1fr}.gate-connect{align-items:flex-start}.gate-qr canvas{width:88px;height:88px}.settings-actions .button-primary{flex:1}.settings-status{margin-left:0;flex-basis:100%;text-align:left}}
+.health-warn{color:#a37a3f!important}
+.health-bad{color:#b0574f!important}
+.installed-actions .button-spinner{border-color:#b9c7bb;border-top-color:#52725a}
+.logs-modal{width:min(100%,760px);max-height:min(88vh,760px);display:flex;flex-direction:column}
+.logs-modal h2{font-size:20px}
+.logs-tabs{display:flex;gap:6px;border-bottom:1px solid #eef0ec;margin:14px 0 0;padding-bottom:8px}
+.logs-tab{border:1px solid transparent;background:none;border-radius:6px;padding:6px 9px;color:#7b867e;font-size:9px;font-weight:650}
+.logs-tab:hover{background:#f4f7f1;color:#3d5a44}
+.logs-tab.active{background:#edf4e5;border-color:#e1ebd6;color:#4f6b43}
+.logs-body{flex:1;min-height:180px;max-height:52vh;overflow:auto;background:#101813;border-radius:8px;padding:10px 12px;margin-top:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;line-height:1.65;color:#dbe7dd}
+.log-line{display:grid;grid-template-columns:64px 52px minmax(0,1fr);gap:9px;padding:3px 0;border-bottom:1px solid #ffffff10}
+.log-line:last-child{border-bottom:0}
+.log-line time{color:#7e9484;white-space:nowrap}
+.log-line code{white-space:pre-wrap;overflow-wrap:anywhere;color:#e4eee6}
+.log-level{font-size:8px;font-weight:750;letter-spacing:.04em;text-transform:uppercase;color:#9dc2a4}
+.log-level.warn,.log-level.stderr{color:#e3c079}
+.log-level.error{color:#f0a08f}
+.log-empty{margin:0;padding:22px 8px;text-align:center;color:#a7b8aa;font-size:10px;line-height:1.6}
+.log-empty.log-error{color:#f0b3a7}
+@media(max-width:760px){.logs-modal{max-height:92vh}.logs-body{max-height:46vh}.log-line{grid-template-columns:52px 44px minmax(0,1fr);gap:6px}}

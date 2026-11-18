@@ -38,7 +38,8 @@ def request(path, method='GET', data=None):
 
 
 def service_config(host, port, protocol, *, self_signed, pin=None,
-                   path='/', probe_url=None):
+                   path='/', probe_url=None, health_url=None,
+                   compose_services=None):
     endpoint = f'{protocol}://{host}:{port}{path}'
     config = {
         'refresh_interval_minutes': 360,
@@ -54,6 +55,10 @@ def service_config(host, port, protocol, *, self_signed, pin=None,
         'probe_url': probe_url or endpoint,
         'ncc05_recipients': [],
     }
+    if health_url:
+        config['health_url'] = health_url
+    if compose_services:
+        config['compose_services'] = list(compose_services)
     if pin:
         config['ncc02ExpectedKey'] = pin
         config['endpoints'] = [{
@@ -153,7 +158,11 @@ def main():
             'config': {'tor_control': {**control, 'password': tor_password}},
         })
 
-    web_config = service_config(public_ip, https_port, 'https', self_signed=True)
+    web_config = service_config(
+        public_ip, https_port, 'https', self_signed=True,
+        health_url=f'http://127.0.0.1:{http_port}/',
+        compose_services=['caddy'],
+    )
     web_config = enable_service_tor(
         web_config, password=tor_password,
         local_port=local_port_for('web', env),
@@ -183,6 +192,8 @@ def main():
         # Probe the relay backend directly during first-run provisioning; Caddy
         # depends on the certificate and profiles created by this script.
         probe_url='http://127.0.0.1:13131/',
+        health_url='http://127.0.0.1:13131/',
+        compose_services=['relay'],
     )
     relay_config.update({
         'ncc05_ttl_hours': 1,
@@ -207,6 +218,8 @@ def main():
     relay_config = service_config(
         public_ip, relay_port, 'wss', self_signed=True, pin=relay_pin, path='/relay/',
         probe_url='http://127.0.0.1:13131/',
+        health_url='http://127.0.0.1:13131/',
+        compose_services=['relay'],
     )
     relay_config.update({
         'ncc05_ttl_hours': 1,
@@ -226,6 +239,8 @@ def main():
     npanel_config = service_config(
         public_ip, npanel_port, 'https', self_signed=False, pin=pin,
         probe_url='http://127.0.0.1:3200/api/instance',
+        health_url='http://127.0.0.1:3200/api/instance',
+        compose_services=['npanel'],
     )
     npanel_config = enable_service_tor(
         npanel_config, password=tor_password, local_port=local_port_for('npanel', env),
@@ -237,6 +252,8 @@ def main():
     ditto_config = service_config(
         public_ip, ditto_port, 'https', self_signed=False, pin=pin,
         probe_url='http://127.0.0.1:3210/',
+        health_url='http://127.0.0.1:3210/',
+        compose_services=['ditto-web'],
     )
     ditto_config = enable_service_tor(
         ditto_config, password=tor_password, local_port=local_port_for('ditto', env),
@@ -252,7 +269,11 @@ def main():
     # anything themselves. Only the UI is addressed, not its separate API
     # backend, matching how npanel/ditto-web's own backend ports aren't
     # published individually either.
-    search_config = service_config(public_ip, search_port, 'https', self_signed=False, pin=pin)
+    search_config = service_config(
+        public_ip, search_port, 'https', self_signed=False, pin=pin,
+        health_url='http://127.0.0.1:3220/',
+        compose_services=['search', 'search-ui'],
+    )
     search_config = enable_service_tor(
         search_config, password=tor_password, local_port=local_port_for('search', env),
     )
@@ -273,6 +294,8 @@ def main():
     admin_config = service_config(
         public_ip, admin_port, 'https', self_signed=False, pin=pin,
         probe_url=f'http://127.0.0.1:{http_port}/admin',
+        health_url=f'http://127.0.0.1:{http_port}/admin',
+        compose_services=['caddy'],
     )
     admin_config = enable_service_tor(
         admin_config, password=tor_password, local_port=local_port_for('admin', env),
@@ -288,7 +311,11 @@ def main():
     # It reuses web's onion address instead of creating a second address for
     # the same page.
     root_config = {
-        **service_config(public_ip, https_port, 'https', self_signed=False, pin=pin),
+        **service_config(
+            public_ip, https_port, 'https', self_signed=False, pin=pin,
+            health_url=f'http://127.0.0.1:{http_port}/',
+            compose_services=['caddy'],
+        ),
         'locator_id': 'addr',
     }
     if web_onion:

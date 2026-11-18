@@ -25,6 +25,10 @@ onion port 80 to the loopback backend port, so the backend must answer plain
 HTTP on that port (the template already does). Tor settings are merged into
 the new record without changing the rest of its configuration.
 
+The installed record also stores the package's `compose_service` as
+`compose_services`, so the admin panel's Restart and container-log actions
+work for the new service without another mapping step.
+
 The public TLS port must be allowed through the host firewall and forwarded
 through the router if the service should be reachable from the internet. The
 sidecar admin API remains local and is never exposed by this package.

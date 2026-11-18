@@ -213,6 +213,8 @@ def main():
             'preferred_protocol': 'https',
             'port': public_port,
             'probe_url': f'http://127.0.0.1:{backend_port}{probe_path}',
+            'health_url': f'http://127.0.0.1:{backend_port}{probe_path}',
+            'compose_services': [compose_service],
             'ncc05_recipients': [],
             'ncc02ExpectedKey': cert_fingerprint,
             'endpoints': [{'url': endpoint, 'family': 'ipv4', 'protocol': 'https',

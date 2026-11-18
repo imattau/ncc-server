@@ -12,6 +12,7 @@ COPY patches/ncc-sidecar-event-ack.patch /tmp/ncc-sidecar-event-ack.patch
 COPY patches/ncc-sidecar-tor-auth-log.patch /tmp/ncc-sidecar-tor-auth-log.patch
 COPY patches/ncc-sidecar-tor-control-close.patch /tmp/ncc-sidecar-tor-control-close.patch
 COPY patches/ncc-sidecar-panel-admin-api.patch /tmp/ncc-sidecar-panel-admin-api.patch
+COPY patches/ncc-sidecar-panel-services.patch /tmp/ncc-sidecar-panel-services.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -24,6 +25,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && if [ ! -f src/routes/panel-settings.js ]; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-admin-api.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-admin-api.patch; \
+     fi \
+  && if [ ! -f src/routes/panel-services.js ]; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-panel-services.patch \
+       && patch -p1 < /tmp/ncc-sidecar-panel-services.patch; \
      fi \
   && npm ci \
   && npm --prefix ui ci \
@@ -48,6 +53,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
   && chown -R "$SIDECAR_UID:$SIDECAR_GID" /app /data
 WORKDIR /app
 COPY --from=build /src/ncc-06/ncc-sidecar/ /app/
+# Narrow Docker control plane for `make bundle-up`'s node-agent container.
+# It uses the same image with a different command and never runs in the
+# sidecar process itself.
+COPY container/sidecar/node-agent.mjs /app/node-agent.mjs
 # ncc-06-js imports nostr-tools without declaring it in its own package manifest.
 RUN npm install --prefix /app --no-save --omit=dev nostr-tools@2.19.4
 USER ${SIDECAR_UID}:${SIDECAR_GID}

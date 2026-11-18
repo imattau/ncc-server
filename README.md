@@ -28,13 +28,16 @@ the admin panel. You can leave individual service ports closed if that service
 should not be reachable.
 The admin panel is published as an NCC service on port 8448 and its root
 opens `/admin`. Sign in with the node operator key or an admin key; the Admins
-section adds and removes admin keys with NIP-98-signed requests to the sidecar.
+section adds and removes admin keys, Settings edits the published identity,
+relays and cadence, and Installed shows health, logs, republish and container
+restart controls. Every change is a NIP-98-signed request to the sidecar.
 The optional panel Caddy image also serves the panel on loopback port 8081,
-which needs no router forward; see [admin panel](docs/admin-panel.md) for SSH
-access.
+and the node-agent listens on loopback 3010 for container controls; neither
+needs a router forward. See [admin panel](docs/admin-panel.md) for SSH access.
 
 | Port | Purpose |
 | --- | --- |
+| 3010 | Local-only node-agent for panel container controls |
 | 8080 | HTTP web content and local target for the web onion |
 | 8081 | Local-only admin panel (SSH tunnel) |
 | 8443 | Pinned HTTPS web content |

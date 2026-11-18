@@ -147,6 +147,12 @@ ensure_env_default DITTO_WEB_TLS_PORT 8446
 ensure_env_default SEARCH_TLS_PORT 8447
 ensure_env_default ADMIN_PANEL_TLS_PORT 8448
 ensure_env_default ADMIN_PANEL_PORT 8081
+ensure_env_default NODE_AGENT_PORT 3010
+if [[ -z "${NODE_AGENT_TOKEN:-}" ]]; then
+  NODE_AGENT_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  write_env_value NODE_AGENT_TOKEN "$NODE_AGENT_TOKEN"
+  export NODE_AGENT_TOKEN
+fi
 ensure_env_default TOR_NPANEL_PORT 18045
 ensure_env_default TOR_DITTO_WEB_PORT 18046
 ensure_env_default TOR_SEARCH_PORT 18047

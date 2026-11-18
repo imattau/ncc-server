@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useSeoMeta } from '@unhead/react';
 import { ArrowDownRight, ArrowUpRight, Globe2, LockKeyhole, Radio, Search, Server, ShieldCheck, Waves } from 'lucide-react';
 
-import { npubFromConfigRecord, npubFromLocation } from '@/lib/nccAddress';
+import { nccServiceAddress, npubFromConfigRecord, npubFromLocation } from '@/lib/nccAddress';
 
 const services = [
   {
@@ -65,7 +65,8 @@ const services = [
 ];
 
 const serviceHref = (id: string, rootNpub: string | null) => {
-  if (rootNpub) return `ncc://${rootNpub}/${id === 'web' ? '' : `${id}/`}`;
+  const address = nccServiceAddress(rootNpub, id);
+  if (address) return address;
   // The loopback listener also serves /ncc-config.json, but keep a local
   // admin link as a fallback when no identity can be resolved.
   return id === 'admin' ? '/admin' : undefined;

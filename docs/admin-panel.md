@@ -20,15 +20,14 @@ signer on another device.
 
 The operator key opens the panel directly. Any other key is checked against
 the node's admin list in the sidecar, so an operator can add another admin
-from the **Admins** section. Admin management and the editable **Settings**
-(public identity, publication relays, publication cadence) are the write
-actions in the panel; both are authorized server-side by a NIP-98 signature
-from the connected key (see below). Provisioning, restart, log streaming,
-republishing and package import stay visible but disabled. The panel cannot
-change containers or publish records directly; it asks the sidecar to, and
-the sidecar republishes on its own cycle. Host metrics such as CPU and
-storage, and per-service health checks, are not collected; the panel shows
-"not monitored"/"not collected" rather than invented values.
+from the **Admins** section. Admin management, the editable **Settings**
+(public identity, publication relays, publication cadence) and the
+**Installed** service controls are the write actions in the panel; all are
+authorized server-side by a NIP-98 signature from the connected key (see
+below). Provisioning and package import stay visible but disabled. The panel
+asks the sidecar to republish a record or restart a container; it never
+changes containers itself. Host metrics such as CPU and storage are still not
+collected, so the panel shows "not collected" rather than invented values.
 
 NCC records are public, so gating the panel is a usability and honesty
 measure, not a confidentiality boundary. Every management action must go
@@ -46,6 +45,10 @@ verifies nothing itself: the sidecar checks each request.
 - `DELETE /ncc-api/admins/<pubkey or npub>` — remove an admin
 - `GET /ncc-api/settings` — read relays, identity, cadence and publication state
 - `GET /ncc-api/records` — query the node's published NCC records from its relays
+- `GET /ncc-api/services` — health, probe, container and publication state
+- `GET /ncc-api/services/<id>/logs?limit=200` — node events and container output
+- `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
+- `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `PUT /ncc-api/settings/relays` with `{"relays": ["wss://…"]}` — replace the
   publication relays
 - `PUT /ncc-api/settings/identity` with `{"displayName", "about", "picture",
@@ -114,6 +117,45 @@ showing everything unreachable under `ncc://` until the sidecar is updated.
 Relay status in Settings is therefore the node's view of the relays, not the
 browser's.
 
+### Installed service controls
+
+The **Installed** page shows live state per service and exposes four actions.
+All of them use the same NIP-98 authorization as the settings routes.
+
+- **Health** probes the service from the node, reports the last successful
+  publication and its relay results, and merges container state from the
+  node-agent. `healthy` means the local probe answered and the published
+  record is not stale; `degraded` means a probe, relay, container health check
+  or publication age is off; `unreachable` means the probe failed or the
+  container is stopped. The panel says `unknown` rather than inventing a
+  value when a signal is missing.
+- **Republish** runs one forced publish cycle for that service and returns the
+  relay results. It is intentionally synchronous so the panel can report a
+  failure instead of only claiming a request was queued.
+- **Logs** opens two tabs. **Node events** are the sidecar's own log records
+  for that service (publishes, Tor, certificates, panel actions). **Container
+  output** is recent stdout/stderr from the mapped Compose container. The
+  container tab is unavailable when the node-agent is not deployed.
+- **Open endpoint** opens the service's canonical `ncc://` address. `web` and
+  the legacy `addr` profile open the bare node address; every other service
+  opens `ncc://<npub>/<service-id>/`.
+
+Standard services map to the bundle's containers: `web`, `addr` and `admin`
+use `caddy`; `relay` uses `relay`; `npanel` uses `npanel`; `ditto` uses
+`ditto-web`; and `search` uses `search` and `search-ui`. A custom service
+stores its `compose_services` when it is installed with `make service-add`,
+so later services are restartable without extra configuration. Restarting
+`web`, `addr` or `admin` restarts Caddy, which briefly interrupts all three.
+
+The Docker socket is not mounted into the sidecar. A small **node-agent**
+companion container reuses the sidecar image, mounts the socket, and exposes
+only container state, recent logs and restart for containers labelled
+`com.docker.compose.project=ncc-bundle`. The sidecar calls it on host loopback
+with `NODE_AGENT_TOKEN`. The agent replies before restarting, so restarting
+Caddy cannot cut the response that is proxied through it. Without the agent,
+the page still shows probe and publication health and node logs; restart and
+container logs are disabled with an explanation.
+
 ### Sign-in on mobile
 
 The gate only shows the extension button when `window.nostr` exists. On a
@@ -137,10 +179,12 @@ Caddy answers the CORS preflight (including `PUT`), strips `Origin` (the NCC
 protocol handler rewrites it to a public origin that the sidecar's CORS policy
 rejects), and forwards the original `Host` so the sidecar can rebuild the
 signed URL. The routes come from
-`patches/ncc-sidecar-panel-admin-api.patch`, applied when the sidecar image is
-built. A sidecar image without the patch answers 401/404, and the panel falls
-back to operator-only access with the Admins and Settings writes marked
-inactive; deploy the matching sidecar and Caddy images to enable them.
+`patches/ncc-sidecar-panel-admin-api.patch` and
+`patches/ncc-sidecar-panel-services.patch`, applied when the sidecar image is
+built. A sidecar image without the patches answers 401/404, and the panel
+falls back to operator-only access with the Admins, Settings and service
+controls marked inactive; deploy the matching sidecar and Caddy images to
+enable them.
 
 `/ncc-config.json` publishes `panelApi`, the absolute base the panel signs.
 The panel prefers it over its own origin, because NCC Browser serves `ncc://`
@@ -233,8 +277,10 @@ records from the publication relays the sidecar reports, so changing relays
 also changes which relays the panel queries. Caddy also adds `panelApi` for
 the signed admin API base.
 
-Admin management and Settings writes need the `ncc-api` routes, so both the
-sidecar image and the Caddy configuration must be current. The Compose file
+Admin management, Settings writes and the Installed controls need the
+`ncc-api` routes, so the sidecar image, the Caddy configuration and (for
+container actions) the `node-agent` service must be current. The Compose file
 passes `NCC_OPERATOR_PUBKEY` to the sidecar so it can refuse to remove the
-operator key and so `/ncc-api/settings` names the right operator. Caddy's
-preflight allows `GET, POST, PUT, DELETE, OPTIONS`.
+operator key and so `/ncc-api/settings` names the right operator, and
+`NODE_AGENT_TOKEN` so it can reach the agent. Caddy's preflight allows
+`GET, POST, PUT, DELETE, OPTIONS`.

@@ -130,6 +130,36 @@ make test-ditto-wss RELAY_URL=wss://203.0.113.10:8444/relay/
 The smoke script skips certificate verification only for this test. NCC
 clients should use the certificate pin in the signed relay locator.
 
+## Installed service controls are unavailable
+
+The **Installed** page shows health and node-event logs from the sidecar even
+without the host agent. Restart and the **Container output** log tab need the
+`node-agent` companion container:
+
+~~~sh
+sudo docker-compose -p ncc-bundle ps node-agent
+sudo docker-compose -p ncc-bundle logs --tail=100 node-agent sidecar
+~~~
+
+If the agent is not running, recreate it with the sidecar:
+
+~~~sh
+sudo docker-compose -p ncc-bundle up -d sidecar node-agent
+~~~
+
+A `401` from the agent means `NODE_AGENT_TOKEN` differs between the two
+containers; both read it from the same `.env`. A `503` mentioning Docker means
+the agent cannot reach `/var/run/docker.sock`. The agent runs as root only to
+use that socket, accepts restarts only for containers in the `ncc-bundle`
+project, and binds `127.0.0.1:3010`.
+
+Restarting `web`, `addr` or `admin` restarts Caddy, so the panel page can
+briefly stop responding; reload it after a few seconds. Health is computed
+from the service's local probe, the last publication result and container
+state. `Unreachable` with a running container usually means the probe target
+in the service record is wrong; `Degraded` usually means a relay publish
+failed or the record is older than twice the publish interval.
+
 ## Onion endpoint does not load
 
 Tor has to bootstrap and publish an onion descriptor. Check the Tor and

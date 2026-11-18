@@ -33,6 +33,12 @@ services:
       # Canonical public origin the panel signs for, besides the request Host.
       # Covers the loopback listener and a proxy in front of Caddy.
       NCC_PANEL_PUBLIC_ORIGIN: "https://${PUBLIC_IPV4}:${ADMIN_PANEL_TLS_PORT}"
+      # The panel's service controls call this companion container, which is
+      # the only process with Docker access. Empty means the panel falls back
+      # to health from probes and node logs only.
+      NCC_NODE_AGENT_URL: "http://127.0.0.1:${NODE_AGENT_PORT:-3010}"
+      NCC_NODE_AGENT_TOKEN: "${NODE_AGENT_TOKEN:-}"
+      CONTENT_PORT: "${CONTENT_PORT:-8080}"
     depends_on:
       - tor
     restart: unless-stopped
@@ -56,6 +62,43 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    logging: *bounded-logs
+
+  # Companion process for the admin panel's container controls. It reuses the
+  # sidecar image and runs a small, project-scoped Docker API instead of
+  # giving the sidecar itself root-equivalent socket access. Only restart,
+  # container state and recent logs are exposed, and only for containers
+  # labelled com.docker.compose.project=ncc-bundle.
+  node-agent:
+    image: "${SIDECAR_IMAGE:-ghcr.io/imattau/ncc-server-sidecar:latest}"
+    network_mode: host
+    user: "0:0"
+    command: ["node", "/app/node-agent.mjs"]
+    environment:
+      NCC_AGENT_HOST: 127.0.0.1
+      NCC_AGENT_PORT: "${NODE_AGENT_PORT:-3010}"
+      NCC_AGENT_TOKEN: "${NODE_AGENT_TOKEN:-}"
+      NCC_COMPOSE_PROJECT: ncc-bundle
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:${NODE_AGENT_PORT:-3010}/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     logging: *bounded-logs
 
   opensearch:

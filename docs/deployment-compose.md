@@ -5,9 +5,9 @@ verification, and recovery on a dedicated Debian 12 or Ubuntu host.
 
 The bundle uses Docker Compose for the NCC-06 sidecar, Caddy, Npanel, Ditto
 Relay, Ditto Web, ncc-search (the Nostr content search engine and its UI),
-OpenSearch, and Tor. Caddy and the sidecar use host networking. Do not
-install the bundle where another service owns the ports or Caddy
-configuration.
+OpenSearch, Tor, and a small node-agent for the admin panel's container
+controls. Caddy and the sidecar use host networking. Do not install the
+bundle where another service owns the ports or Caddy configuration.
 
 ## Requirements and network preparation
 
@@ -55,12 +55,13 @@ and API share port 8447 so browser certificate trust covers both. Npanel uses
 its own HTTPS origin on port 8445 because its frontend's instance probe does
 not work under the ncc:// origin.
 
-Do not forward ports 3000, 3200, 3201, 3220, 3230, 8081, 9050, 9051, 9200,
-13131, or the `TOR_*_PORT` loopback listeners (18045-18048 by default). The
-sidecar admin port, Npanel backends, ncc-search's own containers, the admin
-panel's loopback listener, Tor, OpenSearch, and relay backend are local
-services. The onion listeners are reached only from the Tor process. Onion
-access uses outbound Tor connections and needs no router forward.
+Do not forward ports 3000, 3010, 3200, 3201, 3220, 3230, 8081, 9050, 9051,
+9200, 13131, or the `TOR_*_PORT` loopback listeners (18045-18048 by default).
+The sidecar admin port, node-agent, Npanel backends, ncc-search's own
+containers, the admin panel's loopback listener, Tor, OpenSearch, and relay
+backend are local services. The onion listeners are reached only from the Tor
+process. Onion access uses outbound Tor connections and needs no router
+forward.
 
 If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
@@ -323,6 +324,23 @@ This merges Tor settings into the existing records without rewriting their
 profiles, publication relays or cadence, reuses the web onion for `addr`, and
 republishes. Fresh installs do this automatically. Adding a custom service
 with `make service-add` also creates its onion automatically.
+
+The admin panel's Restart and container-log tabs use the `node-agent`
+companion container, which is the only process with the Docker socket. Add a
+token to `.env` if the installer did not create one, then recreate both
+containers:
+
+~~~sh
+grep -q '^NODE_AGENT_TOKEN=..*' .env \
+  || printf 'NODE_AGENT_TOKEN=%s\n' "$(openssl rand -hex 32)" >> .env
+sudo docker-compose -p ncc-bundle up -d sidecar node-agent
+~~~
+
+The agent binds `127.0.0.1:3010` and only accepts restarts and log reads for
+containers labelled `com.docker.compose.project=ncc-bundle`. If it is absent,
+the panel still shows probe and record health and the node-event log tab. The
+agent runs from `SIDECAR_IMAGE`, so pin that image to a release that includes
+`node-agent.mjs` before starting it.
 
 The legacy systemd installer and its TLS/Tor scripts are separate. Do not run
 them against a Compose deployment.

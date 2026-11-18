@@ -211,7 +211,7 @@ NCC_IDENTITY_FILE="$IDENTITY_FILE" python3 "$PROJECT_DIR/scripts/provision-compo
 # Compose re-reads .env here, including the operator pubkey saved above.
 "${COMPOSE[@]}" config >/dev/null
 "${COMPOSE[@]}" up -d
-for service in sidecar opensearch relay npanel ditto-web search-crawler search search-ui caddy; do
+for service in sidecar node-agent opensearch relay npanel ditto-web search-crawler search search-ui caddy; do
   wait_healthy "$service"
 done
 

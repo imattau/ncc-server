@@ -28,6 +28,23 @@ export function npubFromNccHost(hostname: string): string | null {
   return validNpub(hostname.trim().toLowerCase().split('.')[0] ?? '');
 }
 
+/**
+ * Canonical NCC address for a service.
+ *
+ * `web` and the legacy `addr` profile serve the welcome page, so they use the
+ * bare node address. Every other service is `ncc://<npub>/<service-id>/`.
+ */
+export function nccServiceAddress(
+  npub: string | null | undefined,
+  serviceId: string,
+): string | null {
+  const identity = npub ? validNpub(npub) : null;
+  if (!identity) return null;
+
+  const base = `ncc://${identity}/`;
+  return serviceId === 'web' || serviceId === 'addr' ? base : `${base}${serviceId}/`;
+}
+
 /** Best-effort identity from an ncc:// document address. */
 export function npubFromLocation(): string | null {
   if (typeof window === 'undefined') return null;

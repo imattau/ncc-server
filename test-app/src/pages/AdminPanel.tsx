@@ -28,21 +28,29 @@ import {
   type PanelService,
   type PanelSnapshot,
 } from '@/lib/nccPanel';
+import { nccServiceAddress } from '@/lib/nccAddress';
 import {
   PanelApiError,
   addPanelAdmin,
   cadenceProblem,
   listPanelAdmins,
   loadPanelRecords,
+  loadPanelServiceLogs,
+  loadPanelServices,
   loadPanelSettings,
   relayInputToUrl,
   removePanelAdmin,
+  republishPanelService,
   resolvePanelApiBase,
+  restartPanelService,
   savePanelCadence,
   savePanelIdentity,
   savePanelRelays,
   type PanelAdmin,
   type PanelCadence,
+  type PanelServiceHealth,
+  type PanelServiceLogs,
+  type PanelServiceStatus,
   type PanelSettings,
 } from '@/lib/nccPanelApi';
 import './admin-panel.css';
@@ -198,6 +206,53 @@ function endpointHost(endpoint: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function healthCopy(
+  status: PanelServiceStatus | undefined,
+  loading: boolean,
+): { label: string; tone: string; detail: string } {
+  if (!status) {
+    return {
+      label: loading ? 'Checking…' : 'Not monitored',
+      tone: 'health-muted',
+      detail: loading
+        ? 'Probing the service…'
+        : 'Service health is not available from this node. Deploy the current sidecar image.',
+    };
+  }
+
+  const detail: string[] = [];
+  if (status.probe.error) detail.push(status.probe.error);
+  if (status.container) {
+    detail.push(`${status.container.names.join(', ')}: ${status.container.state}`);
+    if (status.container.health) detail.push(status.container.health);
+  }
+  const failedRelays = status.publication.relays.filter((relay) => !relay.success);
+  if (failedRelays.length) detail.push(`${failedRelays.length} relay(s) failing`);
+
+  switch (status.health) {
+    case 'healthy':
+      return {
+        label: status.probe.latencyMs !== null ? `Healthy · ${status.probe.latencyMs} ms` : 'Healthy',
+        tone: 'health-good',
+        detail: detail.join(' · '),
+      };
+    case 'degraded':
+      return { label: 'Degraded', tone: 'health-warn', detail: detail.join(' · ') };
+    case 'unreachable':
+      return { label: 'Unreachable', tone: 'health-bad', detail: detail.join(' · ') };
+    default:
+      return { label: 'Unknown', tone: 'health-muted', detail: detail.join(' · ') };
+  }
+}
+
+function logTimestamp(value: string | null): string {
+  if (!value) return '—';
+  const iso = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function safeHref(endpoint: string | null): string | null {
@@ -538,6 +593,20 @@ export default function AdminPanel() {
   const [cadenceText, setCadenceText] = useState(() => cadenceTextOf(EMPTY_CADENCE));
   const [cadenceError, setCadenceError] = useState('');
 
+  const [serviceHealth, setServiceHealth] = useState<PanelServiceHealth | null>(null);
+  const [healthState, setHealthState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [healthError, setHealthError] = useState('');
+  const [healthToken, setHealthToken] = useState(0);
+  const [controlBusy, setControlBusy] = useState<string | null>(null);
+  const [controlError, setControlError] = useState('');
+  const [confirmRestart, setConfirmRestart] = useState<string | null>(null);
+  const [logsFor, setLogsFor] = useState<PanelService | null>(null);
+  const [serviceLogs, setServiceLogs] = useState<PanelServiceLogs | null>(null);
+  const [logsState, setLogsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [logsError, setLogsError] = useState('');
+  const [logsToken, setLogsToken] = useState(0);
+  const [logsTab, setLogsTab] = useState<'container' | 'node'>('container');
+
   const operatorNpub = config?.npub ?? null;
   const operatorPubkey = useMemo(() => operatorPubkeyFromNpub(operatorNpub), [operatorNpub]);
   const signerPubkey = user?.pubkey?.toLowerCase() ?? null;
@@ -679,6 +748,65 @@ export default function AdminPanel() {
 
     return () => controller.abort();
   }, [section, authorized, settings, apiBase, user, settingsToken]);
+
+  // Health is a real server-side probe, so it is loaded when the Installed
+  // section opens (and when the operator checks again), not polled from the
+  // page. Each load costs one NIP-98 signature.
+  useEffect(() => {
+    if (section !== 'Installed' || !authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadPanelServices(apiBase, user.signer, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setServiceHealth(loaded);
+        setHealthState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setHealthState('error');
+        setHealthError(error instanceof Error ? error.message : 'Could not read service health');
+      });
+
+    return () => controller.abort();
+  }, [section, authorized, apiBase, user, healthToken]);
+
+  // Logs are fetched only while the modal is open. The sidecar returns node
+  // events and recent container output in one authorized request.
+  useEffect(() => {
+    if (!logsFor || !authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadPanelServiceLogs(apiBase, user.signer, logsFor.id, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setServiceLogs(loaded);
+        setLogsState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setLogsState('error');
+        setLogsError(error instanceof Error ? error.message : 'Could not read the service logs');
+      });
+
+    return () => controller.abort();
+  }, [logsFor, logsToken, authorized, apiBase, user]);
+
+  useEffect(() => {
+    if (!logsFor) return undefined;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setLogsFor(null);
+      setServiceLogs(null);
+      setLogsState('idle');
+      setLogsError('');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [logsFor]);
 
   useEffect(() => {
     if (!config || !operatorPubkey || !authorized) return;
@@ -843,6 +971,16 @@ export default function AdminPanel() {
     setIdentityError('');
     setCadenceText(cadenceTextOf(EMPTY_CADENCE));
     setCadenceError('');
+    setServiceHealth(null);
+    setHealthState('idle');
+    setHealthError('');
+    setControlBusy(null);
+    setControlError('');
+    setConfirmRestart(null);
+    setLogsFor(null);
+    setServiceLogs(null);
+    setLogsState('idle');
+    setLogsError('');
   };
 
   const handleInvite = async (event: FormEvent) => {
@@ -1076,11 +1214,95 @@ export default function AdminPanel() {
     const right = serviceMeta(b.id);
     return left.order === right.order ? left.label.localeCompare(right.label) : left.order - right.order;
   });
+  const healthById = new Map(
+    (serviceHealth?.services ?? []).map((entry) => [entry.serviceId, entry]),
+  );
+  const healthLoading = healthState === 'idle' || healthState === 'loading';
   const loadingRecords = refreshing || (snapshot === null && !recordsError);
   const refresh = () => {
     setRecordsError('');
     setRefreshing(true);
     setRefreshToken((value) => value + 1);
+  };
+
+  const refreshHealth = () => {
+    setControlError('');
+    setHealthState('loading');
+    setHealthError('');
+    setHealthToken((value) => value + 1);
+  };
+
+  const refreshLogs = () => {
+    setLogsState('loading');
+    setLogsError('');
+    setLogsToken((value) => value + 1);
+  };
+
+  const closeLogs = () => {
+    setLogsFor(null);
+    setServiceLogs(null);
+    setLogsState('idle');
+    setLogsError('');
+  };
+
+  const openLogs = (service: PanelService) => {
+    const health = (serviceHealth?.services ?? []).find((entry) => entry.serviceId === service.id);
+    setLogsTab(health?.container ? 'container' : 'node');
+    setServiceLogs(null);
+    setLogsState('loading');
+    setLogsError('');
+    setLogsFor(service);
+    setLogsToken((value) => value + 1);
+  };
+
+  const handleRepublish = async (service: PanelService) => {
+    if (!apiBase || !user) return;
+
+    setControlError('');
+    setControlBusy(`republish:${service.id}`);
+    try {
+      await republishPanelService(apiBase, user.signer, service.id);
+      notify(`${serviceMeta(service.id).label} republished`);
+      refreshHealth();
+      refresh();
+    } catch (error) {
+      setControlError(error instanceof Error ? error.message : 'Could not republish the service');
+    } finally {
+      setControlBusy(null);
+    }
+  };
+
+  const handleRestart = async (service: PanelService) => {
+    if (!apiBase || !user) return;
+
+    if (confirmRestart !== service.id) {
+      setConfirmRestart(service.id);
+      notify('Click Restart again to confirm');
+      return;
+    }
+
+    setConfirmRestart(null);
+    setControlError('');
+    setControlBusy(`restart:${service.id}`);
+    try {
+      const result = await restartPanelService(apiBase, user.signer, service.id);
+      const names = result.containers.map((container) => container.name).join(', ');
+      notify(names ? `Restarting ${names}` : 'Restart requested');
+      window.setTimeout(refreshHealth, 2500);
+    } catch (error) {
+      // Restarting caddy can cut the response that is proxied through it.
+      // The agent restarts after replying, but a network failure still means
+      // the request may have been accepted.
+      const mappedToCaddy = service.id === 'web' || service.id === 'addr' || service.id === 'admin';
+      if (mappedToCaddy && error instanceof PanelApiError && error.status === 0) {
+        notify('Restart requested; reload if the page briefly stops responding');
+        window.setTimeout(refreshHealth, 3000);
+      } else {
+        setControlError(error instanceof Error ? error.message : 'Could not restart the service');
+      }
+    } finally {
+      setControlBusy(null);
+    }
   };
   const publishedCount = services.filter((service) => service.status === 'published').length;
   const expiredCount = services.filter((service) => service.status === 'expired').length;
@@ -1292,7 +1514,7 @@ export default function AdminPanel() {
                           >
                             <span>{service.endpoint ?? 'No endpoint'}</span><Copy size={14} />
                           </button>
-                          <button className="icon-quiet" disabled aria-label={`${meta.label} actions (inactive)`} title="Container controls are inactive in this read-only build">
+                          <button className="icon-quiet" onClick={() => setSection('Installed')} aria-label={`Manage ${meta.label}`} title="Open installed services">
                             <MoreHorizontal size={19} />
                           </button>
                         </div>
@@ -1398,12 +1620,49 @@ export default function AdminPanel() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow">CONTAINER MANAGEMENT <span>·</span> READ-ONLY</div>
+                  <div className="eyebrow">CONTAINER MANAGEMENT</div>
                   <h1>Installed services</h1>
-                  <p>Published records for this node. Container controls are inactive.</p>
+                  <p>Published records for this node, with live health and container controls.</p>
                 </div>
-                <button className="button-primary" onClick={() => setSection('Apps')}><Plus size={16} /> Add a service</button>
+                <div className="heading-actions">
+                  <button
+                    className="button-secondary"
+                    onClick={refreshHealth}
+                    disabled={healthLoading || !apiBase}
+                    title="Probe every service and read its container state"
+                  >
+                    <RefreshCw size={15} className={healthLoading ? 'spin' : undefined} /> Check health
+                  </button>
+                  <button className="button-primary" onClick={() => setSection('Apps')}><Plus size={16} /> Add a service</button>
+                </div>
               </div>
+
+              {controlError && (
+                <div className="panel-banner error" role="alert">
+                  <CircleAlert size={14} />
+                  <span>{controlError}</span>
+                  <button className="text-button" onClick={() => setControlError('')}>Dismiss</button>
+                </div>
+              )}
+
+              {healthState === 'error' && (
+                <div className="panel-banner error" role="alert">
+                  <CircleAlert size={14} />
+                  <span>Could not read service health: {healthError}</span>
+                  <button className="text-button" onClick={refreshHealth}>Try again</button>
+                </div>
+              )}
+
+              {serviceHealth && !serviceHealth.agent.available && (
+                <div className="panel-banner" role="status">
+                  <CircleAlert size={14} />
+                  <span>
+                    Container controls need the node-agent service on the host
+                    {serviceHealth.agent.error ? `: ${serviceHealth.agent.error}` : ''}.
+                    Health still uses local probes and published records.
+                  </span>
+                </div>
+              )}
 
               {loadingRecords && services.length === 0 ? (
                 <div className="empty-state">Reading published services…</div>
@@ -1414,7 +1673,24 @@ export default function AdminPanel() {
                   {services.map((service) => {
                     const meta = serviceMeta(service.id);
                     const status = statusCopy(service);
-                    const href = safeHref(service.endpoint);
+                    const health = healthById.get(service.id);
+                    const healthLabel = healthCopy(health, healthLoading);
+                    const nccHref = nccServiceAddress(operatorNpub, service.id);
+                    const href = nccHref ?? safeHref(service.endpoint);
+                    const canControl = Boolean(authorized && apiBase && user);
+                    const restartBusy = controlBusy === `restart:${service.id}`;
+                    const republishBusy = controlBusy === `republish:${service.id}`;
+                    const canRestart = canControl && Boolean(health?.restartable) && !healthLoading;
+                    const restartTitle = !canControl
+                      ? 'Sign in to control services'
+                      : healthLoading
+                        ? 'Checking health…'
+                        : !health
+                          ? 'Service health is unavailable from this node'
+                          : health.restartable
+                            ? `Restart ${health.container?.names.join(', ') || 'the service'}`
+                            : 'No restartable container is mapped to this service';
+
                     return (
                       <article className="installed-card" key={service.id}>
                         <div className="installed-main">
@@ -1426,25 +1702,52 @@ export default function AdminPanel() {
                             </div>
                             <small>{service.pin ? `pin ${service.pin.slice(0, 16)}…` : 'No certificate pin published'}</small>
                           </div>
-                          <button className="icon-quiet" disabled aria-label={`${meta.label} actions (inactive)`} title="Container controls are inactive in this read-only build">
-                            <MoreHorizontal size={19} />
-                          </button>
                         </div>
                         <div className="installed-details">
                           <div><span>PUBLIC ENDPOINT</span><strong>{service.endpoint ?? 'Not published'}</strong></div>
-                          <div><span>HEALTH</span><strong className="health-muted">Not monitored in this build</strong></div>
+                          <div>
+                            <span>HEALTH</span>
+                            <strong className={healthLabel.tone} title={healthLabel.detail || undefined}>
+                              {healthLabel.label}
+                            </strong>
+                          </div>
                           <div><span>PUBLICATION</span><strong>{status.label} · {expiryLabel(service)}</strong></div>
                         </div>
                         <div className="installed-actions">
-                          <button disabled title="Log streaming is inactive in this read-only build"><TerminalSquare size={14} /> Logs</button>
-                          <button disabled title="Restart is inactive in this read-only build"><Activity size={14} /> Restart</button>
-                          <button disabled title="Republishing is inactive in this read-only build"><Radio size={14} /> Republish</button>
+                          <button
+                            onClick={() => openLogs(service)}
+                            disabled={!canControl}
+                            title={canControl ? 'Show recent container output and node events' : 'Sign in to read service logs'}
+                          >
+                            <TerminalSquare size={14} /> Logs
+                          </button>
+                          <button
+                            onClick={() => handleRestart(service)}
+                            disabled={!canRestart || controlBusy !== null}
+                            title={restartTitle}
+                          >
+                            {restartBusy ? <span className="button-spinner" /> : <Activity size={14} />}
+                            {confirmRestart === service.id ? 'Confirm restart' : restartBusy ? 'Restarting…' : 'Restart'}
+                          </button>
+                          <button
+                            onClick={() => handleRepublish(service)}
+                            disabled={!canControl || controlBusy !== null}
+                            title={canControl ? 'Force a publish cycle for this service now' : 'Sign in to republish services'}
+                          >
+                            {republishBusy ? <span className="button-spinner" /> : <Radio size={14} />}
+                            {republishBusy ? 'Republishing…' : 'Republish'}
+                          </button>
                           {href ? (
-                            <a className="external-action" href={href} target="_blank" rel="noreferrer">
+                            <a
+                              className="external-action"
+                              href={href}
+                              title={nccHref ? 'Open in NCC Browser' : 'Open the published endpoint'}
+                              {...(nccHref ? {} : { target: '_blank', rel: 'noreferrer' })}
+                            >
                               <ExternalLink size={14} /> Open endpoint
                             </a>
                           ) : (
-                            <button className="external-action" disabled title="No HTTPS endpoint is published">
+                            <button className="external-action" disabled title="No service address is published">
                               <ExternalLink size={14} /> Open endpoint
                             </button>
                           )}
@@ -2000,6 +2303,87 @@ export default function AdminPanel() {
               </button>
             </div>
             <div className="install-step-hint">Read-only review · no containers are changed</div>
+          </section>
+        </div>
+      )}
+
+      {logsFor && (
+        <div
+          className="modal-scrim"
+          role="presentation"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) closeLogs(); }}
+        >
+          <section className="install-modal logs-modal" role="dialog" aria-modal="true" aria-labelledby="logs-title">
+            <div className="modal-top">
+              <div className="eyebrow">SERVICE LOGS <span>·</span> {serviceMeta(logsFor.id).label}</div>
+              <button className="icon-quiet" onClick={closeLogs} aria-label="Close logs" autoFocus><X size={19} /></button>
+            </div>
+            <h2 id="logs-title">{serviceMeta(logsFor.id).label} logs</h2>
+            <p className="modal-intro">Recent container output and node events for this service.</p>
+
+            <div className="logs-tabs" role="tablist" aria-label="Log source">
+              <button
+                role="tab"
+                aria-selected={logsTab === 'container'}
+                className={`logs-tab ${logsTab === 'container' ? 'active' : ''}`}
+                onClick={() => setLogsTab('container')}
+              >
+                Container output
+              </button>
+              <button
+                role="tab"
+                aria-selected={logsTab === 'node'}
+                className={`logs-tab ${logsTab === 'node' ? 'active' : ''}`}
+                onClick={() => setLogsTab('node')}
+              >
+                Node events
+              </button>
+            </div>
+
+            <div className="logs-body" role="tabpanel">
+              {logsState === 'loading' ? (
+                <p className="log-empty">Reading logs…</p>
+              ) : logsState === 'error' ? (
+                <p className="log-empty log-error">{logsError}</p>
+              ) : logsTab === 'container' ? (
+                !serviceLogs?.container.available ? (
+                  <p className="log-empty">
+                    {serviceLogs?.container.error ?? 'Container output is unavailable on this install.'}
+                  </p>
+                ) : serviceLogs.container.logs.length === 0 ? (
+                  <p className="log-empty">No container output in the recent window.</p>
+                ) : (
+                  serviceLogs.container.logs.map((line, index) => (
+                    <div className="log-line" key={`${line.container}-${line.timestamp}-${index}`}>
+                      <time>{logTimestamp(line.timestamp)}</time>
+                      <span className={`log-level ${line.stream}`}>{line.stream}</span>
+                      <code>{line.message}</code>
+                    </div>
+                  ))
+                )
+              ) : serviceLogs?.node.length ? (
+                serviceLogs.node.map((line, index) => (
+                  <div className="log-line" key={`${line.timestamp}-${index}`}>
+                    <time>{logTimestamp(line.timestamp)}</time>
+                    <span className={`log-level ${line.level}`}>{line.level}</span>
+                    <code title={line.metadata ? JSON.stringify(line.metadata) : undefined}>{line.message}</code>
+                  </div>
+                ))
+              ) : (
+                <p className="log-empty">No node events are recorded for this service yet.</p>
+              )}
+            </div>
+
+            <div className="modal-buttons">
+              <button
+                className="button-secondary"
+                onClick={refreshLogs}
+                disabled={logsState === 'loading'}
+              >
+                <RefreshCw size={14} className={logsState === 'loading' ? 'spin' : undefined} /> Refresh
+              </button>
+              <button className="button-secondary" onClick={closeLogs}>Close</button>
+            </div>
           </section>
         </div>
       )}
