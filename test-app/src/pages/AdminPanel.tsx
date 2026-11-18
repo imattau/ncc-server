@@ -53,7 +53,7 @@ const SERVICE_META: Record<string, ServiceMeta> = {
   ditto: { label: 'Ditto', description: 'Community web client', route: 'ditto', tint: 'violet', icon: Waves, order: 2 },
   search: { label: 'NCC Search', description: 'Federated search index', route: 'search', tint: 'amber', icon: Search, order: 3 },
   npanel: { label: 'Npanel', description: 'Nsite gateway', route: 'npanel', tint: 'violet', icon: Layers3, order: 4 },
-  admin: { label: 'Admin Panel', description: 'This read-only panel', route: 'admin', tint: 'green', icon: Shield, order: 5 },
+  admin: { label: 'Admin Panel', description: 'Manage this node', route: 'admin', tint: 'green', icon: Shield, order: 5 },
   manager: { label: 'Manager', description: 'Identity manager', route: 'manager', tint: 'green', icon: Server, order: 6 },
 };
 
@@ -241,7 +241,7 @@ function OperatorGate({
           <div className="gate-brand">
             <span className="panel-brand-mark"><Globe2 size={21} /></span>
             <span>NCC <i>/</i> SERVER</span>
-            <span className="prototype-tag"><i /> OPERATOR ONLY</span>
+            <span className="prototype-tag"><i /> SIGN-IN REQUIRED</span>
           </div>
 
           <div className="gate-shield"><ShieldCheck size={24} /></div>
