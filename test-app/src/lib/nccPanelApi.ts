@@ -8,8 +8,10 @@
  *
  * Requests are relative so NCC Browser maps them to the admin service origin
  * (`ncc://<npub>.admin`); an absolute https URL would bypass the protocol
- * handler. The signed URL still has to be absolute, so an ncc:// page takes it
- * from the `panelApi` field the node serves in /ncc-config.json.
+ * handler. The signed URL still has to be absolute, so it comes from the
+ * `panelApi` field the node serves in /ncc-config.json. NCC Browser's mobile
+ * pages run on an internal `http://<npub>.admin.localhost:<random>` origin,
+ * which is not the address the node sees.
  */
 
 import { nip98Authorization, type Nip98Method, type PanelSigner } from './nip98';
@@ -89,16 +91,23 @@ function httpBase(value: string | null | undefined): string | null {
 /**
  * Absolute base for the signed URL.
  *
- * On http(s) the page's own origin is authoritative. Under ncc:// it is the
- * endpoint the node published, which the page itself cannot see.
+ * The node publishes this base in /ncc-config.json, and the sidecar accepts
+ * it as its canonical public origin. Prefer it whenever it is present: NCC
+ * Browser serves ncc:// pages from an internal
+ * `http://<npub>.admin.localhost:<random>` origin, which is neither the
+ * address the node sees nor stable across launches. A page served directly
+ * over http(s) falls back to its own origin only when no base was published.
  */
 export function resolvePanelApiBase(panelApi: string | null | undefined): string | null {
+  const published = httpBase(panelApi);
+  if (published) return published;
+
   if (typeof window !== 'undefined') {
     const { protocol, origin } = window.location;
     if (protocol === 'http:' || protocol === 'https:') return `${origin}/ncc-api`;
   }
 
-  return httpBase(panelApi);
+  return null;
 }
 
 /** Turn what an operator typed into a relay URL, or null when it is invalid. */

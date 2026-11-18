@@ -142,9 +142,14 @@ built. A sidecar image without the patch answers 401/404, and the panel falls
 back to operator-only access with the Admins and Settings writes marked
 inactive; deploy the matching sidecar and Caddy images to enable them.
 
-`/ncc-config.json` also publishes `panelApi`, the absolute base the panel
-signs, because an `ncc://` page cannot see the HTTPS endpoint it was fetched
-from. On http(s) the panel uses its own origin instead.
+`/ncc-config.json` publishes `panelApi`, the absolute base the panel signs.
+The panel prefers it over its own origin, because NCC Browser serves `ncc://`
+pages from an internal `http://<npub>.admin.localhost:<random>` origin that
+is neither the node's public address nor stable across launches. The sidecar
+accepts that published base as its canonical `NCC_PANEL_PUBLIC_ORIGIN`, so
+the same signature also works from the loopback listener and through a
+reverse proxy. The page origin is only a fallback when the node publishes no
+base.
 
 
 

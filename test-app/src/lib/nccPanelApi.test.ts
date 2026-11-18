@@ -1,12 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
-import { cadenceProblem, relayInputToUrl, type PanelCadence } from './nccPanelApi';
+import {
+  cadenceProblem,
+  relayInputToUrl,
+  resolvePanelApiBase,
+  type PanelCadence,
+} from './nccPanelApi';
 
 const cadence = (overrides: Partial<PanelCadence> = {}): PanelCadence => ({
   refreshIntervalMinutes: 360,
   ncc02ExpiryDays: 14,
   ncc05TtlHours: 12,
   ...overrides,
+});
+
+describe('resolvePanelApiBase', () => {
+  it('prefers the base the node published over the page origin', () => {
+    expect(resolvePanelApiBase('https://node.example:8448/ncc-api'))
+      .toBe('https://node.example:8448/ncc-api');
+  });
+
+  it('falls back to the page origin when no base is published', () => {
+    const base = resolvePanelApiBase(null);
+    expect(base).not.toBeNull();
+    expect(base).toMatch(/^https?:\/\/.+\/ncc-api$/);
+  });
+
+  it('ignores an invalid published base', () => {
+    const base = resolvePanelApiBase('not a url');
+    expect(base).toMatch(/\/ncc-api$/);
+  });
 });
 
 describe('relayInputToUrl', () => {
