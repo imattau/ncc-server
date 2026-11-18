@@ -27,13 +27,13 @@ RELAYS = [
 ]
 
 
-def request(path, method='GET', data=None):
+def request(path, method='GET', data=None, timeout=60):
     body = None if data is None else json.dumps(data).encode()
     req = urllib.request.Request(
         API + path, data=body, method=method,
         headers={'Content-Type': 'application/json'},
     )
-    with urllib.request.urlopen(req, timeout=45) as response:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -94,9 +94,23 @@ def ensure_service(services, identity, *, service_id, name, config, service_type
     })
 
 
-def force_publish(record):
-    result = request('/api/services/republish', 'POST', {})
-    detail = next((item for item in result.get('details', [])
+def force_publish(record, *, all_services=False):
+    # `/api/services/republish` runs every active service in sequence,
+    # including Tor. With seven services that can exceed several minutes, so
+    # this call outlives the short requests used for CRUD.
+    result = request('/api/services/republish', 'POST', {}, timeout=600)
+    details = result.get('details', [])
+
+    if all_services:
+        failures = [detail for detail in details if not detail.get('success')]
+        if failures:
+            summary = '; '.join(
+                f'{item.get("serviceId")}: {item.get("error", "publish failed")}'
+                for item in failures
+            )
+            raise RuntimeError(f'sidecar publish failed: {summary}')
+
+    detail = next((item for item in details
                    if str(item.get('serviceId')) == str(record['id'])), None)
     if not detail or not detail.get('success'):
         reason = (detail or {}).get('error', 'sidecar returned no success for this record')
@@ -233,7 +247,6 @@ def main():
         request('/api/services'), identity, service_id='relay', name='Ditto Relay',
         config=relay_config, service_type='relay',
     )
-    force_publish(relay)
 
     services = request('/api/services')
     npanel_config = service_config(
@@ -281,9 +294,8 @@ def main():
         services, identity, service_id='search', name='ncc-search',
         config=search_config,
     )
-    force_publish(npanel)
-    force_publish(ditto)
-    force_publish(search)
+    # The single publish below covers every record created so far. Doing one
+    # combined cycle avoids re-publishing all services after each addition.
     # The admin panel is part of the same SPA as the welcome page, so its
     # service endpoint is rooted at / and Caddy's admin listener serves a small
     # page that opens /admin. Probe the local HTTP content listener: the shared
@@ -304,7 +316,6 @@ def main():
         services, identity, service_id='admin', name='Admin Panel',
         config=admin_config,
     )
-    force_publish(admin)
     # Bare ncc://<npub>/ resolves the default service `addr`. Keep this as a
     # distinct NCC-02 profile with its own d=addr locator, but point it at the
     # same public web endpoint and certificate as the named `web` service.
@@ -327,7 +338,7 @@ def main():
         services, identity, service_id='addr', name='NCC Web Root',
         config=root_config,
     )
-    force_publish(root)
+    force_publish(root, all_services=True)
     print(f'Provisioned shared-identity locators: web={web["id"]}, relay={relay["id"]}, '
           f'npanel={npanel["id"]}, ditto={ditto["id"]}, search={search["id"]}, '
           f'admin={admin["id"]}, addr={root["id"]}.')
