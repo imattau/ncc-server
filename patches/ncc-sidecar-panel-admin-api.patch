@@ -1,0 +1,327 @@
+diff --git a/src/nip98.js b/src/nip98.js
+new file mode 100644
+index 0000000..449b3bb
+--- /dev/null
++++ b/src/nip98.js
+@@ -0,0 +1,116 @@
++/**
++ * NIP-98 HTTP authentication for the NCC panel admin API.
++ *
++ * The admin panel runs in a browser and cannot reach the sidecar's loopback
++ * listener, so Caddy proxies `/ncc-api/*` here. That makes the NIP-98
++ * signature the authorization boundary: every request must carry a kind 27235
++ * event signed by an active admin key, bound to this exact URL and method.
++ *
++ * Kept independent of the database and Fastify so it can be unit tested on
++ * its own. Import it only from server code.
++ */
++
++import { verifyEvent } from 'nostr-tools/pure';
++
++export const NIP98_KIND = 27235;
++
++/** NIP-98 recommends a short window; one minute is enough for one request. */
++export const NIP98_MAX_AGE_SECONDS = 60;
++
++const REPLAY_TTL_MS = 5 * 60 * 1000;
++const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
++
++/** Event ids accepted recently, so a captured header cannot be replayed. */
++const accepted = new Map();
++
++function pruneAccepted(nowMs) {
++  for (const [id, expiresAt] of accepted) {
++    if (expiresAt <= nowMs) accepted.delete(id);
++  }
++}
++
++function tagValue(event, name) {
++  if (!Array.isArray(event.tags)) return null;
++  const tag = event.tags.find((entry) => Array.isArray(entry) && entry[0] === name);
++  return typeof tag?.[1] === 'string' ? tag[1] : null;
++}
++
++function readAuthEvent(request) {
++  const header = request.headers?.authorization;
++  if (typeof header !== 'string') return null;
++
++  const match = /^Nostr\s+(\S+)\s*$/i.exec(header.trim());
++  if (!match) return null;
++
++  let event;
++  try {
++    event = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
++  } catch {
++    return null;
++  }
++
++  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
++  if (event.kind !== NIP98_KIND) return null;
++  if (typeof event.content !== 'string') return null;
++  if (typeof event.created_at !== 'number') return null;
++  if (typeof event.pubkey !== 'string' || !PUBKEY_PATTERN.test(event.pubkey)) return null;
++  if (!Array.isArray(event.tags)) return null;
++  if (typeof event.id !== 'string' || typeof event.sig !== 'string') return null;
++
++  return event;
++}
++
++/**
++ * The public URL of the request as the client signed it.
++ *
++ * Caddy forwards the original Host header (with the port) and sets
++ * X-Forwarded-Proto explicitly. X-Forwarded-Host is not used: Caddy's proxy
++ * rewrites it to the bare hostname, which drops the port the client signed.
++ */
++export function requestUrl(request) {
++  const forwardedProto = request.headers?.['x-forwarded-proto'];
++  const proto = (typeof forwardedProto === 'string' && forwardedProto.split(',')[0].trim())
++    || request.protocol
++    || 'http';
++  const host = request.headers?.host || '';
++  const path = request.raw?.url || request.url || '/';
++  return `${proto}://${host}${path}`;
++}
++
++/**
++ * Verify a NIP-98 Authorization header against the request.
++ *
++ * @returns {{ ok: true, pubkey: string } | { ok: false, status: number, error: string }}
++ */
++export function verifyNip98(request, { now = Math.floor(Date.now() / 1000), nowMs = Date.now() } = {}) {
++  const event = readAuthEvent(request);
++  if (!event) {
++    return { ok: false, status: 401, error: 'Missing or malformed NIP-98 authorization' };
++  }
++
++  if (!verifyEvent(event)) {
++    return { ok: false, status: 401, error: 'NIP-98 event signature is invalid' };
++  }
++
++  if (Math.abs(now - event.created_at) > NIP98_MAX_AGE_SECONDS) {
++    return { ok: false, status: 401, error: 'NIP-98 event is outside the accepted time window' };
++  }
++
++  const method = tagValue(event, 'method');
++  if (!method || method !== request.method) {
++    return { ok: false, status: 401, error: 'NIP-98 method tag does not match this request' };
++  }
++
++  const url = tagValue(event, 'u');
++  if (!url || url !== requestUrl(request)) {
++    return { ok: false, status: 401, error: 'NIP-98 url tag does not match this request' };
++  }
++
++  pruneAccepted(nowMs);
++  if (accepted.has(event.id)) {
++    return { ok: false, status: 401, error: 'NIP-98 event was already used' };
++  }
++  accepted.set(event.id, nowMs + REPLAY_TTL_MS);
++
++  return { ok: true, pubkey: event.pubkey.toLowerCase() };
++}
+diff --git a/src/routes/panel-admin.js b/src/routes/panel-admin.js
+new file mode 100644
+index 0000000..2af5fda
+--- /dev/null
++++ b/src/routes/panel-admin.js
+@@ -0,0 +1,165 @@
++/**
++ * Admin panel API.
++ *
++ * The panel is a static page, so it cannot call the loopback management API
++ * directly. Caddy publishes these routes at `/ncc-api/*` on the admin
++ * listener and proxies them here. Unlike `/api/*`, which trusts the loopback
++ * binding, every request here is authorized per call by NIP-98
++ * (see ../nip98.js): the signer must be an active admin for this node.
++ *
++ * Only the panel uses these routes. The sidecar's own UI keeps using /api/*.
++ */
++
++import { nip19 } from 'nostr-tools';
++import { verifyNip98 } from '../nip98.js';
++import {
++  addAdmin, addLog, getAdmins, getConfig, getServices, removeAdmin,
++} from '../db.js';
++import { sendInviteDM } from '../dm.js';
++import { fromNsec, getPublicKey, toNpub } from 'ncc-06-js';
++
++const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
++
++/** Accept a bech32 npub or a hex pubkey; return lowercase hex or null. */
++function parsePubkey(value) {
++  if (typeof value !== 'string') return null;
++  const trimmed = value.trim();
++
++  if (PUBKEY_PATTERN.test(trimmed)) return trimmed.toLowerCase();
++  if (!trimmed.toLowerCase().startsWith('npub1')) return null;
++
++  try {
++    const decoded = nip19.decode(trimmed.toLowerCase());
++    return decoded.type === 'npub' ? decoded.data.toLowerCase() : null;
++  } catch {
++    return null;
++  }
++}
++
++// The sidecar's `status` column is informational (nothing ever promotes a
++// pending invite), so the list itself is the authorization boundary.
++function admins() {
++  return getAdmins();
++}
++
++function adminList() {
++  return getAdmins().map((admin) => ({
++    pubkey: admin.pubkey,
++    npub: nip19.npubEncode(admin.pubkey),
++    status: admin.status || 'active',
++    createdAt: admin.created_at || null,
++  }));
++}
++
++/**
++ * Resolve the calling key and require it to be an active admin. Sends the
++ * error response itself and returns null when the request is not authorized.
++ */
++function authorize(request, reply) {
++  const result = verifyNip98(request);
++  if (!result.ok) {
++    reply.code(result.status).send({ error: result.error });
++    return null;
++  }
++
++  const admin = admins().find((entry) => entry.pubkey === result.pubkey);
++  if (!admin) {
++    reply.code(403).send({ error: 'This key is not an admin for this node' });
++    return null;
++  }
++
++  return admin;
++}
++
++/**
++ * Tell the new admin they were added. Best effort: the key is already
++ * usable, and the publish cycle sends the recovery payload separately.
++ */
++async function notifyNewAdmin(pubkey) {
++  try {
++    const services = getServices();
++    const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
++    if (!sidecar?.service_nsec) return false;
++
++    const appConfig = getConfig('app_config') || {};
++    const relays = Array.isArray(appConfig.publication_relays) ? appConfig.publication_relays : [];
++    if (!relays.length) return false;
++
++    const secretKey = fromNsec(sidecar.service_nsec);
++    const identity = toNpub(getPublicKey(secretKey));
++
++    return await sendInviteDM({
++      secretKey,
++      recipientPubkey: pubkey,
++      message: `You were added as an admin for the NCC node ${identity}. `
++        + 'Open the node admin panel with your Nostr key to manage it.',
++      relays,
++    });
++  } catch (err) {
++    console.warn('[Panel] Could not notify the new admin:', err.message);
++    return false;
++  }
++}
++
++export default async function panelAdminRoutes(server) {
++  server.get('/ncc-api/admins', async (request, reply) => {
++    if (!authorize(request, reply)) return;
++    return { admins: adminList() };
++  });
++
++  server.post('/ncc-api/admins', async (request, reply) => {
++    const caller = authorize(request, reply);
++    if (!caller) return;
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    const pubkey = parsePubkey(body.npub ?? body.pubkey);
++    if (!pubkey) {
++      return reply.code(400).send({ error: 'Provide a valid npub or 64-character hex public key' });
++    }
++
++    const existing = getAdmins().find((admin) => admin.pubkey === pubkey);
++    if (existing && existing.status !== 'pending') {
++      return { added: false, inviteSent: false, admins: adminList() };
++    }
++
++    addAdmin(pubkey, 'active');
++    addLog('info', 'Admin key added from the NCC admin panel', {
++      pubkey,
++      addedBy: caller.pubkey,
++    });
++
++    const inviteSent = await notifyNewAdmin(pubkey);
++    return { added: true, inviteSent, admins: adminList() };
++  });
++
++  server.delete('/ncc-api/admins/:pubkey', async (request, reply) => {
++    const caller = authorize(request, reply);
++    if (!caller) return;
++
++    const pubkey = parsePubkey(request.params.pubkey);
++    if (!pubkey) {
++      return reply.code(400).send({ error: 'Provide a valid npub or 64-character hex public key' });
++    }
++
++    const operatorPubkey = String(process.env.NCC_OPERATOR_PUBKEY || '').toLowerCase();
++    if (operatorPubkey && pubkey === operatorPubkey) {
++      return reply.code(409).send({ error: 'The node operator key cannot be removed' });
++    }
++
++    const list = admins();
++    if (!list.some((admin) => admin.pubkey === pubkey)) {
++      return reply.code(404).send({ error: 'That key is not an admin for this node' });
++    }
++    if (list.length <= 1) {
++      return reply.code(409).send({ error: 'The last admin key cannot be removed' });
++    }
++
++    removeAdmin(pubkey);
++    addLog('info', 'Admin key removed from the NCC admin panel', {
++      pubkey,
++      removedBy: caller.pubkey,
++    });
++
++    return { removed: true, admins: adminList() };
++  });
++}
+diff --git a/src/web.js b/src/web.js
+index e0a9d9b..2481a28 100644
+--- a/src/web.js
++++ b/src/web.js
+@@ -11,6 +11,7 @@ import { isLocalHostname, isLocalAddress, shouldAllowRemoteAccess } from './secu
+ 
+ // Route Modules
+ import adminRoutes from './routes/admin.js';
++import panelAdminRoutes from './routes/panel-admin.js';
+ import serviceRoutes from './routes/services.js';
+ import configRoutes from './routes/config.js';
+ import dbRoutes from './routes/db.js';
+@@ -55,6 +56,13 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+         done();
+         return;
+       }
++      // Caddy publishes the panel admin API here. It cannot use the loopback
++      // binding as its boundary, so each /ncc-api request is authorized by its
++      // own NIP-98 signature instead (routes/panel-admin.js).
++      if (request.url.startsWith('/ncc-api/')) {
++        done();
++        return;
++      }
+       const forwarded = request.headers['x-forwarded-for'];
+       const remoteAddress = typeof forwarded === 'string' && forwarded.length
+         ? forwarded.split(',')[0].trim()
+@@ -74,6 +82,7 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+   // Register Routes. Fastify always passes an options object to a plugin, so wrap
+   // the callback instead of passing it positionally.
+   await server.register(adminRoutes, { onInitialized });
++  await server.register(panelAdminRoutes);
+   await server.register(serviceRoutes);
+   await server.register(configRoutes);
+   await server.register(dbRoutes);

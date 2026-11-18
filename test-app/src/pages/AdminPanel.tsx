@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNostrLogin } from '@nostrify/react/login';
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleAlert,
   CircleHelp, Copy, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
   LockKeyhole, LogOut, Menu, MoreHorizontal, Plus, Radio, RefreshCw, Search,
-  Server, Settings2, Shield, ShieldCheck, TerminalSquare, Users, Waves, X,
+  Server, Settings2, Shield, ShieldCheck, TerminalSquare, Trash2, Users, Waves, X,
   type LucideIcon,
 } from 'lucide-react';
+import { nip19 } from 'nostr-tools';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useLoginActions } from '@/hooks/useLoginActions';
 import {
@@ -14,14 +15,25 @@ import {
   loadPanelConfig,
   loadPanelSnapshot,
   operatorPubkeyFromNpub,
+  pubkeyFromAdminInput,
   type PanelActivity,
   type PanelConfig,
   type PanelService,
   type PanelSnapshot,
 } from '@/lib/nccPanel';
+import {
+  PanelApiError,
+  addPanelAdmin,
+  listPanelAdmins,
+  removePanelAdmin,
+  resolvePanelApiBase,
+  type PanelAdmin,
+} from '@/lib/nccPanelApi';
 import './admin-panel.css';
 
 type Section = 'Overview' | 'Apps' | 'Installed' | 'Activity' | 'Admins' | 'Settings';
+type AdminAccess = 'idle' | 'checking' | 'admin' | 'denied' | 'unavailable';
+type AdminListState = 'idle' | 'ready' | 'error';
 type Tint = 'blue' | 'violet' | 'amber' | 'green';
 type SignInMethod = 'extension' | 'bunker';
 
@@ -153,6 +165,14 @@ function signerLabel(type: string | undefined): string {
   }
 }
 
+function addedLabel(createdAt: string | null): string {
+  if (!createdAt) return 'Not recorded';
+  const iso = createdAt.includes('T') ? createdAt : `${createdAt.replace(' ', 'T')}Z`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'Not recorded';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function initials(npub: string): string {
   return npub.slice(-2).toUpperCase();
 }
@@ -196,7 +216,7 @@ interface OperatorGateProps {
   config: PanelConfig | null;
   operatorNpub: string;
   signerNpub: string | null;
-  operatorPubkey: string | null;
+  access: AdminAccess;
   localKeyOnly: boolean;
   busy: SignInMethod | null;
   error: string;
@@ -209,10 +229,10 @@ interface OperatorGateProps {
 }
 
 function OperatorGate({
-  config, operatorNpub, signerNpub, operatorPubkey, localKeyOnly, busy, error, bunkerUri,
+  config, operatorNpub, signerNpub, access, localKeyOnly, busy, error, bunkerUri,
   onBunkerUri, onExtension, onBunker, onSignOut, onCopy,
 }: OperatorGateProps) {
-  const mismatch = Boolean(signerNpub && operatorPubkey && signerNpub !== operatorPubkey);
+  const otherSigner = Boolean(signerNpub && signerNpub !== operatorNpub);
 
   return (
     <div className="ncc-panel gate-shell">
@@ -221,11 +241,11 @@ function OperatorGate({
           <div className="gate-brand">
             <span className="panel-brand-mark"><Globe2 size={21} /></span>
             <span>NCC <i>/</i> SERVER</span>
-            <span className="prototype-tag"><i /> READ-ONLY</span>
+            <span className="prototype-tag"><i /> OPERATOR ONLY</span>
           </div>
 
           <div className="gate-shield"><ShieldCheck size={24} /></div>
-          <h1 id="gate-title">Operator sign-in</h1>
+          <h1 id="gate-title">Admin sign-in</h1>
 
           {config === null && (
             <>
@@ -247,8 +267,8 @@ function OperatorGate({
           {config !== null && config.npub && (
             <>
               <p className="gate-intro">
-                This panel is read-only. It reads the NCC records your node publishes, and it only opens for the
-                node operator key.
+                This panel reads the NCC records your node publishes and manages its admin keys. It opens for the
+                node operator and for any key on the node's admin list.
               </p>
 
               <div className="gate-operator">
@@ -271,12 +291,22 @@ function OperatorGate({
                     </button>
                   </div>
                 </>
-              ) : mismatch && signerNpub ? (
+              ) : otherSigner && signerNpub ? (
                 <>
-                  <div className="gate-note warning" role="alert">
-                    <CircleAlert size={14} />
-                    <span>A signer is connected, but its key is not the node operator.</span>
-                  </div>
+                  {access === 'checking' ? (
+                    <div className="gate-loading" role="status">
+                      <span className="button-spinner dark" /> Checking this key against the node's admin list…
+                    </div>
+                  ) : (
+                    <div className="gate-note warning" role="alert">
+                      <CircleAlert size={14} />
+                      <span>
+                        {access === 'denied'
+                          ? 'A signer is connected, but its key is not an admin for this node.'
+                          : 'This key could not be verified with the node admin API. Only an active admin key can open this panel.'}
+                      </span>
+                    </div>
+                  )}
                   <div className="gate-identity">
                     <span>YOUR SIGNER</span>
                     <strong>{shortNpub(signerNpub)}</strong>
@@ -326,8 +356,8 @@ function OperatorGate({
 
                   <p className="gate-foot">
                     <LockKeyhole size={12} />
-                    Your signer approves this client once. Inside NCC Browser use a NIP-46 signer; extensions
-                    usually load only on http(s) pages. This build only reads public records.
+                    Your signer approves this client, and every admin change is signed as a NIP-98 request.
+                    Inside NCC Browser use a NIP-46 signer; extensions usually load only on http(s) pages.
                   </p>
                 </>
               )}
@@ -362,16 +392,40 @@ export default function AdminPanel() {
   const [signInError, setSignInError] = useState('');
   const [bunkerUri, setBunkerUri] = useState('');
 
+  const [verified, setVerified] = useState<{ pubkey: string; access: 'admin' | 'denied' | 'unavailable' } | null>(null);
+  const [admins, setAdmins] = useState<PanelAdmin[] | null>(null);
+  const [adminsState, setAdminsState] = useState<AdminListState>('idle');
+  const [adminsError, setAdminsError] = useState('');
+  const [adminsToken, setAdminsToken] = useState(0);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [inviteNpub, setInviteNpub] = useState('');
+  const [inviteError, setInviteError] = useState('');
+  const [inviteDone, setInviteDone] = useState('');
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
   const operatorNpub = config?.npub ?? null;
   const operatorPubkey = useMemo(() => operatorPubkeyFromNpub(operatorNpub), [operatorNpub]);
   const signerPubkey = user?.pubkey?.toLowerCase() ?? null;
+  const signerNpub = useMemo(
+    () => (signerPubkey ? nip19.npubEncode(signerPubkey) : null),
+    [signerPubkey],
+  );
   const signerType = logins[0]?.type;
   const supportedSigner = signerType === 'extension' || signerType === 'bunker';
-  const localKeyOnly = Boolean(
-    operatorPubkey && signerPubkey && operatorPubkey === signerPubkey && !supportedSigner,
-  );
+  const localKeyOnly = signerType === 'nsec';
+  const isOperator = Boolean(operatorPubkey && signerPubkey && operatorPubkey === signerPubkey);
+  const apiBase = useMemo(() => resolvePanelApiBase(config?.panelApi ?? null), [config]);
+  const access: AdminAccess = isOperator
+    ? 'idle'
+    : !config
+      ? 'checking'
+      : !apiBase
+        ? 'unavailable'
+        : verified && verified.pubkey === signerPubkey
+          ? verified.access
+          : 'checking';
   const authorized = Boolean(
-    operatorPubkey && signerPubkey && operatorPubkey === signerPubkey && supportedSigner,
+    supportedSigner && signerPubkey && (isOperator || access === 'admin'),
   );
 
   const notify = (message: string) => {
@@ -391,6 +445,57 @@ export default function AdminPanel() {
     });
     return () => controller.abort();
   }, []);
+
+  // The operator is already named by the node config, so an operator session
+  // costs no extra signature. Any other key has to prove it is on the node's
+  // admin list before the panel opens.
+  useEffect(() => {
+    if (!supportedSigner || !signerPubkey || isOperator) return;
+    if (!apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    listPanelAdmins(apiBase, user.signer, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setAdmins(result.admins);
+        setAdminsState('ready');
+        setVerified({ pubkey: signerPubkey, access: 'admin' });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setVerified({
+          pubkey: signerPubkey,
+          access: error instanceof PanelApiError && error.status === 403 ? 'denied' : 'unavailable',
+        });
+      });
+
+    return () => controller.abort();
+  }, [supportedSigner, signerPubkey, isOperator, apiBase, user]);
+
+  // The node admin list is loaded once per session, on demand: opening the
+  // Admins section or retrying after an error asks the signer to sign one
+  // NIP-98 GET.
+  useEffect(() => {
+    if (section !== 'Admins' || !authorized || admins !== null) return;
+    if (!apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    listPanelAdmins(apiBase, user.signer, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setAdmins(result.admins);
+        setAdminsState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setAdminsState('error');
+        setAdminsError(error instanceof Error ? error.message : 'Could not read the admin list');
+      });
+
+    return () => controller.abort();
+  }, [section, authorized, admins, apiBase, user, adminsToken]);
 
   useEffect(() => {
     if (!config || !operatorPubkey || !authorized) return;
@@ -461,6 +566,75 @@ export default function AdminPanel() {
     setRecordsError('');
     setLoadedAt(null);
     setSection('Overview');
+    setVerified(null);
+    setAdmins(null);
+    setAdminsState('idle');
+    setAdminsError('');
+    setInviteNpub('');
+    setInviteError('');
+    setInviteDone('');
+    setConfirmRemove(null);
+  };
+
+  const handleInvite = async (event: FormEvent) => {
+    event.preventDefault();
+    setInviteError('');
+    setInviteDone('');
+
+    const value = inviteNpub.trim();
+    if (!pubkeyFromAdminInput(value)) {
+      setInviteError('Enter a valid npub (npub1…) or 64-character hex public key.');
+      return;
+    }
+    if (!apiBase || !user) {
+      setInviteError('The node admin API is not available.');
+      return;
+    }
+
+    setAdminBusy(true);
+    try {
+      const result = await addPanelAdmin(apiBase, user.signer, value);
+      setAdmins(result.admins);
+      setAdminsState('ready');
+      setInviteNpub('');
+      setConfirmRemove(null);
+      const message = result.added
+        ? `Key added${result.inviteSent ? ' and the sidecar sent an invite' : ''}.`
+        : 'That key is already an admin.';
+      setInviteDone(message);
+      notify(message);
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : 'Could not add the key');
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
+  const handleRemove = async (pubkey: string) => {
+    if (!apiBase || !user) return;
+
+    if (confirmRemove !== pubkey) {
+      setConfirmRemove(pubkey);
+      setInviteError('');
+      setInviteDone('');
+      notify('Click remove again to confirm');
+      return;
+    }
+
+    setAdminBusy(true);
+    setInviteError('');
+    try {
+      const result = await removePanelAdmin(apiBase, user.signer, pubkey);
+      setAdmins(result.admins);
+      setAdminsState('ready');
+      setInviteDone('Admin key removed.');
+      notify('Admin key removed');
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : 'Could not remove the key');
+    } finally {
+      setAdminBusy(false);
+      setConfirmRemove(null);
+    }
   };
 
   if (!authorized || !operatorNpub) {
@@ -468,8 +642,8 @@ export default function AdminPanel() {
       <OperatorGate
         config={config}
         operatorNpub={operatorNpub ?? ''}
-        signerNpub={signerPubkey}
-        operatorPubkey={operatorPubkey}
+        signerNpub={signerNpub}
+        access={access}
         localKeyOnly={localKeyOnly}
         busy={signInBusy}
         error={signInError}
@@ -529,6 +703,13 @@ export default function AdminPanel() {
     `${app.name} ${app.category} ${app.description}`.toLowerCase().includes(appQuery.trim().toLowerCase()),
   );
 
+  const adminRows: PanelAdmin[] = admins ?? (operatorNpub
+    ? [{ npub: operatorNpub, pubkey: operatorPubkey ?? '', status: 'active', createdAt: null }]
+    : []);
+  const apiAvailable = Boolean(apiBase);
+  const adminsLoading = Boolean(apiAvailable && authorized && admins === null && adminsState !== 'error');
+  const canManageAdmins = Boolean(apiAvailable && authorized && user && admins !== null);
+
   const groups = activityGroups(snapshot?.activity ?? []);
   const recentActivity = snapshot?.activity.slice(0, 3) ?? [];
 
@@ -577,7 +758,7 @@ export default function AdminPanel() {
           >
             <CircleHelp size={16} /> Operator guide <ArrowUpRight size={13} />
           </a>
-          <div className="sidebar-version">NCC SERVER <span>READ-ONLY</span></div>
+          <div className="sidebar-version">NCC SERVER <span>LIVE</span></div>
         </div>
       </aside>
 
@@ -586,10 +767,10 @@ export default function AdminPanel() {
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle navigation"><Menu size={20} /></button>
           <div className="breadcrumbs"><span>NCC node</span><b>/</b><strong>{section}</strong></div>
           <div className="topbar-right">
-            <span className="prototype-tag"><i /> READ-ONLY</span>
+            <span className="prototype-tag"><i /> LIVE</span>
             <span className="operator-chip" title={`Signed in as ${signerLabel(signerType)}`}>
-              <span className="operator-avatar">{initials(operatorNpub)}</span>
-              <span><strong>{signerLabel(signerType)}</strong><small>{shortNpub(operatorNpub)}</small></span>
+              <span className="operator-avatar">{initials(signerNpub ?? operatorNpub)}</span>
+              <span><strong>{signerLabel(signerType)}</strong><small>{shortNpub(signerNpub ?? operatorNpub)}</small></span>
               <button className="icon-quiet" type="button" onClick={handleSignOut} title="Sign out" aria-label="Sign out">
                 <LogOut size={14} />
               </button>
@@ -875,65 +1056,158 @@ export default function AdminPanel() {
                 <div>
                   <div className="eyebrow">ACCESS CONTROL <span>·</span> NOSTR KEYS</div>
                   <h1>People who run this node.</h1>
-                  <p>Admins sign in with their Nostr key. This build verifies the operator key only.</p>
+                  <p>Admins sign in with their Nostr key. The sidecar stores the list, and every change is signed by you.</p>
                 </div>
               </div>
 
               <div className="admin-callout">
                 <div className="callout-shield"><ShieldCheck size={20} /></div>
                 <div>
-                  <strong>Access follows the operator key.</strong>
-                  <p>Only the node's published operator key can open this panel. Additional admins and revocations are not implemented yet.</p>
+                  <strong>{apiAvailable ? 'Access follows the node admin list.' : 'Admin management is inactive on this node.'}</strong>
+                  <p>
+                    {apiAvailable
+                      ? 'Each request is authorized by a NIP-98 signature from your signer; the sidecar verifies it against the active admins for this node.'
+                      : 'This node does not serve /ncc-api yet. Deploy the current sidecar and Caddy images to manage keys from this panel.'}
+                  </p>
                 </div>
-                <span>KEY-BASED ACCESS</span>
+                <span>{apiAvailable ? 'NIP-98 SIGNED' : 'INACTIVE'}</span>
               </div>
 
               <section className="admin-section">
                 <div className="section-heading">
-                  <div><h2>Node administrators <span className="count-chip">1</span></h2><p>Verified operator for this node.</p></div>
-                </div>
-                <div className="admin-table">
-                  <div className="admin-table-head"><span>OPERATOR</span><span>ACCESS</span><span>ADDED</span><span /></div>
-                  <div className="admin-table-row">
-                    <div className="admin-person">
-                      <span className="admin-avatar lime">{initials(operatorNpub)}</span>
-                      <span>
-                        <strong>Node operator</strong>
-                        <small>
-                          {shortNpub(operatorNpub)}
-                          <button aria-label="Copy operator npub" onClick={() => copy(operatorNpub, 'Operator npub')}><Copy size={12} /></button>
-                        </small>
-                      </span>
-                    </div>
-                    <span className="admin-state"><i />Owner · verified</span>
-                    <span className="admin-added">Operator key</span>
-                    <button className="icon-quiet" disabled aria-label="Admin actions (inactive)" title="Admin key management is inactive in this build"><MoreHorizontal size={18} /></button>
+                  <div>
+                    <h2>Node administrators <span className="count-chip">{adminRows.length}</span></h2>
+                    <p>{admins ? 'Keys the sidecar accepts for this node.' : 'Verified operator for this node.'}</p>
                   </div>
+                  {adminsLoading && (
+                    <span className="admin-loading" role="status"><span className="button-spinner dark" /> Reading the admin list…</span>
+                  )}
                 </div>
+
+                <div className="admin-table">
+                  <div className="admin-table-head"><span>ADMIN</span><span>ACCESS</span><span>ADDED</span><span /></div>
+                  {adminRows.map((admin) => {
+                    const owner = Boolean(operatorPubkey && admin.pubkey === operatorPubkey);
+                    const removable = Boolean(!owner && admins && apiAvailable);
+                    const confirm = confirmRemove === admin.pubkey;
+
+                    return (
+                      <div className="admin-table-row" key={admin.pubkey || admin.npub}>
+                        <div className="admin-person">
+                          <span className={`admin-avatar ${owner ? 'lime' : 'blue'}`}>{initials(admin.npub)}</span>
+                          <span>
+                            <strong>{owner ? 'Node operator' : 'Admin'}</strong>
+                            <small>
+                              {shortNpub(admin.npub)}
+                              <button
+                                aria-label={`Copy ${owner ? 'operator' : 'admin'} npub`}
+                                onClick={() => copy(admin.npub, owner ? 'Operator npub' : 'Admin npub')}
+                              >
+                                <Copy size={12} />
+                              </button>
+                            </small>
+                          </span>
+                        </div>
+                        <span className={`admin-state ${admin.status === 'pending' ? 'pending' : ''}`}>
+                          <i />{owner ? 'Owner · verified' : admin.status === 'pending' ? 'Invited' : 'Admin'}
+                        </span>
+                        <span className="admin-added">{owner ? 'Operator key' : addedLabel(admin.createdAt)}</span>
+                        {removable ? (
+                          <button
+                            className={`icon-quiet ${confirm ? 'danger' : ''}`}
+                            type="button"
+                            disabled={adminBusy}
+                            aria-label={confirm ? 'Confirm removing this admin' : 'Remove this admin'}
+                            title={confirm ? 'Click again to remove this admin' : 'Remove this admin'}
+                            onClick={() => handleRemove(admin.pubkey)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        ) : (
+                          <button
+                            className="icon-quiet"
+                            type="button"
+                            disabled
+                            aria-label="Admin actions unavailable"
+                            title={owner ? 'The node operator key cannot be removed' : 'Load the admin list to manage keys'}
+                          >
+                            <MoreHorizontal size={18} />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {adminsState === 'error' && (
+                  <div className="invite-error" role="alert">
+                    <CircleAlert size={14} />
+                    <span>{adminsError}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminsState('idle');
+                        setAdminsError('');
+                        setAdminsToken((value) => value + 1);
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
               </section>
 
               <section className="invite-card">
                 <div className="invite-heading">
                   <span className="invite-icon"><Plus size={18} /></span>
                   <div>
-                    <h2>Invite an operator</h2>
-                    <p>Adding another key needs the sidecar invitation API, which this build does not include.</p>
+                    <h2>Add an admin</h2>
+                    <p>
+                      {apiAvailable
+                        ? 'Allow another Nostr key to open this panel and manage the node.'
+                        : 'Adding another key needs the sidecar admin API, which this node does not serve yet.'}
+                    </p>
                   </div>
-                  <span className="inactive-badge">INACTIVE</span>
+                  {!apiAvailable && <span className="inactive-badge">INACTIVE</span>}
                 </div>
-                <form onSubmit={(event) => event.preventDefault()}>
+                <form onSubmit={handleInvite}>
                   <label htmlFor="admin-npub">OPERATOR PUBLIC KEY</label>
                   <div className="invite-input-row">
-                    <input id="admin-npub" placeholder="npub1…" disabled />
-                    <button className="button-primary" type="submit" disabled><Plus size={15} /> Send invitation</button>
+                    <input
+                      id="admin-npub"
+                      value={inviteNpub}
+                      onChange={(event) => { setInviteNpub(event.target.value); setInviteDone(''); setInviteError(''); }}
+                      placeholder="npub1…"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={!canManageAdmins || adminBusy}
+                    />
+                    <button
+                      className="button-primary"
+                      type="submit"
+                      disabled={!canManageAdmins || adminBusy || inviteNpub.trim().length === 0}
+                    >
+                      {adminBusy ? <span className="button-spinner" /> : <Plus size={15} />}
+                      {adminBusy ? 'Adding…' : 'Add admin'}
+                    </button>
                   </div>
+                  {inviteError && (
+                    <p className="invite-error" role="alert"><CircleAlert size={12} /> {inviteError}</p>
+                  )}
+                  {inviteDone && (
+                    <p className="invite-success"><Check size={12} /> {inviteDone}</p>
+                  )}
                   <small><LockKeyhole size={12} /> Public key only. Never enter or share a private key here.</small>
                 </form>
               </section>
 
               <div className="admin-footnote">
                 <CircleHelp size={15} />
-                <span>This panel reads the operator key from the node's public config. Adding or revoking keys is inactive.</span>
+                <span>
+                  {apiAvailable
+                    ? 'An admin key works only while it stays in the sidecar list. Removing a key takes effect immediately.'
+                    : 'This panel reads the operator key from the node config. Admin management stays inactive until the node serves /ncc-api.'}
+                </span>
               </div>
             </>
           )}
@@ -996,8 +1270,11 @@ export default function AdminPanel() {
                     <Shield size={17} />
                     <div><h2>Admin access</h2><p>Operators sign in with Nostr keys only.</p></div>
                   </div>
-                  <div className="settings-inline"><span>Verified operator keys</span><strong>1 active</strong></div>
-                  <div className="settings-inline"><span>Additional admin keys</span><strong>Not implemented</strong></div>
+                  <div className="settings-inline"><span>Operator keys</span><strong>{operatorPubkey ? '1 active' : 'None'}</strong></div>
+                  <div className="settings-inline">
+                    <span>Additional admin keys</span>
+                    <strong>{admins ? `${Math.max(0, admins.length - 1)} active` : 'Managed under Admins'}</strong>
+                  </div>
                   <button className="text-button" onClick={() => setSection('Admins')}>View operators <ArrowUpRight size={13} /></button>
                 </section>
 

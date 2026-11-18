@@ -26,3 +26,11 @@
 .gate-actions{display:flex;gap:8px;flex-wrap:wrap}.gate-foot{display:flex;align-items:flex-start;gap:6px;color:#98a198;font-size:9px;line-height:1.55;margin:14px 0 0}.gate-foot svg{flex:none;margin-top:1px}.gate-loading{display:flex;align-items:center;gap:8px;color:#657268;font-size:10px}
 @media(max-width:760px){.gate-shell{padding:14px}.gate-card{padding:22px}.heading-actions{width:100%;flex-wrap:wrap}.heading-actions .button-secondary,.heading-actions .button-primary{flex:1}.panel-banner{align-items:flex-start;line-height:1.5}}
 @media(max-width:760px){.service-row>.icon-quiet{display:none}}
+.admin-loading{display:inline-flex;align-items:center;gap:6px;color:#8a948c;font-size:9px}
+.admin-loading .button-spinner{border-color:#dfe5dd;border-top-color:#7a8a7c}
+.icon-quiet.danger{background:#fdf0ec;color:#b4553f}
+.icon-quiet:disabled{opacity:.55;cursor:not-allowed}
+.invite-error{display:flex;align-items:center;gap:6px;margin-top:10px;padding:8px 9px;border-radius:6px;background:#fdf1ed;color:#a2543f;font-size:9px;line-height:1.5}
+.invite-error svg{flex:none}
+.invite-error button{margin-left:auto;border:0;background:none;color:#8d4a37;font-size:9px;font-weight:700;white-space:nowrap}
+.invite-card .invite-success{margin-top:10px}

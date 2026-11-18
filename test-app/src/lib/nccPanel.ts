@@ -27,6 +27,8 @@ export type ServiceStatus = 'published' | 'expired' | 'anchor-only' | 'locator-o
 export interface PanelConfig {
   npub: string | null;
   relays: string[];
+  /** Absolute base for signed admin API calls, published by the node. */
+  panelApi: string | null;
 }
 
 export interface RelayReport {
@@ -94,6 +96,7 @@ export function operatorPubkeyFromNpub(npub: string | null | undefined): string 
 export async function loadPanelConfig(signal?: AbortSignal): Promise<PanelConfig> {
   let npub: string | null = null;
   let relays: string[] = [];
+  let panelApi: string | null = null;
 
   try {
     const response = await fetch(CONFIG_PATH, { cache: 'no-store', signal });
@@ -107,6 +110,8 @@ export async function loadPanelConfig(signal?: AbortSignal): Promise<PanelConfig
         if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
           const record = payload as Record<string, unknown>;
           npub = npubFromConfigRecord(record);
+
+          if (typeof record.panelApi === 'string') panelApi = record.panelApi;
 
           if (Array.isArray(record.relays)) {
             relays = record.relays
@@ -128,6 +133,7 @@ export async function loadPanelConfig(signal?: AbortSignal): Promise<PanelConfig
   return {
     npub,
     relays: relays.length ? Array.from(new Set(relays)) : FALLBACK_RELAYS,
+    panelApi,
   };
 }
 
@@ -330,4 +336,11 @@ export async function loadPanelSnapshot(
     relays: reports.sort((a, b) => a.url.localeCompare(b.url)),
     latestPublishedAt: activity[0]?.createdAt ?? null,
   };
+}
+
+/** Accept a bech32 npub or a hex pubkey from the admin form. */
+export function pubkeyFromAdminInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (/^[0-9a-f]{64}$/i.test(trimmed)) return trimmed.toLowerCase();
+  return operatorPubkeyFromNpub(trimmed.toLowerCase());
 }

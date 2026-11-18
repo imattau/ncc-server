@@ -27,6 +27,9 @@ services:
       NCC_SIDECAR_ALLOW_REMOTE: "false"
       ADMIN_HOST: 127.0.0.1
       ADMIN_PORT: "3000"
+      # Lets the panel admin API refuse to remove the operator key from the
+      # admin list. Every admin write is authorized per request by NIP-98.
+      NCC_OPERATOR_PUBKEY: "${NCC_OPERATOR_PUBKEY:-}"
     depends_on:
       - tor
     restart: unless-stopped

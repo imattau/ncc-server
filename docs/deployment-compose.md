@@ -48,7 +48,7 @@ Forward and allow these TCP ports:
 | 8445 | VM port 8445 | Pinned HTTPS npanel |
 | 8446 | VM port 8446 | Pinned HTTPS Ditto Web |
 | 8447 | VM port 8447 | Pinned HTTPS ncc-search (UI and API, same origin) |
-| 8448 | VM port 8448 | Pinned HTTPS admin panel (NCC service; read-only) |
+| 8448 | VM port 8448 | Pinned HTTPS admin panel (NCC service; sign-in required) |
 
 Forward the ports for the services you want clients to reach. ncc-search's UI
 and API share port 8447 so browser certificate trust covers both. Npanel uses
@@ -253,18 +253,21 @@ admin directly to the internet.
 
 ## Manage administrators
 
-From the server checkout, grant an npub Npanel administrator access and send
-that npub a sidecar invitation:
+Open `ncc://<npub>/admin/` or `https://<PUBLIC_IPV4>:8448/admin`, sign in with
+the operator key, open **Admins**, and paste the new npub. The panel asks your
+signer for one NIP-98 signature, then the sidecar adds the key and sends it an
+invite DM. The key can open the panel immediately and is protected from removal
+only while it is not the operator key or the last admin.
 
-~~~sh
-sudo make bundle-add-admin NPUB=npub1...
-~~~
+Caddy proxies `/ncc-api/*` to the sidecar's loopback listener, and the sidecar
+verifies the NIP-98 signature against its admin list. Nothing else is exposed:
+the sidecar UI on port 3000 stays local to the host.
 
-Npanel access is granted immediately. The sidecar invitation is pending until
-the recipient accepts it. Sidecar remains bound to localhost; the recipient
-needs SSH access and a tunnel to open its UI. Ditto Relay does not expose an
-additional-admin setting through this Compose bundle, so the command leaves
-its operator identity unchanged.
+From the server checkout, `sudo make bundle-add-admin NPUB=npub1...` still
+grants an npub Npanel administrator access and sends a sidecar invitation. That
+path records a pending invitation; adding the same key from the panel makes it
+active. Ditto Relay does not expose an additional-admin setting through this
+Compose bundle, so the command leaves its operator identity unchanged.
 
 ## Recovery and upgrades
 

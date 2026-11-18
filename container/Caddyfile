@@ -40,12 +40,41 @@
 # already passes the hex pubkey to Caddy, so this stays correct even when a
 # deploy removes the generated ncc-config.json file: the client encodes the
 # hex key to an npub. Under ncc:// both pages also fall back to the npub in
-# the address itself.
+# the address itself. `panelApi` is the absolute origin the admin panel signs
+# its NIP-98 requests for, because an ncc:// page cannot see the https
+# endpoint it was fetched from.
 (ncc_public_config) {
 	handle /ncc-config.json {
 		header Content-Type "application/json"
 		header Cache-Control "no-store"
-		respond `{"pubkey":"{$NCC_OPERATOR_PUBKEY}"}`
+		respond `{"pubkey":"{$NCC_OPERATOR_PUBKEY}","panelApi":"https://{$PUBLIC_IPV4}:{$ADMIN_PANEL_TLS_PORT}/ncc-api"}`
+	}
+}
+
+# The admin panel's management API. The sidecar listens on host loopback only,
+# so this is its single public ingress. Every request must carry a NIP-98
+# Authorization header signed by an admin key; the sidecar verifies the
+# signature, URL and method (patches/ncc-sidecar-panel-admin-api.patch). Caddy
+# handles the preflight and removes Origin because @fastify/cors rejects the
+# endpoint origin the NCC protocol handler rewrites ncc:// requests to.
+(ncc_admin_api) {
+	handle /ncc-api/* {
+		@preflight method OPTIONS
+		handle @preflight {
+			header Access-Control-Allow-Origin "*"
+			header Access-Control-Allow-Methods "GET, POST, DELETE, OPTIONS"
+			header Access-Control-Allow-Headers "Authorization, Content-Type"
+			header Access-Control-Max-Age "600"
+			respond "" 204
+		}
+		reverse_proxy 127.0.0.1:3000 {
+			header_up -Origin
+			# The sidecar rebuilds the signed URL from this scheme and the Host
+			# header Caddy forwards unchanged (including the port).
+			header_up X-Forwarded-Proto {scheme}
+			header_down -Access-Control-Allow-Credentials
+			header_down -Access-Control-Allow-Origin
+		}
 	}
 }
 
@@ -198,6 +227,7 @@
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
 	import ncc_public_config
+	import ncc_admin_api
 	root * {$CONTENT_ROOT}
 	encode gzip
 	handle / {
@@ -213,11 +243,12 @@
 	}
 }
 
-# The admin-panel prototype is bundled into the NCC Caddy image and served
-# only on loopback until real Nostr signer verification and admin authorization
-# are connected. Reach it remotely through an SSH tunnel.
+# The admin panel is also bundled into the NCC Caddy image and served on host
+# loopback, for operators who reach it through an SSH tunnel. Admin writes use
+# the same NIP-98-authorized API as the public listener.
 http://127.0.0.1:{$ADMIN_PANEL_PORT} {
 	import ncc_public_config
+	import ncc_admin_api
 	handle {
 		root * /srv/ncc-server/admin-panel
 		encode gzip

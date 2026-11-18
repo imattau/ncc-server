@@ -3,31 +3,61 @@
 The static MKStack admin panel is built from `test-app/`. It is the same
 single-page app as the public welcome page, with the panel at `/admin`.
 
-The panel is read-only and operator-gated. It resolves the operator npub
-from `/ncc-config.json` (Caddy serves it dynamically from
-`NCC_OPERATOR_PUBKEY`, so it survives a content deploy) or, under `ncc://`,
-from the address itself, then queries the publication relays for that key's
-NCC records (kind 30059 anchors and kind 30058 locators). It shows the real
-service list, endpoints, certificate pin, locator freshness, relay delivery
-and record timestamps.
+The panel resolves the operator npub from `/ncc-config.json` (Caddy serves
+it dynamically from `NCC_OPERATOR_PUBKEY`, so it survives a content deploy)
+or, under `ncc://`, from the address itself, then queries the publication
+relays for that key's NCC records (kind 30059 anchors and kind 30058
+locators). It shows the real service list, endpoints, certificate pin,
+locator freshness, relay delivery and record timestamps.
 
 Sign-in requires a real signer: a NIP-07 browser extension or a NIP-46
-`bunker://` remote signer. The panel unlocks only when the signer's pubkey
-matches the operator npub served by the node. A local nsec login shared with
-the welcome page is deliberately rejected; the panel never stores a private
-key. That is a read-only authorization check, not a management API:
-signature verification happens in the signer, and no server-side session or
-capability is issued.
+`bunker://` remote signer. A local nsec login shared with the welcome page is
+deliberately rejected; the panel never stores a private key.
 
-Provisioning, restart, log streaming, republishing, package import and admin
-key invitations remain visible but are marked inactive and disabled. The
-panel cannot change containers or publish records. Host metrics such as CPU
-and storage, and per-service health checks, are not collected; the panel
-shows "not monitored"/"not collected" rather than invented values.
+The operator key opens the panel directly. Any other key is checked against
+the node's admin list in the sidecar, so an operator can add another admin
+from the **Admins** section. That is the only write action in the panel, and
+it is authorized server-side by a NIP-98 signature from the connected key
+(see below). Everything else — provisioning, restart, log streaming,
+republishing and package import — stays visible but disabled. The panel cannot
+change containers or publish records. Host metrics such as CPU and storage,
+and per-service health checks, are not collected; the panel shows "not
+monitored"/"not collected" rather than invented values.
 
 NCC records are public, so gating the panel is a usability and honesty
-measure, not a confidentiality boundary. Do not add management actions here
-without an authenticated, authorized sidecar API.
+measure, not a confidentiality boundary. Every management action must go
+through the NIP-98-authorized API described below.
+
+## Admin API
+
+The sidecar keeps the admin list and listens on host loopback only. Caddy
+publishes it at `/ncc-api/*` on the admin listener and verifies nothing
+itself: the sidecar checks each request.
+
+- `GET /ncc-api/admins` — list admins
+- `POST /ncc-api/admins` with `{"npub": "npub1…"}` — add an admin and
+  send a best-effort invite DM
+- `DELETE /ncc-api/admins/<pubkey or npub>` — remove an admin
+
+Every request carries `Authorization: Nostr <base64 kind 27235 event>`. The
+event is signed by the connected key, tags the exact request URL and method,
+must be under a minute old, and cannot be replayed. The sidecar then requires
+the signer to be on the admin list. The operator key is protected from removal,
+and the last admin cannot be removed.
+
+Caddy answers the CORS preflight, strips `Origin` (the NCC protocol handler
+rewrites it to a public origin that the sidecar's CORS policy rejects), and
+forwards the original `Host` so the sidecar can rebuild the signed URL. The
+routes come from `patches/ncc-sidecar-panel-admin-api.patch`, applied when the
+sidecar image is built. A sidecar image without the patch answers 401/404, and
+the panel falls back to operator-only access with the section marked inactive;
+deploy the matching sidecar and Caddy images to enable it.
+
+`/ncc-config.json` also publishes `panelApi`, the absolute base the panel
+signs, because an `ncc://` page cannot see the HTTPS endpoint it was fetched
+from. On http(s) the panel uses its own origin instead.
+
+
 
 ## Published NCC service
 
@@ -38,6 +68,7 @@ The Compose bundle publishes the panel as the `admin` NCC service:
 - the service root returns a small 200 page that opens `/admin`; it cannot be
   an HTTP 302 because NCC Browser fetches endpoints with manual redirects and
   Electron reports those as "Redirect was cancelled"
+- `/ncc-api/*` is proxied to the sidecar admin API, with NIP-98 authorization
 
 The listener uses the shared web certificate and SPKI pin, exactly like the
 web/Npanel/Ditto/search listeners. Set `ADMIN_PANEL_TLS_PORT` to change the
@@ -91,4 +122,10 @@ the hex `pubkey`. The bundle's Caddy listeners answer that path from
 `NCC_OPERATOR_PUBKEY`, so no bootstrap re-run is needed after a content deploy;
 `scripts/publish-web-config.py` still writes a `{"npub": …, "relays": [...]}`
 file for plain HTTP use, and the deployment preserves it. When the `relays`
-field is missing, the panel falls back to its built-in relay list.
+field is missing, the panel falls back to its built-in relay list. Caddy also
+adds `panelApi` for the signed admin API base.
+
+Admin management needs the `ncc-api` routes, so both the sidecar image and the
+Caddy configuration must be current. The Compose file passes
+`NCC_OPERATOR_PUBKEY` to the sidecar so it can refuse to remove the operator
+key.

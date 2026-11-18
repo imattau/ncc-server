@@ -25,9 +25,11 @@ Forward TCP 8443–8448 to expose the NCC services. Port 8080 is optional for
 plain HTTP web access; Tor's onion service reaches it locally. You can leave
 individual service ports closed if that service should not be reachable.
 The admin panel is published as an NCC service on port 8448 and its root
-opens `/admin`. The optional panel Caddy image also serves the read-only panel on
-loopback port 8081, which needs no router forward; see
-[admin panel](docs/admin-panel.md) for SSH access.
+opens `/admin`. Sign in with the node operator key or an admin key; the Admins
+section adds and removes admin keys with NIP-98-signed requests to the sidecar.
+The optional panel Caddy image also serves the panel on loopback port 8081,
+which needs no router forward; see [admin panel](docs/admin-panel.md) for SSH
+access.
 
 | Port | Purpose |
 | --- | --- |
@@ -38,7 +40,7 @@ loopback port 8081, which needs no router forward; see
 | 8445 | Pinned HTTPS Npanel dashboard |
 | 8446 | Pinned HTTPS Ditto Web |
 | 8447 | Pinned HTTPS ncc-search UI and API (optional, same origin) |
-| 8448 | Pinned HTTPS admin panel (NCC service; read-only) |
+| 8448 | Pinned HTTPS admin panel (NCC service; sign-in required) |
 
 Do not forward the internal service ports. Onion access uses Tor and needs no
 router port forward. Port forwarding requires a public IP; it will not work
@@ -156,10 +158,12 @@ sudo make bundle-down
 sudo docker-compose -p ncc-bundle -f compose.yaml up -d
 ```
 
-To grant an npub Npanel administrator access and invite them to manage the
-sidecar, run `sudo make bundle-add-admin NPUB=npub1...`. Sidecar access remains
-localhost-only and is added as a pending invitation. Ditto Relay has no
-additional-admin setting in this Compose bundle.
+To add an admin, open the panel's Admins section and paste the npub; the
+sidecar stores the key and sends an invite DM. The key can then open the panel
+and manage the node. `sudo make bundle-add-admin NPUB=npub1...` still grants
+Npanel administrator access and sends the sidecar invitation, but it records a
+pending invitation rather than adding the key from the panel. Ditto Relay has
+no additional-admin setting in this Compose bundle.
 
 Service configuration is in `.env`. Persistent service data is stored outside
 the containers. Keep `.env`, the operator key, and persistent data backed up;

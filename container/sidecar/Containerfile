@@ -11,6 +11,7 @@ RUN git clone --filter=blob:none --no-checkout "$SIDECAR_REPO" /src \
 COPY patches/ncc-sidecar-event-ack.patch /tmp/ncc-sidecar-event-ack.patch
 COPY patches/ncc-sidecar-tor-auth-log.patch /tmp/ncc-sidecar-tor-auth-log.patch
 COPY patches/ncc-sidecar-tor-control-close.patch /tmp/ncc-sidecar-tor-control-close.patch
+COPY patches/ncc-sidecar-panel-admin-api.patch /tmp/ncc-sidecar-panel-admin-api.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -19,6 +20,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && if ! grep -q 'Tor control connection closed before replying' src/tor-control.js; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-tor-control-close.patch \
        && patch -p1 < /tmp/ncc-sidecar-tor-control-close.patch; \
+     fi \
+  && if [ ! -f src/routes/panel-admin.js ]; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-panel-admin-api.patch \
+       && patch -p1 < /tmp/ncc-sidecar-panel-admin-api.patch; \
      fi \
   && npm ci \
   && npm --prefix ui ci \
