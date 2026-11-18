@@ -36,6 +36,10 @@ WORKDIR /app
 COPY --from=build /app/node_modules /app/node_modules
 COPY ncc-search/package.json ./
 COPY ncc-search/src ./src
+# The backend posted-at and Markdown helpers re-export shared/ rules used by
+# the nsite edition. They sit outside src/, so copy them to /app/shared where
+# ../shared and ../../shared resolve at runtime.
+COPY ncc-search/shared ./shared
 USER ${SEARCH_UID}:${SEARCH_GID}
 # Two entrypoints, one image (see ncc-search/README.md "Two processes"):
 #   src/api.js     read-only API: /search, /services, /status   <- default
