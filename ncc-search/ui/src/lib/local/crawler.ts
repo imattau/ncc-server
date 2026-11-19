@@ -501,7 +501,11 @@ class Crawler {
     if (!status) return;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TASK_TIMEOUT_MS);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TASK_TIMEOUT_MS);
     let events = 0;
     let oldest: number | null = null;
     let closedReason: string | null = null;
@@ -545,7 +549,7 @@ class Crawler {
     } catch (error) {
       // A settings change or a clear aborts in-flight requests; that is not
       // the relay failing, and it should not be counted as one.
-      if (runId === this.runId) {
+      if (runId === this.runId && !timedOut) {
         status.state = 'failed';
         status.failureCount += 1;
         status.lastError = controller.signal.aborted
@@ -558,6 +562,20 @@ class Crawler {
     } finally {
       this.activeControllers.delete(controller);
       clearTimeout(timer);
+    }
+
+    // A timeout (or a local cancellation from pause/settings/clear) did not
+    // produce a complete page. In particular, an empty partial response must
+    // never advance the cursor or mark this relay/filter exhausted.
+    if (timedOut || runId !== this.runId) {
+      if (timedOut && runId === this.runId) {
+        status.state = 'failed';
+        status.failureCount += 1;
+        status.lastError = 'timed out';
+        this.lastFailureAt = Date.now();
+      }
+      this.markDirty();
+      return;
     }
 
     if (closedReason) {
