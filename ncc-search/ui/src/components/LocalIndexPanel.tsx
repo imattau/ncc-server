@@ -156,11 +156,12 @@ export function LocalIndexPanel({ className }: { className?: string }) {
 function LocalIndexSettings({ onClose }: { onClose: () => void }) {
   const [settings, setSettings] = useState<LocalSettings>(currentSettings());
   const [relaysText, setRelaysText] = useState(settings.relays.join('\n'));
+  const relaysManaged = Boolean(window.NCC_SEARCH_RELAYS_B64);
   const [error, setError] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
 
   function save() {
-    const relays = parseRelayInput(relaysText);
+    const relays = relaysManaged ? settings.relays : parseRelayInput(relaysText);
     if (relays.length === 0) {
       setError('Enter at least one wss:// relay.');
       return;
@@ -187,8 +188,11 @@ function LocalIndexSettings({ onClose }: { onClose: () => void }) {
           onChange={(event) => setRelaysText(event.target.value)}
           rows={3}
           spellCheck={false}
-          className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground"
+          readOnly={relaysManaged}
+          aria-describedby={relaysManaged ? 'relay-settings-managed' : undefined}
+          className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground read-only:opacity-70"
         />
+        {relaysManaged && <span id="relay-settings-managed" className="text-[11px] text-muted-foreground">Managed by the browser’s relay settings.</span>}
       </label>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">

@@ -14,6 +14,7 @@ export interface Nip07Signer {
 declare global {
   interface Window {
     nostr?: Nip07Signer;
+    NCC_SEARCH_PUBKEY?: string;
   }
 }
 

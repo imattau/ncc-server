@@ -17,7 +17,9 @@ import { defineConfig } from 'vite';
 export default defineConfig(({ mode }) => {
   const nsite = mode === 'nsite';
   return {
-    base: '/',
+    // The nsite edition is embedded both at an app protocol root and below
+    // /nccsearch/ in the mobile shell. Relative assets work in either place.
+    base: './',
     server: {
       host: '::',
       port: 8081,

@@ -4,6 +4,7 @@ declare global {
   interface Window {
     /** A relay list baked into runtime-config.js by the deployment. */
     NCC_SEARCH_RELAYS_B64?: string;
+    NCC_SEARCH_PUBKEY?: string;
   }
 }
 
@@ -81,7 +82,9 @@ export function parseRelayInput(input: string): string[] {
 }
 
 export function normalizeSettings(input: Partial<LocalSettings> | null | undefined): LocalSettings {
-  const relays = normalizeRelays(input?.relays);
+  const runtimeRelays = typeof window !== 'undefined' ? window.NCC_SEARCH_RELAYS_B64 : '';
+  const managedRelays = normalizeRelays(runtimeRelays ? atob(runtimeRelays).split(',') : []);
+  const relays = managedRelays.length ? managedRelays : normalizeRelays(input?.relays);
   const depth = Number(input?.depth);
   const bytes = Number(input?.maxBytes);
   const maxBytes = Number.isFinite(bytes)

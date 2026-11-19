@@ -4,6 +4,8 @@ import { hasNip07 } from '@/lib/nip07';
 const STORAGE_KEY = 'ncc-search:pubkey';
 
 function readStoredPubkey(): string | null {
+  const managed = window.NCC_SEARCH_PUBKEY?.trim();
+  if (managed && /^[0-9a-f]{64}$/i.test(managed)) return managed.toLowerCase();
   try {
     return localStorage.getItem(STORAGE_KEY);
   } catch {
