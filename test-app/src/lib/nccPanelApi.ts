@@ -321,6 +321,9 @@ async function requestJson(
       signal,
     });
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new PanelApiError(0, 'The node admin API took too long to respond');
+    }
     if (signal?.aborted) throw error;
     throw new PanelApiError(0, 'The node admin API is unreachable');
   }
@@ -818,6 +821,9 @@ export interface PanelCataloguePublisher {
 export interface PanelCatalogue {
   available: boolean;
   error: string | null;
+  /** The node is still querying relays and will return a newer listing. */
+  refreshing: boolean;
+  refreshError: string | null;
   official: { publisher: string; npub: string | null } | null;
   trusted: PanelCataloguePublisher[];
   status: PanelCatalogueStatus | null;
@@ -950,6 +956,8 @@ function readCatalogue(payload: unknown): PanelCatalogue {
   return {
     available: record.available === true,
     error: stringOrNull(record.error),
+    refreshing: record.refreshing === true,
+    refreshError: stringOrNull(record.refreshError),
     official: official && typeof official.publisher === 'string'
       ? { publisher: official.publisher, npub: stringOrNull(official.npub) }
       : null,
@@ -1021,6 +1029,8 @@ function readCatalogueService(payload: unknown): PanelCatalogueService {
   };
 }
 
+const CATALOGUE_REQUEST_TIMEOUT_MS = 25_000;
+
 /** Catalogue entries from the node's npack service. */
 export async function loadPanelCatalogue(
   base: string,
@@ -1029,8 +1039,19 @@ export async function loadPanelCatalogue(
   signal?: AbortSignal,
 ): Promise<PanelCatalogue> {
   const query = refresh ? '?refresh=1' : '';
+  // A refresh is answered from the node's cached listing while npackd queries
+  // relays in the background, so this request should stay small. The timeout
+  // exists so a wedged node cannot leave the panel's spinner running forever.
+  const timeout = AbortSignal.timeout(CATALOGUE_REQUEST_TIMEOUT_MS);
   return readCatalogue(
-    await requestJson(base, signer, 'GET', `/catalogue${query}`, undefined, signal),
+    await requestJson(
+      base,
+      signer,
+      'GET',
+      `/catalogue${query}`,
+      undefined,
+      signal ? AbortSignal.any([signal, timeout]) : timeout,
+    ),
   );
 }
 
@@ -1082,6 +1103,9 @@ export async function loadPanelCatalogueIcon(
       signal,
     });
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new PanelApiError(0, 'The node admin API took too long to respond');
+    }
     if (signal?.aborted) throw error;
     throw new PanelApiError(0, 'The node admin API is unreachable');
   }

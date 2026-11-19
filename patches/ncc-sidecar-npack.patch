@@ -1,9 +1,9 @@
 diff --git a/src/routes/panel-catalogue.js b/src/routes/panel-catalogue.js
 new file mode 100644
-index 0000000..5ebfa33
+index 0000000..14513f2
 --- /dev/null
 +++ b/src/routes/panel-catalogue.js
-@@ -0,0 +1,752 @@
+@@ -0,0 +1,834 @@
 +/* global AbortSignal, Buffer, fetch */
 +/**
 + * npack service catalogue for the NCC admin panel.
@@ -47,6 +47,11 @@ index 0000000..5ebfa33
 +const DAEMON_TIMEOUT_MS = 20_000;
 +const DOWNLOAD_TIMEOUT_MS = 30_000;
 +const CATALOGUE_TTL_MS = 60_000;
++// npackd's own relay query can take minutes on a slow network. Never hold the
++// panel's HTTP request for that long: answer with the last good listing and a
++// `refreshing` flag, and let the panel poll for the result.
++const CATALOGUE_RESPONSE_MS = 15_000;
++const REFRESH_TIMEOUT_MS = 120_000;
 +const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024;
 +const MAX_UNPACKED_BYTES = 128 * 1024 * 1024;
 +const MAX_ARCHIVE_MEMBERS = 2_000;
@@ -59,6 +64,8 @@ index 0000000..5ebfa33
 +let requestId = 0;
 +let catalogueCache = { at: 0, entries: [], status: null };
 +let catalogueInFlight = null;
++let refreshInFlight = null;
++let refreshError = null;
 +
 +/** Accept a bech32 npub or hex key; return lowercase hex or null. */
 +function normalizePubkey(value) {
@@ -294,26 +301,51 @@ index 0000000..5ebfa33
 +  });
 +}
 +
-+async function loadCatalogue({ refresh = false } = {}) {
-+  if (!refresh && catalogueCache.at && Date.now() - catalogueCache.at < CATALOGUE_TTL_MS) {
++/**
++ * Start (or join) one background catalogue refresh. The daemon serialises
++ * refreshes itself; deduplicating here keeps repeated panel clicks from
++ * queueing a request behind an already running relay query.
++ */
++function startCatalogueRefresh() {
++  if (refreshInFlight) return refreshInFlight;
++  refreshError = null;
++  refreshInFlight = npack('RefreshCatalogue', {}, REFRESH_TIMEOUT_MS)
++    .catch((error) => {
++      refreshError = error.message || 'The npack catalogue refresh failed';
++      return null;
++    })
++    .finally(() => {
++      refreshInFlight = null;
++      // Whatever the outcome, the next read must re-query the daemon instead
++      // of serving the listing that was current when the refresh began.
++      catalogueCache = { ...catalogueCache, at: 0 };
++    });
++  return refreshInFlight;
++}
++
++async function loadCatalogueNow({ refresh = false } = {}) {
++  if (refresh) startCatalogueRefresh();
++
++  const fresh = catalogueCache.at && Date.now() - catalogueCache.at < CATALOGUE_TTL_MS;
++  // While a refresh runs, skip the cache so the listing updates as soon as
++  // npackd has written the new catalogue.
++  if (fresh && !refreshInFlight) {
 +    return { ...catalogueCache, available: true, error: null };
 +  }
 +  if (catalogueInFlight) return catalogueInFlight;
 +
 +  catalogueInFlight = (async () => {
 +    try {
-+      if (refresh) {
-+        await npack('RefreshCatalogue', {}, 120_000);
-+      }
-+
 +      let entries;
 +      try {
 +        entries = await searchCatalogue();
 +      } catch (error) {
 +        if (error.code !== 'no_catalogue') throw error;
-+        // First run after the daemon starts: build the catalogue once.
-+        await npack('RefreshCatalogue', {}, 120_000);
-+        entries = await searchCatalogue();
++        // First run after the daemon starts. Build the catalogue in the
++        // background; this response reports it as refreshing rather than
++        // waiting for every relay.
++        if (!refreshError) startCatalogueRefresh();
++        entries = [];
 +      }
 +
 +      const status = await npack('CatalogueStatus', {}).catch(() => null);
@@ -337,6 +369,36 @@ index 0000000..5ebfa33
 +  })();
 +
 +  return catalogueInFlight;
++}
++
++/**
++ * Answer with the catalogue within a bounded time. A slow relay query must not
++ * turn the panel's Refresh button into a spinner with no end; the listing and
++ * the refresh keep progressing in the background.
++ */
++async function loadCatalogue(options = {}) {
++  const work = loadCatalogueNow(options);
++  // The deadline below may return first; keep a late rejection from becoming
++  // an unhandled promise rejection in that case.
++  work.catch(() => {});
++  let timer;
++  const deadline = new Promise((resolve) => {
++    timer = setTimeout(() => resolve(null), CATALOGUE_RESPONSE_MS);
++    timer.unref?.();
++  });
++
++  try {
++    const result = await Promise.race([work, deadline]);
++    if (result) return result;
++    return {
++      ...catalogueCache,
++      available: true,
++      error: null,
++      slow: true,
++    };
++  } finally {
++    clearTimeout(timer);
++  }
 +}
 +
 +function parseReference(value) {
@@ -589,28 +651,47 @@ index 0000000..5ebfa33
 +  return body && typeof body === 'object' && !Array.isArray(body) ? body : {};
 +}
 +
++/** `refreshing` covers both a running relay query and a slow first search. */
++function catalogueMeta(catalogue) {
++  return {
++    refreshing: Boolean(refreshInFlight) || catalogue?.slow === true,
++    refreshError,
++  };
++}
++
++function cataloguePayload(catalogue) {
++  return {
++    available: true,
++    error: null,
++    ...trustPayload(),
++    ...catalogueMeta(catalogue),
++    status: catalogue.status,
++    entries: catalogue.entries,
++  };
++}
++
++function unavailablePayload(error) {
++  return {
++    available: false,
++    error: error.message || 'The npack catalogue service is unavailable',
++    ...trustPayload(),
++    ...catalogueMeta(null),
++    // Keep the last good listing visible; a failed refresh should not empty
++    // the page the operator is looking at.
++    status: catalogueCache.status,
++    entries: catalogueCache.entries,
++  };
++}
++
 +export default async function panelCatalogueRoutes(server) {
 +  server.get('/ncc-api/catalogue', async (request, reply) => {
 +    if (!authorizePanelRequest(request, reply)) return;
 +
 +    const refresh = request.query?.refresh === '1' || request.query?.refresh === 'true';
 +    try {
-+      const catalogue = await loadCatalogue({ refresh });
-+      return {
-+        available: true,
-+        error: null,
-+        ...trustPayload(),
-+        status: catalogue.status,
-+        entries: catalogue.entries,
-+      };
++      return cataloguePayload(await loadCatalogue({ refresh }));
 +    } catch (error) {
-+      return {
-+        available: false,
-+        error: error.message || 'The npack catalogue service is unavailable',
-+        ...trustPayload(),
-+        status: null,
-+        entries: [],
-+      };
++      return unavailablePayload(error);
 +    }
 +  });
 +
@@ -701,6 +782,7 @@ index 0000000..5ebfa33
 +      return {
 +        available: true,
 +        error: null,
++        ...catalogueMeta(catalogue),
 +        status: catalogue.status,
 +        releases: catalogue.entries.length,
 +      };
@@ -719,7 +801,7 @@ index 0000000..5ebfa33
 +          entry.name, entry.summary, entry.description, ...entry.categories,
 +        ].filter(Boolean).join(' ').toLowerCase().includes(needle))
 +        : catalogue.entries;
-+      return { entries };
++      return { ...catalogueMeta(catalogue), entries };
 +    } catch (error) {
 +      return reply.code(503).send({ error: error.message || 'npack is unavailable' });
 +    }

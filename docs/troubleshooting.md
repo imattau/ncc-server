@@ -181,6 +181,13 @@ sudo docker-compose -p ncc-bundle exec npack test -S /run/npack/npackd.sock
   `ncc-service` package yet on those relays. **Refresh catalogue** in the
   panel rebuilds it. Publishers can check discovery with
   `npack search --kind ncc-service --refresh --relay …`.
+- **Refresh catalogue** returns immediately with the previous listing while
+  npackd queries relays in the background; the panel polls for up to about
+  two minutes. If the pill still says refreshing after that, the relay query
+  is slow or failing. Read the daemon log for the relay error, check outbound
+  `wss://` access from the `npack` container, and press **Try again** once
+  it is fixed. A refresh click can also be a no-op: npackd treats a catalogue
+  younger than 30 seconds as fresh.
 - “Unknown publisher” is normal until an admin presses **Trust publisher**, or
   the key is set in `NCC_NPACK_OFFICIAL_PUBLISHER`.
 - A package that fails to resolve with a hash or signature error is not a

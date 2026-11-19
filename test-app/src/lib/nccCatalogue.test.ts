@@ -53,6 +53,8 @@ describe('readCatalogue', () => {
     const catalogue = readCatalogue({
       available: true,
       error: null,
+      refreshing: true,
+      refreshError: 'relay query timed out',
       official: { publisher, npub: 'npub1official' },
       trusted: [{ publisher, npub: 'npub1official', official: true }],
       status: { present: true, ageSeconds: 12, stale: false, staleAfterSeconds: 21600, releases: 1 },
@@ -60,6 +62,8 @@ describe('readCatalogue', () => {
     });
 
     expect(catalogue.available).toBe(true);
+    expect(catalogue.refreshing).toBe(true);
+    expect(catalogue.refreshError).toBe('relay query timed out');
     expect(catalogue.official?.publisher).toBe(publisher);
     expect(catalogue.trusted).toHaveLength(1);
     expect(catalogue.status?.ageSeconds).toBe(12);
@@ -70,6 +74,8 @@ describe('readCatalogue', () => {
     const catalogue = readCatalogue({ available: false, error: 'not running' });
     expect(catalogue.available).toBe(false);
     expect(catalogue.error).toBe('not running');
+    expect(catalogue.refreshing).toBe(false);
+    expect(catalogue.refreshError).toBeNull();
     expect(catalogue.entries).toEqual([]);
   });
 });

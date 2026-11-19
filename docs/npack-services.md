@@ -65,7 +65,7 @@ hello-1.0.0.npk
   "probe_path": "/",
   "env": { "LOG_LEVEL": "info" },
   "volumes": { "hello-data": "/data" },
-  "min_bundle_version": "0.2.1"
+  "min_bundle_version": "0.2.2"
 }
 ```
 
@@ -123,7 +123,7 @@ repository, installs the pinned npack release, builds and (when
 ```yaml
 publish-package:
   needs: build-image
-  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.1
+  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.2
   with:
     version: 1.0.0
     publisher: npub1...
@@ -151,6 +151,13 @@ The sidecar exposes `GET /ncc-api/catalogue` to the panel (NIP-98 authorized)
 and uses the same daemon to resolve a package for the host installer. When
 the daemon is missing, the panel says the catalogue is unavailable and every
 other section keeps working.
+
+A relay query can be slow, so `?refresh=1` starts the refresh and answers at
+once with the listing the node already has plus `refreshing: true`. The
+panel polls until the daemon writes the new catalogue, keeping the previous
+listing on screen; a failed refresh returns `refreshError` and keeps the old
+entries. The sidecar never holds the panel request open for the whole relay
+query.
 
 `NPACK_IMAGE` pins the daemon image, which currently installs npack 0.10.1
 (`NPACK_VERSION` in `container/npack/Containerfile` and the workflow's

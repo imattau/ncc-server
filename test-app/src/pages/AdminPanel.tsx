@@ -259,6 +259,10 @@ function logTimestamp(value: string | null): string {
 
 const catalogueIconCache = new Map<string, string>();
 const catalogueIconFailures = new Set<string>();
+// npackd answers a refresh from its cached listing while relays are queried in
+// the background, so the panel polls at this cadence for the finished result.
+const CATALOGUE_REFRESH_POLL_MS = 3000;
+const CATALOGUE_REFRESH_POLLS = 40;
 
 /** Store icon, delivered through the node so the page signs each fetch. */
 function ReleaseIcon({
@@ -899,20 +903,37 @@ export default function AdminPanel() {
     const controller = new AbortController();
     const refresh = catalogueRefresh.current;
     catalogueRefresh.current = false;
+    let timer: number | undefined;
+    let polls = 0;
 
-    loadPanelCatalogue(apiBase, user.signer, refresh, controller.signal)
-      .then((loaded) => {
-        if (controller.signal.aborted) return;
-        setCatalogue(loaded);
-        setCatalogueState('ready');
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setCatalogueState('error');
-        setCatalogueError(error instanceof Error ? error.message : 'Could not read the App catalogue');
-      });
+    const load = (askForRefresh: boolean) => {
+      loadPanelCatalogue(apiBase, user.signer, askForRefresh, controller.signal)
+        .then((loaded) => {
+          if (controller.signal.aborted) return;
+          setCatalogue(loaded);
+          if (loaded.refreshing && polls < CATALOGUE_REFRESH_POLLS) {
+            polls += 1;
+            setCatalogueState('loading');
+            timer = window.setTimeout(() => load(false), CATALOGUE_REFRESH_POLL_MS);
+            return;
+          }
+          // A bounded wait keeps the button honest: after this the panel shows
+          // the last listing and explains that the node is still refreshing.
+          setCatalogueState('ready');
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setCatalogueState('error');
+          setCatalogueError(error instanceof Error ? error.message : 'Could not read the App catalogue');
+        });
+    };
 
-    return () => controller.abort();
+    load(refresh);
+
+    return () => {
+      controller.abort();
+      if (timer) window.clearTimeout(timer);
+    };
   }, [section, authorized, apiBase, user, catalogueToken]);
 
   // Descriptor fields and the verified artifact are loaded only when the
@@ -1828,6 +1849,24 @@ export default function AdminPanel() {
                   <CircleAlert size={14} />
                   <span>Could not read the App catalogue: {catalogueError}</span>
                   <button className="text-button" onClick={refreshCatalogue}>Try again</button>
+                </div>
+              )}
+
+              {catalogue?.refreshError && catalogueState !== 'error' && (
+                <div className="panel-banner error" role="alert">
+                  <CircleAlert size={14} />
+                  <span>Could not refresh the App catalogue: {catalogue.refreshError}</span>
+                  <button className="text-button" onClick={refreshCatalogue}>Try again</button>
+                </div>
+              )}
+
+              {catalogue?.refreshing && !catalogueLoading && catalogueState !== 'error' && (
+                <div className="panel-banner" role="status">
+                  <CircleAlert size={14} />
+                  <span>
+                    The npack service is still querying relays. The list below is from its last
+                    successful refresh; check again in a minute.
+                  </span>
                 </div>
               )}
 

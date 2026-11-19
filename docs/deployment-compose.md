@@ -352,7 +352,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.1
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.2
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 

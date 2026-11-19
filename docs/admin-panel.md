@@ -195,6 +195,15 @@ which re-checks the release, artifact hash and descriptor on the node before
 touching Compose. Without the `npack` container the catalogue reports itself
 unavailable; the rest of the panel keeps working.
 
+**Refresh catalogue** asks npackd to query the relays again. A relay query can
+take a while on a slow network, so the node does not hold the panel's request
+open for it: it answers at once with the last listing and `refreshing: true`,
+and the panel polls until the new catalogue is written (up to about two
+minutes). If the query fails, the panel keeps the last listing and shows the
+daemon's error with **Try again**. npackd trims its own catalogue to one
+refresh every 30 seconds, so pressing the button again immediately can return
+the existing catalogue unchanged.
+
 ### Sign-in on mobile
 
 The gate only shows the extension button when `window.nostr` exists. On a
