@@ -344,8 +344,8 @@ relays as `GET /search?relays=wss://…`; the node's own index is unchanged.
 
 The API treats the parameter as untrusted input:
 
-- only `wss://`, no credentials or fragments, and no localhost/`.local` or
-  private-IP literals (`src/relayUrl.js`);
+- only `wss://`, no credentials or fragments, and no localhost/`.local`,
+  private-IP or `.onion` literals (`src/relayUrl.js`);
 - at most `NCC_SEARCH_MAX_CLIENT_RELAYS` (default 3), deduplicated against
   `NCC_SEARCH_RELAYS`;
 - NIP-11 capability probes for these relays are cached in a bounded LRU, with
