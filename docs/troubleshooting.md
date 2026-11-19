@@ -234,8 +234,14 @@ sudo docker-compose -p ncc-bundle pull npanel
 sudo docker-compose -p ncc-bundle up -d --force-recreate npanel
 ~~~
 
-This is npanel's own NIP-98 host check, not the sidecar's admin sync;
-`NCC_PUBKEY` is already set from the operator key.
+This is npanel's own NIP-98 host check, not the sidecar's admin sync. It
+depends on npanel knowing the node identity, which Compose supplies as
+`NCC_PUBKEY` from `NCC_OPERATOR_PUBKEY`; an empty value means NCC URLs are
+never accepted, whatever the image version:
+
+~~~sh
+sudo docker-compose -p ncc-bundle exec npanel printenv NCC_PUBKEY
+~~~
 
 ## Search results, events, shorts or live streams are missing
 
