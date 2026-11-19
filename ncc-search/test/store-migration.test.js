@@ -63,6 +63,9 @@ test('openStore adds columns introduced after a database was created', () => {
     check.close();
     assert.ok(columns.includes('seen_relays'), 'seen_relays must exist after opening an old database');
     assert.ok(columns.includes('posted_at'), 'posted_at must exist after opening an old database');
+    for (const column of ['starts_at', 'ends_at', 'all_day', 'location', 'status', 'participant_count']) {
+      assert.ok(columns.includes(column), `${column} must exist after opening an old database`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

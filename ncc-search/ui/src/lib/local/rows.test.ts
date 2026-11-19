@@ -234,3 +234,80 @@ test('snippets mark query terms with the backend delimiter and never emit bracke
   assert.equal(makeSnippet('nothing relevant here', 'wallet'), '');
   assert.equal(makeSnippet(null, 'wallet'), '');
 });
+
+test('a short video (kind 22) becomes a short-video row, not a video row', () => {
+  const row = eventToRow(
+    event({
+      kind: 22,
+      tags: [
+        ['title', 'A clip'],
+        ['imeta', 'url https://cdn.example.com/clip.mp4', 'm video/mp4'],
+      ],
+    }),
+    NOW,
+  );
+  assert.ok(row);
+  assert.equal(row.kind, 'short-video');
+});
+
+test('a NIP-52 date-based event keeps its UTC date, location and all-day flag', () => {
+  const row = eventToRow(
+    event({
+      kind: 31922,
+      tags: [
+        ['d', 'meetup'],
+        ['title', 'Nostr Meetup'],
+        ['summary', 'Monthly gathering'],
+        ['start', '2026-12-01'],
+        ['end', '2026-12-02'],
+        ['location', 'Berlin'],
+        ['location', 'Online'],
+        ['image', 'https://example.com/meetup.jpg'],
+        ['r', 'https://example.com/rsvp'],
+      ],
+      content: 'A **community** meetup',
+    }),
+    NOW,
+  );
+
+  assert.ok(row);
+  assert.equal(row.kind, 'event');
+  assert.equal(row.itemId, 'meetup');
+  assert.equal(row.allDay, 1);
+  assert.equal(row.startsAt, Date.UTC(2026, 11, 1) / 1000);
+  assert.equal(row.endsAt, Date.UTC(2026, 11, 2) / 1000);
+  assert.equal(row.location, 'Berlin · Online');
+  assert.equal(row.endpoint, 'https://example.com/rsvp');
+  assert.equal(row.thumbnailUrl, 'https://example.com/meetup.jpg');
+  assert.match(row.body ?? '', /community meetup/);
+});
+
+test('a NIP-53 live stream row keeps status, times and the streaming link', () => {
+  const row = eventToRow(
+    event({
+      kind: 30311,
+      tags: [
+        ['d', 'stream'],
+        ['title', 'Friday stream'],
+        ['summary', 'Talking about Nostr'],
+        ['streaming', 'https://example.com/live.m3u8'],
+        ['starts', '1800000000'],
+        ['status', 'live'],
+        ['current_participants', '42'],
+      ],
+    }),
+    NOW,
+  );
+
+  assert.ok(row);
+  assert.equal(row.kind, 'live-stream');
+  assert.equal(row.liveStatus, 'live');
+  assert.equal(row.startsAt, 1_800_000_000);
+  assert.equal(row.participantCount, 42);
+  assert.equal(row.endpoint, 'https://example.com/live.m3u8');
+
+  const result = toSearchResult(row, 'stream');
+  assert.equal(result.liveStatus, 'live');
+  assert.equal(result.startsAt, 1_800_000_000_000);
+  assert.equal(result.participantCount, 42);
+});

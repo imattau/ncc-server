@@ -72,6 +72,8 @@ internal
     console.log(`ncc-search NIP-65 relay learning: ${config.learnRelays ? 'enabled (3 authors, max 10 learned relays)' : 'disabled'}`);
     console.log(`ncc-search nsite adapter: ${config.enableNsite ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search article/media adapter: ${config.enableContent ? 'enabled' : 'disabled'}`);
+    console.log(`ncc-search calendar events adapter: ${config.enableEvents ? 'enabled' : 'disabled'}`);
+    console.log(`ncc-search live streams adapter: ${config.enableLive ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search profile adapter: ${config.enableProfiles ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search npack adapter: ${config.enableNpack ? 'enabled' : 'disabled'}`);
     console.log(

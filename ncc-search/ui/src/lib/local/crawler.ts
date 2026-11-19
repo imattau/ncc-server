@@ -52,6 +52,9 @@ const KIND_LABELS: Record<number, string> = {
   35128: 'sites',
   9900: 'packages',
   30059: 'services',
+  31922: 'events',
+  31923: 'events',
+  30311: 'live streams',
 };
 
 function sleep(ms: number): Promise<void> {

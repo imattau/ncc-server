@@ -87,9 +87,14 @@ function rowKeyFor(event) {
     case 34235:
     case 34236:
       return {
-        kind: 'video',
+        kind: event.kind === 22 || event.kind === 34236 ? 'short-video' : 'video',
         itemId: ADDRESSABLE_KINDS.has(event.kind) ? addressableId(event) : event.id,
       };
+    case 31922:
+    case 31923:
+      return { kind: 'event', itemId: addressableId(event) };
+    case 30311:
+      return { kind: 'live-stream', itemId: addressableId(event) };
     case 15128:
       return { kind: 'nsite-root', itemId: '_root' };
     case 35128:

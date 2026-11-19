@@ -77,6 +77,11 @@ export function createIngestForwarder(client) {
   return {
     nccCrawler: { ingestEvent: forward },
     nsiteCrawler: { ingestEvent: forward },
-    contentCrawler: { ingestArticle: forward, ingestMedia: forward },
+    contentCrawler: {
+      ingestArticle: forward,
+      ingestMedia: forward,
+      ingestEvent: forward,
+      ingestLiveStream: forward,
+    },
   };
 }

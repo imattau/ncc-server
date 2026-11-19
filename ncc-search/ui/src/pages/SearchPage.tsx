@@ -6,6 +6,7 @@ import { MediaGridCard } from '@/components/MediaGridCard';
 import { ProfileGridCard } from '@/components/ProfileGridCard';
 import { LoginButton } from '@/components/LoginButton';
 import { LocalIndexPanel } from '@/components/LocalIndexPanel';
+import { SettingsButton, SettingsSheet } from '@/components/SettingsSheet';
 import { SortControl } from '@/components/SortControl';
 import { SafeSearchToggle } from '@/components/SafeSearchToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -14,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { useQueryState } from '@/hooks/useQueryState';
 import { useSearch } from '@/hooks/useSearch';
 import { useNip07Login } from '@/hooks/useNip07Login';
+import { useRelayPreference } from '@/hooks/useRelayPreference';
 import { useFollows } from '@/hooks/useFollows';
 import { useInterests } from '@/hooks/useInterests';
 import { useMuteList } from '@/hooks/useMuteList';
@@ -64,7 +66,32 @@ function landingTagline(recordCount: number | null | undefined, seed: number): s
   return TAGLINES[seed % TAGLINES.length](recordCount.toLocaleString());
 }
 
-type KindFilter = 'all' | 'ncc-service' | 'nsite' | 'article' | 'image' | 'video' | 'profile' | 'npack';
+type KindFilter =
+  | 'all'
+  | 'ncc-service'
+  | 'nsite'
+  | 'article'
+  | 'image'
+  | 'video'
+  | 'short-video'
+  | 'event'
+  | 'live-stream'
+  | 'profile'
+  | 'npack';
+
+const KIND_TABS: Array<{ value: KindFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'ncc-service', label: 'NCC services' },
+  { value: 'nsite', label: 'Sites' },
+  { value: 'article', label: 'Articles' },
+  { value: 'image', label: 'Images' },
+  { value: 'video', label: 'Videos' },
+  { value: 'short-video', label: 'Shorts' },
+  { value: 'event', label: 'Events' },
+  { value: 'live-stream', label: 'Live' },
+  { value: 'profile', label: 'Profiles' },
+  { value: 'npack', label: 'Packages' },
+];
 
 function matchesFilter(result: SearchResult, filter: KindFilter) {
   if (filter === 'all') return true;
@@ -80,7 +107,9 @@ export function SearchPage() {
   const interests = useInterests(pubkey);
   const muteList = useMuteList(pubkey);
   const [sort, setSort] = useState<SearchSort>('relevance');
-  const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined, sort);
+  const relay = useRelayPreference(pubkey);
+  const result = useSearch(query, pubkey ? PERSONALIZED_LIMIT : undefined, sort, relay.relays);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const hasQuery = query.trim().length > 0;
   // Also fetched on the landing page: its record count is what the tagline
   // quotes. The same query backs the health notice on the results page.
@@ -153,35 +182,50 @@ export function SearchPage() {
     [afterMute, safeSearch.enabled],
   );
   const counts = useMemo(
-    () => ({
-      all: results.length,
-      'ncc-service': results.filter((r) => r.kind === 'ncc-service').length,
-      nsite: results.filter((r) => r.kind.startsWith('nsite')).length,
-      article: results.filter((r) => r.kind === 'article').length,
-      image: results.filter((r) => r.kind === 'image').length,
-      video: results.filter((r) => r.kind === 'video').length,
-      profile: results.filter((r) => r.kind === 'profile').length,
-      npack: results.filter((r) => r.kind === 'npack').length,
-    }),
+    () => Object.fromEntries(
+      KIND_TABS.map((tab) => [tab.value, results.filter((r) => matchesFilter(r, tab.value)).length]),
+    ) as Record<KindFilter, number>,
     [results],
   );
   const filtered = results.filter((r) => matchesFilter(r, filter));
-  const isGridView = filter === 'image' || filter === 'video' || filter === 'profile';
+  const isGridView =
+    filter === 'image'
+    || filter === 'video'
+    || filter === 'short-video'
+    || filter === 'profile';
   const GridCard = filter === 'profile' ? ProfileGridCard : MediaGridCard;
 
   function handleSubmit(value: string) {
     setQuery(value);
   }
 
+  const settingsSheet = (
+    <SettingsSheet
+      open={settingsOpen}
+      onClose={() => setSettingsOpen(false)}
+      pubkey={pubkey}
+      onSignIn={login}
+      onSignOut={logout}
+      theme={theme.theme}
+      onToggleTheme={theme.toggle}
+      safeSearch={safeSearch.enabled}
+      onToggleSafeSearch={safeSearch.toggle}
+      relay={relay}
+    />
+  );
+
   // Landing state: centered wordmark + search box, like a search engine's
   // homepage -- not a hero banner, not a chat prompt.
   if (!hasQuery) {
     return (
       <div className="relative flex min-h-dvh flex-col items-center px-4 pt-[18vh] [overflow-wrap:anywhere]">
-        <div className="absolute top-4 right-4 flex items-center gap-3 sm:top-6 sm:right-8">
-          <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
-          <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
+        <div className="absolute top-4 right-4 flex items-center gap-1.5 sm:top-6 sm:right-8 sm:gap-3">
+          <div className="hidden items-center gap-3 sm:flex">
+            <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
+            <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
+          </div>
           <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
+          <SettingsButton onClick={() => setSettingsOpen(true)} />
         </div>
         <h1 className="mb-8">
           <span className="text-5xl font-normal tracking-tight text-foreground select-none">
@@ -194,14 +238,20 @@ export function SearchPage() {
             ? 'Crawling relays in this browser — the first results appear as they arrive.'
             : landingTagline(recordCount, taglineSeed)}
         </p>
-        <p className="mt-2 max-w-sm text-center text-[11px] text-muted-foreground/80">
+        <p className="mt-2 max-w-sm text-center text-xs text-muted-foreground/80">
           {local
             ? 'This copy crawls relays in your browser, indexes while the tab is open, and keeps what it finds for next time.'
-            : 'NCC-02 services, nsites, articles, media and profiles discovered across configured Nostr relays.'}
+            : 'NCC-02 services, nsites, articles, media, events and live streams discovered across configured Nostr relays.'}
           {pubkey &&
             ' Signed in: results are prioritized by who you follow and your interests, and anyone/anything on your mute list is hidden.'}
         </p>
-        {local && <LocalIndexPanel className="mt-4 w-full max-w-sm text-left" />}
+        {local && (
+          <LocalIndexPanel
+            className="mt-4 w-full max-w-sm text-left"
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        )}
+        {settingsSheet}
       </div>
     );
   }
@@ -218,15 +268,20 @@ export function SearchPage() {
           {WORDMARK}
         </button>
         <SearchBar defaultValue={query} onSubmit={handleSubmit} size="compact" className="order-3 max-w-xl basis-full sm:order-none sm:basis-auto" />
-        <div className="ml-auto flex items-center gap-2 sm:gap-3">
-          <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
-          <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-3">
+          <div className="hidden items-center gap-3 sm:flex">
+            <SafeSearchToggle enabled={safeSearch.enabled} onToggle={safeSearch.toggle} />
+            <ThemeToggle theme={theme.theme} onToggle={theme.toggle} />
+          </div>
           <LoginButton pubkey={pubkey} onSignIn={login} onSignOut={logout} />
+          <SettingsButton onClick={() => setSettingsOpen(true)} />
         </div>
       </header>
 
       <main className="px-3 py-5 sm:px-8">
-        {local && <LocalIndexPanel className="mb-4 max-w-2xl" />}
+        {local && (
+          <LocalIndexPanel className="mb-4 max-w-2xl" onOpenSettings={() => setSettingsOpen(true)} />
+        )}
         {status.data && <SearchHealthNotice status={status.data} />}
         {result.isLoading && <ResultsSkeleton />}
 
@@ -336,6 +391,7 @@ export function SearchPage() {
           </>
         )}
       </main>
+      {settingsSheet}
     </div>
   );
 }
@@ -370,16 +426,7 @@ function KindTabs({
   onChange: (filter: KindFilter) => void;
   counts: Record<KindFilter, number>;
 }) {
-  const tabs: Array<{ value: KindFilter; label: string }> = [
-    { value: 'all', label: 'All' },
-    { value: 'ncc-service', label: 'NCC services' },
-    { value: 'nsite', label: 'Sites' },
-    { value: 'article', label: 'Articles' },
-    { value: 'image', label: 'Images' },
-    { value: 'video', label: 'Videos' },
-    { value: 'profile', label: 'Profiles' },
-    { value: 'npack', label: 'Packages' },
-  ];
+  const tabs = KIND_TABS;
 
   return (
     <nav className="mb-4 flex gap-5 overflow-x-auto border-b border-border text-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Filter by result type">

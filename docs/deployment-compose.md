@@ -107,6 +107,15 @@ communicate over a private listener on the Compose network; see
 `make bundle-pull` and `bundle-up` handle both, and stopping the crawler leaves
 the API serving the existing index.
 
+`SEARCH_ALLOW_CLIENT_RELAYS` (default `true`) lets the UI send a signed-in
+reader's NIP-65 read relays with `/search` for the live NIP-50 fan-out. Those
+relays are validated (wss only, no private/local hosts), capped by
+`SEARCH_MAX_CLIENT_RELAYS` (default 3), and never ingested into the index; set
+it to `false` to keep the API talking only to `SEARCH_RELAYS`. The crawler
+indexes NIP-52 calendar events and NIP-53 live streams by default; set
+`NCC_SEARCH_ENABLE_EVENTS=false` / `NCC_SEARCH_ENABLE_LIVE=false` on
+`search-crawler` to turn either off. `ncc-search/README.md` has the details.
+
 The operator identity is stored at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), outside the
 container images. Keep an encrypted backup off the server; it is needed to
@@ -365,7 +374,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.5
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.6
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 

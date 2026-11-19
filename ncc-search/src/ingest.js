@@ -16,11 +16,13 @@ import { SERVICE_RECORD_KIND } from './discovery.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from './adapters/nsite.js';
 import { KIND_ARTICLE_EVENT } from './adapters/article.js';
 import { MEDIA_KINDS } from './adapters/media.js';
+import { CALENDAR_KINDS } from './adapters/calendar.js';
+import { LIVE_STREAM_KINDS } from './adapters/live.js';
 
 /**
  * @param {{ nccCrawler?: { ingestEvent(event: object): void }|null,
  *           nsiteCrawler?: { ingestEvent(event: object): void }|null,
- *           contentCrawler?: { ingestArticle(event: object): void, ingestMedia(event: object): void }|null }} crawlers
+ *           contentCrawler?: { ingestArticle(event: object): void, ingestMedia(event: object): void, ingestEvent(event: object): void, ingestLiveStream(event: object): void }|null }} crawlers
  *   Omit any to leave that kind unrouted (the crawler for it is disabled).
  * @param {object} event a raw Nostr event (kind/pubkey/tags/content)
  * @returns {boolean} true if an adapter accepted the event
@@ -43,8 +45,18 @@ export function routeEventToCrawlers(crawlers, event) {
     return true;
   }
   if (MEDIA_KINDS.includes(event.kind)) {
-    if (!crawlers.contentCrawler) return false;
+    if (!crawlers.contentCrawler?.ingestMedia) return false;
     crawlers.contentCrawler.ingestMedia(event);
+    return true;
+  }
+  if (CALENDAR_KINDS.includes(event.kind)) {
+    if (!crawlers.contentCrawler?.ingestEvent) return false;
+    crawlers.contentCrawler.ingestEvent(event);
+    return true;
+  }
+  if (LIVE_STREAM_KINDS.includes(event.kind)) {
+    if (!crawlers.contentCrawler?.ingestLiveStream) return false;
+    crawlers.contentCrawler.ingestLiveStream(event);
     return true;
   }
   return false;

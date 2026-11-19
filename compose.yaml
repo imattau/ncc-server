@@ -273,6 +273,10 @@ services:
       # Displayed on /status only -- pruning is the crawler's job.
       NCC_SEARCH_DB_MAX_BYTES: "${SEARCH_DB_MAX_BYTES}"
       NCC_SEARCH_CRAWLER_URL: "http://search-crawler:7781"
+      # Optional per-request live-relay fan-out (the UI's NIP-65 setting).
+      # The API validates, caps and never ingests those relays' events.
+      NCC_SEARCH_ALLOW_CLIENT_RELAYS: "${SEARCH_ALLOW_CLIENT_RELAYS:-true}"
+      NCC_SEARCH_MAX_CLIENT_RELAYS: "${SEARCH_MAX_CLIENT_RELAYS:-3}"
     ports:
       - "127.0.0.1:3230:7780"
     volumes:

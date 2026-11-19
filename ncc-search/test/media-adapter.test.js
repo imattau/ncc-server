@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import {
   parseImetaTag,
   resolveMedia,
+  storeKindFor,
   KIND_PICTURE,
   KIND_VIDEO_NORMAL,
   KIND_VIDEO_NORMAL_ADDRESSABLE,
+  KIND_VIDEO_SHORT,
+  KIND_VIDEO_SHORT_ADDRESSABLE,
 } from '../src/adapters/media.js';
 
 test('parseImetaTag parses space-separated key-value fields', () => {
@@ -181,4 +184,23 @@ test('resolveMedia (addressable video, kind 34235) keys by the d tag instead of 
 
   const resolved = resolveMedia(event);
   assert.equal(resolved.itemId, 'my-addressable-video');
+});
+
+test('NIP-71 short videos get their own row kind, while normal videos stay "video"', () => {
+  const base = {
+    pubkey: 'f'.repeat(64),
+    content: 'A clip',
+    tags: [['title', 'Clip'], ['imeta', 'url https://cdn.example.com/clip.mp4', 'm video/mp4']],
+  };
+
+  assert.equal(resolveMedia({ ...base, id: 'short', kind: KIND_VIDEO_SHORT }).kind, 'short-video');
+  assert.equal(resolveMedia({ ...base, id: 'normal', kind: KIND_VIDEO_NORMAL }).kind, 'video');
+  assert.equal(
+    resolveMedia({ ...base, id: 'short-addr', kind: KIND_VIDEO_SHORT_ADDRESSABLE, tags: [['d', 'x'], ...base.tags] }).kind,
+    'short-video',
+  );
+  assert.equal(storeKindFor(KIND_PICTURE), 'image');
+  assert.equal(storeKindFor(KIND_VIDEO_NORMAL), 'video');
+  assert.equal(storeKindFor(KIND_VIDEO_SHORT), 'short-video');
+  assert.equal(storeKindFor(KIND_VIDEO_SHORT_ADDRESSABLE), 'short-video');
 });

@@ -11,7 +11,7 @@ import type { LocalRow } from './types';
 // no endpoint fetches, so no NCC resolution and no article HTML. The Node
 // crawler indexes the same kinds plus the text it can fetch from endpoints
 // (see ../src/adapters/).
-export const CRAWL_KINDS = [30023, 20, 21, 22, 34235, 34236, 15128, 35128, 9900, 30059] as const;
+export const CRAWL_KINDS = [30023, 20, 21, 22, 34235, 34236, 31922, 31923, 30311, 15128, 35128, 9900, 30059] as const;
 
 const KIND_PROFILE = 0;
 const KIND_ARTICLE = 30023;
@@ -20,8 +20,11 @@ const KIND_NSITE_ROOT = 15128;
 const KIND_NSITE_NAMED = 35128;
 const KIND_NPACK_RELEASE = 9900;
 const KIND_NCC_SERVICE = 30059;
+const KIND_CALENDAR_DATE = 31922;
+const KIND_CALENDAR_TIME = 31923;
+const KIND_LIVE_STREAM = 30311;
 
-const ADDRESSABLE_KINDS = new Set([30023, 34235, 34236, 35128, 9900]);
+const ADDRESSABLE_KINDS = new Set([30023, 34235, 34236, 35128, 9900, 31922, 31923, 30311]);
 
 // Bounds chosen for a browser index, not a server one. Articles are the only
 // kind that regularly produce large text; the rest are titles and summaries.
@@ -33,6 +36,7 @@ const DESCRIPTION_LIMIT = 600;
 const TITLE_LIMIT = 300;
 
 const VIDEO_KINDS = new Set([21, 22, 34235, 34236]);
+const SHORT_VIDEO_KINDS = new Set([22, 34236]);
 const IMAGE_EXTENSION_RE = /\.(avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i;
 const VIDEO_EXTENSION_RE = /\.(mp4|m4v|mov|webm|ogv|mkv)(?:[?#].*)?$/i;
 
@@ -103,6 +107,12 @@ function baseRow(event: NostrEvent, now: number, kind: ResultKind, itemId: strin
     firstSeenAt: now,
     updatedAt: now,
     postedAt: postedAtOf(event),
+    startsAt: null,
+    endsAt: null,
+    allDay: 0,
+    location: null,
+    liveStatus: null,
+    participantCount: null,
     title: null,
     description: null,
     body: null,
@@ -142,7 +152,12 @@ function mediaRow(event: NostrEvent, now: number): LocalRow | null {
   const url = primary?.get('url') ?? null;
   if (!url) return null;
 
-  const row = baseRow(event, now, isVideo ? 'video' : 'image', itemId);
+  const row = baseRow(
+    event,
+    now,
+    SHORT_VIDEO_KINDS.has(event.kind) ? 'short-video' : isVideo ? 'video' : 'image',
+    itemId,
+  );
   row.mediaUrl = url;
   row.mediaType = guessMediaType(url, primary?.get('m') ?? tagValue(event, 'm'));
   row.thumbnailUrl = isVideo
@@ -156,6 +171,86 @@ function mediaRow(event: NostrEvent, now: number): LocalRow | null {
   row.hashtags = hashtagsOf(event);
   const alts = metas.map((fields) => fields.get('alt')).filter(Boolean) as string[];
   row.body = clip(stripMarkdown([event.content ?? '', ...alts].join(' ')), BODY_LIMIT);
+  return row;
+}
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dateOnlySeconds(value: string | null): number | null {
+  if (!value || !DATE_ONLY_RE.test(value)) return null;
+  const ms = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+function unixSeconds(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : null;
+}
+
+function firstHttpLink(event: NostrEvent, names: string[]): string | null {
+  for (const name of names) {
+    for (const tag of event.tags) {
+      if (tag[0] !== name || typeof tag[1] !== 'string' || !tag[1].trim()) continue;
+      try {
+        const url = new URL(tag[1].trim());
+        if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
+      } catch {
+        // not a URL; try the next tag
+      }
+    }
+  }
+  return null;
+}
+
+function eventRow(event: NostrEvent, now: number): LocalRow | null {
+  const itemId = tagValue(event, 'd');
+  const title = tagValue(event, 'title') ?? tagValue(event, 'name');
+  if (!itemId || !title) return null;
+
+  const dateOnly = event.kind === KIND_CALENDAR_DATE;
+  const locations = event.tags
+    .filter((tag) => tag[0] === 'location' && tag[1]?.trim())
+    .map((tag) => tag[1].trim());
+  const summary = tagValue(event, 'summary');
+
+  const row = baseRow(event, now, 'event', itemId);
+  row.title = clip(title, TITLE_LIMIT);
+  row.description = clip(summary, DESCRIPTION_LIMIT);
+  row.thumbnailUrl = tagValue(event, 'image');
+  row.endpoint = firstHttpLink(event, ['r']);
+  row.allDay = dateOnly ? 1 : 0;
+  row.startsAt = dateOnly ? dateOnlySeconds(tagValue(event, 'start')) : unixSeconds(tagValue(event, 'start'));
+  row.endsAt = dateOnly ? dateOnlySeconds(tagValue(event, 'end')) : unixSeconds(tagValue(event, 'end'));
+  row.location = locations.length ? locations.join(' · ') : null;
+  row.hashtags = hashtagsOf(event);
+  row.body = clip(
+    stripMarkdown([event.content ?? '', summary, ...locations].filter(Boolean).join(' ')),
+    BODY_LIMIT,
+  );
+  return row;
+}
+
+function liveRow(event: NostrEvent, now: number): LocalRow | null {
+  const itemId = tagValue(event, 'd');
+  const title = tagValue(event, 'title');
+  if (!itemId || !title) return null;
+
+  const status = tagValue(event, 'status');
+  const participants = Number(tagValue(event, 'current_participants'));
+  const summary = tagValue(event, 'summary');
+
+  const row = baseRow(event, now, 'live-stream', itemId);
+  row.title = clip(title, TITLE_LIMIT);
+  row.description = clip(summary, DESCRIPTION_LIMIT);
+  row.thumbnailUrl = tagValue(event, 'image');
+  row.endpoint = firstHttpLink(event, ['streaming', 'recording']);
+  row.startsAt = unixSeconds(tagValue(event, 'starts'));
+  row.endsAt = unixSeconds(tagValue(event, 'ends'));
+  row.liveStatus = status === 'planned' || status === 'live' || status === 'ended' ? status : null;
+  row.participantCount = Number.isFinite(participants) && participants >= 0 ? participants : null;
+  row.hashtags = hashtagsOf(event);
+  row.body = clip(stripMarkdown([event.content ?? '', summary].filter(Boolean).join(' ')), BODY_LIMIT);
   return row;
 }
 
@@ -284,6 +379,11 @@ export function eventToRow(event: NostrEvent, now: number): LocalRow | null {
     case 34235:
     case 34236:
       return mediaRow(event, now);
+    case KIND_CALENDAR_DATE:
+    case KIND_CALENDAR_TIME:
+      return eventRow(event, now);
+    case KIND_LIVE_STREAM:
+      return liveRow(event, now);
     case KIND_NSITE_ROOT:
     case KIND_NSITE_NAMED:
       return nsiteRow(event, now);
@@ -375,6 +475,12 @@ export function toSearchResult(row: LocalRow, query: string): SearchResult {
     lastReachableAt: null,
     indexedAt: row.updatedAt * 1000,
     postedAt: row.postedAt != null ? row.postedAt * 1000 : null,
+    startsAt: row.startsAt != null ? row.startsAt * 1000 : null,
+    endsAt: row.endsAt != null ? row.endsAt * 1000 : null,
+    allDay: row.allDay ?? 0,
+    location: row.location ?? null,
+    liveStatus: row.liveStatus ?? null,
+    participantCount: row.participantCount ?? null,
     lastStatus: null,
     title: row.title,
     description: row.description,

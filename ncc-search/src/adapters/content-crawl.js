@@ -13,6 +13,8 @@
 
 import { discoverArticles, resolveArticle } from './article.js';
 import { discoverMedia, resolveMedia } from './media.js';
+import { discoverEvents, resolveEvent } from './calendar.js';
+import { discoverLiveStreams, resolveLiveStream } from './live.js';
 import { resolveNip05 } from './nsite.js';
 import { takeSeenRelays } from '../relayTracking.js';
 
@@ -55,8 +57,31 @@ export function startContentCrawler(config, store, pool) {
     scheduleNip05(resolved.pubkey, 0);
   }
 
-  const articleSub = discoverArticles(pool, config.relays, ingestArticle, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
-  const mediaSub = discoverMedia(pool, config.relays, ingestMedia, { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry });
+  function ingestEvent(event) {
+    const resolved = resolveEvent(event);
+    if (!resolved) return;
+    const existing = store.getService(resolved.pubkey, resolved.itemId);
+    store.upsertContent(resolved, existing?.nip05 ?? null, takeSeenRelays(pool, event.id));
+    scheduleNip05(resolved.pubkey, 0);
+  }
+
+  function ingestLiveStream(event) {
+    const resolved = resolveLiveStream(event);
+    if (!resolved) return;
+    const existing = store.getService(resolved.pubkey, resolved.itemId);
+    store.upsertContent(resolved, existing?.nip05 ?? null, takeSeenRelays(pool, event.id));
+    scheduleNip05(resolved.pubkey, 0);
+  }
+
+  const subscriptionOptions = { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry };
+  const articleSub = discoverArticles(pool, config.relays, ingestArticle, subscriptionOptions);
+  const mediaSub = discoverMedia(pool, config.relays, ingestMedia, subscriptionOptions);
+  const eventSub = config.enableEvents
+    ? discoverEvents(pool, config.relays, ingestEvent, subscriptionOptions)
+    : null;
+  const liveSub = config.enableLive
+    ? discoverLiveStreams(pool, config.relays, ingestLiveStream, subscriptionOptions)
+    : null;
 
   async function processNip05(pubkey) {
     const nip05 = await resolveNip05(pool, config.relays, pubkey, {
@@ -87,10 +112,14 @@ export function startContentCrawler(config, store, pool) {
   return {
     ingestArticle,
     ingestMedia,
+    ingestEvent,
+    ingestLiveStream,
     stop() {
       clearInterval(interval);
       articleSub.close();
       mediaSub.close();
+      eventSub?.close();
+      liveSub?.close();
     },
   };
 }

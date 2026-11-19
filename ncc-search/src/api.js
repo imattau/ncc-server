@@ -57,6 +57,8 @@ const nip50Adapter = config.enableNip50
 const app = createServer(store, nip50Adapter, {
   corsOrigin: config.corsOrigin,
   statusSource: () => crawler.status(),
+  allowClientRelays: config.allowClientRelays,
+  maxClientRelays: config.maxClientRelays,
 });
 
 app
@@ -66,6 +68,11 @@ app
     console.log(`ncc-search-api index: ${config.dbPath} (read-only)`);
     console.log(`ncc-search-api crawler: ${config.crawlerUrl}`);
     console.log(`ncc-search-api NIP-50 live search: ${config.enableNip50 ? 'enabled' : 'disabled'}`);
+    console.log(
+      config.allowClientRelays
+        ? `ncc-search-api client relay fan-out: enabled (max ${config.maxClientRelays})`
+        : 'ncc-search-api client relay fan-out: disabled',
+    );
   })
   .catch((err) => {
     console.error('ncc-search-api failed to start:', err);

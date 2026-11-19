@@ -23,6 +23,9 @@ export const KIND_NSITE_NAMED = 'nsite-named';
 export const KIND_ARTICLE = 'article';
 export const KIND_IMAGE = 'image';
 export const KIND_VIDEO = 'video';
+export const KIND_SHORT_VIDEO = 'short-video';
+export const KIND_EVENT = 'event';
+export const KIND_LIVE_STREAM = 'live-stream';
 export const KIND_PROFILE = 'profile';
 export const KIND_NPACK = 'npack';
 
@@ -138,7 +141,21 @@ export function openStore(dbPath, opts = {}) {
       -- neither has a posting date to report. Also null on rows indexed
       -- before this column existed until re-crawled or backfilled.
       posted_at INTEGER,
-      -- nsite/article/image/video only (see relayTracking.js): which
+      -- NIP-52 calendar events and NIP-53 live streams only: the scheduled
+      -- time range, unix seconds. all_day is 1 for NIP-52 date-based
+      -- events (kind 31922), whose start/end are dates rather than times.
+      -- location is a NIP-52 location (or several, joined for display);
+      -- status is NIP-53's planned/live/ended. All null for every other
+      -- kind, and null on rows indexed before these columns existed.
+      starts_at INTEGER,
+      ends_at INTEGER,
+      all_day INTEGER NOT NULL DEFAULT 0,
+      location TEXT,
+      status TEXT,
+      -- NIP-53 only: the publisher's current participant count.
+      participant_count INTEGER,
+      -- nsite/article/image/video/event/live-stream only (see
+      -- relayTracking.js): which
       -- relay(s), by URL, actually delivered the event this row was built
       -- from -- a JSON array string, same encoding as hashtags. A
       -- redundancy signal, not a ranking input this backend computes
@@ -203,6 +220,12 @@ export function openStore(dbPath, opts = {}) {
     for (const [name, type] of [
       ['seen_relays', 'TEXT'],
       ['posted_at', 'INTEGER'],
+      ['starts_at', 'INTEGER'],
+      ['ends_at', 'INTEGER'],
+      ['all_day', 'INTEGER NOT NULL DEFAULT 0'],
+      ['location', 'TEXT'],
+      ['status', 'TEXT'],
+      ['participant_count', 'INTEGER'],
     ]) {
       if (!columns.has(name)) db.exec(`ALTER TABLE services ADD COLUMN ${name} ${type}`);
     }
@@ -215,10 +238,10 @@ export function openStore(dbPath, opts = {}) {
     const columns = new Set(
       db.prepare(`PRAGMA table_info(services)`).all().map((column) => column.name),
     );
-    if (!columns.has('posted_at')) {
+    if (!columns.has('posted_at') || !columns.has('starts_at')) {
       db.close();
       throw new Error(
-        'index schema is older than this build (services.posted_at is missing); waiting for the crawler to migrate it',
+        'index schema is older than this build (services.posted_at/starts_at are missing); waiting for the crawler to migrate it',
       );
     }
   }
@@ -229,13 +252,15 @@ export function openStore(dbPath, opts = {}) {
       anchored, used_fallback, attestation_count, is_revoked, ttl_seconds,
       last_resolved_at, last_reachable_at, last_status, last_error,
       title, description, body, media_url, media_type, thumbnail_url,
-      blurhash, thumbhash, hashtags, content_warning, posted_at, seen_relays
+      blurhash, thumbhash, hashtags, content_warning, posted_at, seen_relays,
+      starts_at, ends_at, all_day, location, status, participant_count
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
       @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
-      @blurhash, @thumbhash, @hashtags, @contentWarning, @postedAt, @seenRelays
+      @blurhash, @thumbhash, @hashtags, @contentWarning, @postedAt, @seenRelays,
+      @startsAt, @endsAt, @allDay, @location, @status, @participantCount
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -266,7 +291,16 @@ export function openStore(dbPath, opts = {}) {
       -- A partial update (a NIP-05 recheck, an artifact arriving later) has
       -- no event to read a date from; it must not erase one already stored.
       posted_at = COALESCE(excluded.posted_at, services.posted_at),
-      seen_relays = COALESCE(excluded.seen_relays, services.seen_relays)
+      seen_relays = COALESCE(excluded.seen_relays, services.seen_relays),
+      starts_at = COALESCE(excluded.starts_at, services.starts_at),
+      ends_at = COALESCE(excluded.ends_at, services.ends_at),
+      -- all_day is NOT NULL, so a plain COALESCE would always take the
+      -- incoming 0. Only event/live rows ever set it, and their upserts
+      -- always carry the resolved value, so excluded.all_day is correct.
+      all_day = excluded.all_day,
+      location = COALESCE(excluded.location, services.location),
+      status = COALESCE(excluded.status, services.status),
+      participant_count = COALESCE(excluded.participant_count, services.participant_count)
   `);
 
   // Partial updates (e.g. attaching a NIP-05 handle without re-fetching
@@ -314,6 +348,12 @@ export function openStore(dbPath, opts = {}) {
       contentWarning: null,
       postedAt: null,
       seenRelays: null,
+      startsAt: null,
+      endsAt: null,
+      allDay: 0,
+      location: null,
+      status: null,
+      participantCount: null,
       ...row,
     });
   }
@@ -400,16 +440,16 @@ export function openStore(dbPath, opts = {}) {
   }
 
   /**
-   * Articles (NIP-23), pictures (NIP-68) and videos (NIP-71) -- unlike
-   * NCC-02/nsite, the indexable content (markdown body, caption, imeta alt
-   * text) is already inline in the event, so there is no separate
-   * fetch/verify step and no `fetched` argument: `resolved` already IS the
-   * final record. `lastStatus`/`lastReachableAt` are deliberately left null
-   * here, not "200/now" -- this backend never fetches the media bytes
+   * Articles (NIP-23), pictures/videos (NIP-68/71), calendar events (NIP-52),
+   * live streams (NIP-53) and their extracted fields -- unlike NCC-02/nsite,
+   * the indexable content is already inline in the event, so there is no
+   * separate fetch/verify step and no `fetched` argument: `resolved` already
+   * IS the final record. `lastStatus`/`lastReachableAt` are deliberately left
+   * null here, not "200/now" -- this backend never fetches the media bytes
    * themselves (see src/adapters/media.js), so it has no reachability claim
    * to make; the browser checks that client-side (see ui/'s media worker).
    *
-   * @param {import('./adapters/article.js').ResolvedArticle | import('./adapters/media.js').ResolvedMedia} resolved
+   * @param {import('./adapters/article.js').ResolvedArticle | import('./adapters/media.js').ResolvedMedia | import('./adapters/calendar.js').ResolvedEvent | import('./adapters/live.js').ResolvedLiveStream} resolved
    * @param {string|null} [nip05] verified `name@domain`, or null if absent/unverifiable
    * @param {string[]} [seenRelays] - relay URLs that delivered this event (see relayTracking.js); omit/empty to leave whatever was already stored untouched
    */
@@ -446,6 +486,12 @@ export function openStore(dbPath, opts = {}) {
       contentWarning: resolved.contentWarning ?? null,
       postedAt: resolved.postedAt ?? null,
       seenRelays: seenRelays.length ? JSON.stringify(seenRelays) : null,
+      startsAt: resolved.startsAt ?? null,
+      endsAt: resolved.endsAt ?? null,
+      allDay: resolved.allDay ?? 0,
+      location: resolved.location ?? null,
+      status: resolved.status ?? null,
+      participantCount: resolved.participantCount ?? null,
     });
   }
 
@@ -517,6 +563,12 @@ export function openStore(dbPath, opts = {}) {
                   s.title, s.description,
                   s.last_resolved_at * 1000 AS "indexedAt",
                   s.posted_at * 1000 AS "postedAt",
+                  s.starts_at * 1000 AS "startsAt",
+                  s.ends_at * 1000 AS "endsAt",
+                  s.all_day AS "allDay",
+                  s.location,
+                  s.status AS "liveStatus",
+                  s.participant_count AS "participantCount",
                   s.media_url AS "mediaUrl", s.media_type AS "mediaType",
                   s.thumbnail_url AS "thumbnailUrl",
                   s.blurhash, s.thumbhash, s.hashtags,
@@ -646,6 +698,54 @@ export function openStore(dbPath, opts = {}) {
 
   function countMissingPostedAt() {
     return countMissingPostedAtStmt.get(...BACKFILL_KINDS).count;
+  }
+
+  // --- video-kind reclassification ------------------------------------------
+  // Short videos used to be stored as `video` before NIP-71's kind 22/34236
+  // got their own row kind. Discovery resumes from per-relay cursors, so those
+  // old rows would never be revisited; src/reclassifyVideoKinds.js walks them
+  // and asks the relays for the source event. These helpers are writer-only,
+  // like the posted-at ones above.
+  const videoRowsStmt = db.prepare(`
+    SELECT pubkey, item_id AS "itemId" FROM services
+    WHERE kind = ?
+      AND (pubkey > ? OR (pubkey = ? AND item_id > ?))
+    ORDER BY pubkey, item_id
+    LIMIT ?`);
+  const countVideoRowsStmt = db.prepare(`SELECT COUNT(*) AS count FROM services WHERE kind = ?`);
+  const setVideoKindStmt = db.prepare(
+    `UPDATE services SET kind = ? WHERE pubkey = ? AND item_id = ? AND kind = ?`,
+  );
+  const setVideoKindBatchTxn = db.transaction((entries) => {
+    let changed = 0;
+    for (const entry of entries) {
+      changed += setVideoKindStmt.run(entry.kind, entry.pubkey, entry.itemId, KIND_VIDEO).changes;
+    }
+    return changed;
+  });
+
+  function listVideoRowsForReclassify(cursor = null, limit = 200) {
+    return videoRowsStmt.all(
+      KIND_VIDEO,
+      cursor?.pubkey ?? '',
+      cursor?.pubkey ?? '',
+      cursor?.itemId ?? '',
+      limit,
+    );
+  }
+
+  function countVideoRowsForReclassify() {
+    return countVideoRowsStmt.get(KIND_VIDEO).count;
+  }
+
+  /** @returns {number} rows changed (0 when the row is no longer `video`) */
+  function setVideoKind(pubkey, itemId, kind) {
+    return setVideoKindStmt.run(kind, pubkey, itemId, KIND_VIDEO).changes;
+  }
+
+  /** @param {Array<{ pubkey: string, itemId: string, kind: string }>} entries @returns {number} rows changed */
+  function setVideoKindBatch(entries) {
+    return entries.length === 0 ? 0 : setVideoKindBatchTxn(entries);
   }
 
   function getService(pubkey, itemId) {
@@ -834,6 +934,10 @@ export function openStore(dbPath, opts = {}) {
     setPostedAt,
     setPostedAtBatch,
     countMissingPostedAt,
+    listVideoRowsForReclassify,
+    countVideoRowsForReclassify,
+    setVideoKind,
+    setVideoKindBatch,
   };
 }
 

@@ -48,6 +48,12 @@ export const config = {
   // content is already inline in the event), so there's no reachability or
   // integrity check to disable independently -- one flag covers all three.
   enableContent: process.env.NCC_SEARCH_ENABLE_CONTENT !== 'false',
+  // Also discover NIP-52 calendar events (kinds 31922/31923). No fetch/verify
+  // step; the event carries the title, summary, date and location.
+  enableEvents: process.env.NCC_SEARCH_ENABLE_EVENTS !== 'false',
+  // Also discover NIP-53 live streaming events (kind 30311). Addressable and
+  // updated while live, so the ambient subscription keeps the row current.
+  enableLive: process.env.NCC_SEARCH_ENABLE_LIVE !== 'false',
   // Also discover kind:0 Nostr profiles, surfaced in ui/'s dedicated
   // "Profiles" grid tab. No fetch/verify step either (see
   // adapters/profile.js); only the NIP-05 enrichment pass costs anything
@@ -65,6 +71,12 @@ export const config = {
   // if none of the configured relays support it (the common case today),
   // this costs one cached NIP-11 probe per relay and nothing per search.
   enableNip50: process.env.NCC_SEARCH_ENABLE_NIP50 !== 'false',
+  // Let an /search request supply its own public relays for the live NIP-50
+  // fan-out (the UI's "use my NIP-65 relay list" setting). Those relays are
+  // validated, capped, used read-only for live hits, and never ingested into
+  // the index. Disable to keep the API talking only to NCC_SEARCH_RELAYS.
+  allowClientRelays: process.env.NCC_SEARCH_ALLOW_CLIENT_RELAYS !== 'false',
+  maxClientRelays: Number(process.env.NCC_SEARCH_MAX_CLIENT_RELAYS || 3),
   // Passed straight to @fastify/cors's `origin` option. `true` (default)
   // reflects whatever Origin the browser sends -- fine for this
   // unauthenticated, read-only search API (see server.js). Set to a

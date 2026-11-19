@@ -108,3 +108,18 @@ test('Nip11Prober.filterCapable returns only the relays that advertise NIP-50', 
   ]);
   assert.deepEqual(capable, [`wss://127.0.0.1:${port}/yes`]);
 });
+
+test('Nip11Prober bounds its cache, evicting the least-recently-used relay', { skip: !hasOpenssl && 'openssl not available' }, async () => {
+  const prober = new Nip11Prober({ timeoutMs: 2000, maxEntries: 2 });
+  prober.cache.set('wss://a.example/', { supported: true, checkedAt: Date.now() });
+  prober.cache.set('wss://b.example/', { supported: true, checkedAt: Date.now() });
+
+  // Touch `a`, making `b` the least recently used entry.
+  assert.equal(await prober.supportsNip50('wss://a.example/'), true);
+  infoByPath = { '/new': { supported_nips: [50] } };
+  await prober.supportsNip50(`wss://127.0.0.1:${port}/new`);
+
+  assert.equal(prober.cache.size, 2);
+  assert.equal(prober.cache.has('wss://a.example/'), true);
+  assert.equal(prober.cache.has('wss://b.example/'), false);
+});

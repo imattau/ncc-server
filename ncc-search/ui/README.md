@@ -20,7 +20,8 @@ actually reads like a search engine result.
   It exposes `GET /search?q=` as plain JSON — see
   [`../src/server.js`](../src/server.js). Results carry a `kind` field
   (`ncc-service` / `nsite-root` / `nsite-named` / `article` / `image` /
-  `video`), a `source` field (`index` = verified/discovered by the crawler,
+  `video` / `short-video` / `event` / `live-stream` / `profile` / `npack`),
+  a `source` field (`index` = verified/discovered by the crawler,
   `live` = a just-found NIP-50 hit, not yet even discovered), and, when
   verified, a `nip05` handle.
 - **This UI** is a thin client over that endpoint, plus two pieces of
@@ -99,8 +100,10 @@ How it works:
 What it can index, and what it deliberately cannot:
 
 - Indexed: articles (`30023`, with `published_at` honoured), pictures (`20`),
-  videos (`21`/`22`/`34235`/`34236`), nsite manifests (`15128`/`35128`), npack
-  releases (`9900`), NCC-02 service records (`30059`) and profiles (`0`).
+  videos (`21`/`34235` and short-form `22`/`34236` as a separate kind),
+  NIP-52 events (`31922`/`31923`), NIP-53 live streams (`30311`), nsite
+  manifests (`15128`/`35128`), npack releases (`9900`), NCC-02 service records
+  (`30059`) and profiles (`0`).
 - Not indexed: anything that requires fetching an arbitrary endpoint. A browser
   cannot read another site's HTML without CORS, so there is no NCC anchor/
   locator resolution, no fetched page titles, no reachability checks, no
@@ -111,9 +114,10 @@ What it can index, and what it deliberately cannot:
   fetched or verified here" for the same reason.
 - Caps keep it a browser tool, not a mirror: 4 pages per kind per relay by
   default and bodies truncated to 4 KB, with an **index size limit** chosen in
-  the panel (10, 25, 40 (default), 80 or 150 MB). The record cap is derived from
-  that (roughly 2 KB per record) rather than being a second knob that could
-  contradict it, and the effective limit is never more than half the browser's
+  the settings sheet (10, 25, 40 (default), 80 or 150 MB). The record cap is
+  derived from that (roughly 2 KB per record) rather than being a second knob
+  that could contradict it, and the effective limit is never more than half the
+  browser's
   own quota. Oldest rows (by posting date, then first-seen) are pruned first,
   so a smaller limit is a rolling window over the newest content. Relays, depth
   and whether profiles are indexed are editable in the same panel; the relay
@@ -125,6 +129,26 @@ What it can index, and what it deliberately cannot:
 Publishing `dist-nsite/` to Blossom and a `kind:35128` manifest is done by
 [`../nsite-publisher/`](../nsite-publisher/README.md), a separate NIP-07 page —
 this UI never asks for a signer to publish, and the publisher never sees a key.
+
+## Settings, mobile layout and relay choice
+
+The top-right hamburger opens one settings sheet on both editions: account,
+dark mode, safe search, relay source, and (in the nsite edition) every local
+index control. It is a native `<dialog>`, a full-height sheet below `sm` and
+on coarse pointers, and a centered panel otherwise. The nsite status strip
+keeps only Pause/Resume; its old 11–12px inline form was the part that was
+unreadable on a phone. Touch targets are at least 44px and form text is 16px
+on mobile so iOS does not zoom.
+
+A signed-in reader can switch from the site relays to their own NIP-65
+kind:10002 list. `useRelayPreference` reads the `r` tags with no marker or a
+`read` marker, validates and caps them at six, and stores the choice in
+`localStorage`. In the nsite edition the choice also replaces the crawl relay
+list (switch back to restore the site list; already-indexed rows stay until
+pruned). In the server-hosted edition it drives the browser-side lookups and
+is sent to `/search` as `relays=` for the live NIP-50 fan-out; the node's
+indexed results still come from the node's own crawl relays. Signing out
+reverts to the site relays.
 
 ## Result dates and sorting
 

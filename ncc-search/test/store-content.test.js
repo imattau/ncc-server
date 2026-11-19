@@ -324,3 +324,114 @@ test('backfill helpers page undated content rows and never overwrite a stored da
     cleanup();
   }
 });
+
+test('upsertContent stores event times, all-day flag and location', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({
+      pubkey: 'a'.repeat(64),
+      itemId: 'meetup',
+      kind: 'event',
+      title: 'Nostr Meetup',
+      description: 'Monthly gathering',
+      body: 'Monthly gathering Berlin',
+      endpoint: 'https://example.com/rsvp',
+      thumbnailUrl: 'https://example.com/meetup.jpg',
+      allDay: 1,
+      startsAt: 1_800_000_000,
+      endsAt: 1_800_086_400,
+      location: 'Berlin',
+      status: null,
+      participantCount: null,
+      postedAt: 1_700_000_000,
+      hashtags: ['nostr'],
+    });
+
+    const row = store.getService('a'.repeat(64), 'meetup');
+    assert.equal(row.kind, 'event');
+    assert.equal(row.starts_at, 1_800_000_000);
+    assert.equal(row.ends_at, 1_800_086_400);
+    assert.equal(row.all_day, 1);
+    assert.equal(row.location, 'Berlin');
+
+    const result = store.search('Berlin')[0];
+    assert.equal(result.startsAt, 1_800_000_000_000);
+    assert.equal(result.endsAt, 1_800_086_400_000);
+    assert.equal(result.allDay, 1);
+    assert.equal(result.location, 'Berlin');
+  } finally {
+    cleanup();
+  }
+});
+
+test('upsertContent stores a live stream status and participant count', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({
+      pubkey: 'a'.repeat(64),
+      itemId: 'stream',
+      kind: 'live-stream',
+      title: 'Friday stream',
+      description: 'Talking about Nostr',
+      body: 'Talking about Nostr',
+      status: 'live',
+      participantCount: 42,
+      startsAt: 1_800_000_000,
+      postedAt: 1_700_000_000,
+    });
+
+    const row = store.getService('a'.repeat(64), 'stream');
+    assert.equal(row.status, 'live');
+    assert.equal(row.participant_count, 42);
+
+    const result = store.search('Friday')[0];
+    assert.equal(result.liveStatus, 'live');
+    assert.equal(result.participantCount, 42);
+  } finally {
+    cleanup();
+  }
+});
+
+test('short videos are stored under their own kind', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({
+      pubkey: 'a'.repeat(64),
+      itemId: 'clip',
+      kind: 'short-video',
+      title: 'A clip',
+      postedAt: 1_700_000_000,
+    });
+
+    assert.equal(store.getService('a'.repeat(64), 'clip').kind, 'short-video');
+    assert.equal(store.search('clip')[0].kind, 'short-video');
+  } finally {
+    cleanup();
+  }
+});
+
+test('the video reclassify helpers page video rows and only change rows still marked video', () => {
+  const { store, cleanup } = freshStore();
+  try {
+    store.upsertContent({ pubkey: 'a'.repeat(64), itemId: 'v1', kind: 'video', title: 'Video 1' });
+    store.upsertContent({ pubkey: 'a'.repeat(64), itemId: 'v2', kind: 'video', title: 'Video 2' });
+    store.upsertContent({ pubkey: 'a'.repeat(64), itemId: 's1', kind: 'short-video', title: 'Short 1' });
+
+    assert.equal(store.countVideoRowsForReclassify(), 2);
+    const rows = store.listVideoRowsForReclassify(null, 10);
+    assert.deepEqual(rows.map((row) => row.itemId), ['v1', 'v2']);
+
+    assert.equal(store.setVideoKind('a'.repeat(64), 'v1', 'short-video'), 1);
+    assert.equal(store.setVideoKind('a'.repeat(64), 'v1', 'short-video'), 0, 'already changed');
+    assert.equal(store.getService('a'.repeat(64), 'v1').kind, 'short-video');
+    assert.equal(store.countVideoRowsForReclassify(), 1);
+
+    assert.equal(
+      store.setVideoKindBatch([{ pubkey: 'a'.repeat(64), itemId: 'v2', kind: 'short-video' }]),
+      1,
+    );
+    assert.equal(store.countVideoRowsForReclassify(), 0);
+  } finally {
+    cleanup();
+  }
+});

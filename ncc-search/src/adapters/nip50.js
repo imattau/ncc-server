@@ -19,7 +19,9 @@ import { SERVICE_RECORD_KIND } from '../discovery.js';
 import { routeEventToCrawlers } from '../ingest.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from './nsite.js';
 import { KIND_ARTICLE_EVENT } from './article.js';
-import { MEDIA_KINDS, KIND_PICTURE } from './media.js';
+import { MEDIA_KINDS, storeKindFor } from './media.js';
+import { CALENDAR_KINDS } from './calendar.js';
+import { LIVE_STREAM_KINDS } from './live.js';
 import { stripMarkdown } from './markdown.js';
 
 const SEARCHABLE_KINDS = [
@@ -28,7 +30,14 @@ const SEARCHABLE_KINDS = [
   KIND_NAMED_SITE,
   KIND_ARTICLE_EVENT,
   ...MEDIA_KINDS,
+  ...CALENDAR_KINDS,
+  ...LIVE_STREAM_KINDS,
 ];
+
+// Client-supplied relays (NIP-65 fan-out) get a short probe: a search request
+// should not wait the full configured timeout on a relay the caller just
+// nominated, and negative results are cached like any other.
+const CLIENT_RELAY_PROBE_TIMEOUT_MS = 3000;
 
 export class Nip50Adapter {
   /**
@@ -37,7 +46,8 @@ export class Nip50Adapter {
    * @param {{
    *   nccCrawler?: { ingestEvent(event: object): void },
    *   nsiteCrawler?: { ingestEvent(event: object): void },
-   *   contentCrawler?: { ingestArticle(event: object): void, ingestMedia(event: object): void },
+   *   contentCrawler?: { ingestArticle(event: object): void, ingestMedia(event: object): void,
+   *                      ingestEvent(event: object): void, ingestLiveStream(event: object): void },
    * }} [crawlers]
    *   Where to hand matches for full resolve/fetch/verify (see ingest.js).
    *   Omit any to run this adapter in a read-only/test mode where hits are
@@ -62,39 +72,75 @@ export class Nip50Adapter {
 
   /**
    * @param {string} query
-   * @param {{ limit?: number, timeoutMs?: number }} [options]
+   * @param {{ limit?: number, timeoutMs?: number, extraRelays?: string[] }} [options]
+   *   `extraRelays` are the caller's own NIP-65 relays. They are queried for
+   *   live hits but never ingested: the node's index only grows from relays
+   *   its operator configured. Invalid/duplicate entries are ignored here;
+   *   server.js validates them first.
    * @returns {Promise<LiveHit[]>}
    */
   async search(query, options = {}) {
-    const relays = await this.capableRelays();
-    if (!relays.length) return [];
-
     const limit = options.limit ?? 20;
-    const filter = { search: query, kinds: SEARCHABLE_KINDS, limit };
     const timeoutMs = options.timeoutMs ?? this.config.fetchTimeoutMs;
+    const normalizeRelay = (relay) => {
+      try {
+        return new URL(relay).href;
+      } catch {
+        return relay;
+      }
+    };
+    const configuredUrls = new Set(this.config.relays.map(normalizeRelay));
+    const extraRelays = [...new Set((options.extraRelays ?? []).map(normalizeRelay))]
+      .filter((relay) => !configuredUrls.has(relay));
+
+    const [configured, extra] = await Promise.all([
+      this.capableRelays(),
+      extraRelays.length
+        ? this.prober.filterCapable(extraRelays, { timeoutMs: CLIENT_RELAY_PROBE_TIMEOUT_MS })
+        : Promise.resolve([]),
+    ]);
+    if (!configured.length && !extra.length) return [];
+
+    const filter = { search: query, kinds: SEARCHABLE_KINDS, limit };
 
     // SimplePool.querySync has no built-in timeout -- it waits for every
     // relay to close its subscription (eose or error), which a slow or
     // unresponsive relay could stall indefinitely. Same manual race pattern
-    // NCC05Resolver uses for the same reason.
-    let events;
+    // NCC05Resolver uses for the same reason. The two sets are queried
+    // separately because only the configured relays' events go through the
+    // ingest path.
+    const [configuredEvents, extraEvents] = await Promise.all([
+      this.queryRelays(configured, filter, timeoutMs),
+      this.queryRelays(extra, filter, timeoutMs),
+    ]);
+
+    const hits = [];
+    const seen = new Set();
+    const add = (event, ingest) => {
+      if (!SEARCHABLE_KINDS.includes(event.kind)) return; // a lenient relay could ignore `kinds`
+      const hit = toLiveHit(event);
+      if (!hit) return;
+      const key = `${hit.pubkey}\u0000${hit.itemId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (ingest) this.ingest(event);
+      hits.push(hit);
+    };
+    for (const event of configuredEvents) add(event, true);
+    for (const event of extraEvents) add(event, false);
+    return hits.slice(0, limit);
+  }
+
+  async queryRelays(relays, filter, timeoutMs) {
+    if (!relays.length) return [];
     try {
-      events = await Promise.race([
+      return await Promise.race([
         this.pool.querySync(relays, filter),
         new Promise((resolve) => setTimeout(() => resolve([]), timeoutMs)),
       ]);
     } catch {
-      events = [];
+      return [];
     }
-
-    const hits = [];
-    for (const event of events) {
-      if (!SEARCHABLE_KINDS.includes(event.kind)) continue; // a lenient relay could ignore `kinds`
-      this.ingest(event);
-      const hit = toLiveHit(event);
-      if (hit) hits.push(hit);
-    }
-    return hits;
   }
 
   ingest(event) {
@@ -112,16 +158,19 @@ function toLiveHit(event) {
     event.tags.find((t) => t[0] === 'summary')?.[1] ??
     event.tags.find((t) => t[0] === 'description')?.[1] ??
     null;
-  // An article with neither tag falls back to its raw NIP-23 `content` --
-  // unlike a crawled article (resolveArticle() in article.js, via
-  // upsertContent), that fallback never went through stripMarkdown(), so a
-  // live-only hit could surface raw Markdown (headings, link syntax,
-  // un-stripped `nostr:` references) straight into a search result's
-  // snippet line. Same cleanup a properly indexed article already gets,
-  // not a second one -- and a no-op for every other kind, which never
-  // falls back to raw content here in the first place.
-  const fallbackDescription =
-    event.kind === KIND_ARTICLE_EVENT ? stripMarkdown(event.content) : event.content;
+  // An article, calendar event or live stream with no summary tag falls back
+  // to its raw `content` -- unlike a crawled row (resolveArticle()/
+  // resolveEvent()/resolveLiveStream(), via upsertContent), that fallback
+  // never went through stripMarkdown(), so a live-only hit could surface raw
+  // Markdown (headings, link syntax, un-stripped `nostr:` references) straight
+  // into a search result's snippet line. Same cleanup a properly indexed row
+  // already gets, not a second one -- and a no-op for every other kind, which
+  // never falls back to raw content here in the first place.
+  const markdownBody =
+    event.kind === KIND_ARTICLE_EVENT
+    || CALENDAR_KINDS.includes(event.kind)
+    || LIVE_STREAM_KINDS.includes(event.kind);
+  const fallbackDescription = markdownBody ? stripMarkdown(event.content) : event.content;
 
   let kind;
   let itemId;
@@ -138,8 +187,14 @@ function toLiveHit(event) {
     kind = 'article';
     itemId = dTag;
   } else if (MEDIA_KINDS.includes(event.kind)) {
-    kind = event.kind === KIND_PICTURE ? 'image' : 'video';
+    kind = storeKindFor(event.kind);
     itemId = dTag ?? event.id; // regular (non-addressable) media kinds have no `d`
+  } else if (CALENDAR_KINDS.includes(event.kind)) {
+    kind = 'event';
+    itemId = dTag;
+  } else if (LIVE_STREAM_KINDS.includes(event.kind)) {
+    kind = 'live-stream';
+    itemId = dTag;
   } else {
     return null;
   }
@@ -154,15 +209,40 @@ function toLiveHit(event) {
     itemId,
     title,
     description: summaryOrDescription ?? fallbackDescription ?? null,
+    ...liveStructuredFields(event, kind),
     eventId: event.id,
     source: 'live', // never conflate with a verified, crawled result -- see server.js
+  };
+}
+
+/** The fields a live hit can render without waiting for the crawler to index it. */
+function liveStructuredFields(event, kind) {
+  if (kind !== 'event' && kind !== 'live-stream') return {};
+  const tag = (name) => event.tags.find((t) => t[0] === name)?.[1]?.trim() || null;
+  const isDateOnly = event.kind === 31922;
+  const seconds = (value) => {
+    if (!value) return null;
+    if (isDateOnly && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const ms = Date.parse(`${value}T00:00:00.000Z`);
+      return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+    }
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  };
+  return {
+    thumbnailUrl: tag('image'),
+    startsAt: kind === 'event' ? seconds(tag('start')) : seconds(tag('starts')),
+    endsAt: kind === 'event' ? seconds(tag('end')) : seconds(tag('ends')),
+    allDay: kind === 'event' && isDateOnly ? 1 : 0,
+    location: kind === 'event' ? tag('location') : null,
+    liveStatus: kind === 'live-stream' ? tag('status') : null,
   };
 }
 
 /**
  * @typedef {Object} LiveHit
  * @property {string} pubkey
- * @property {'ncc-service'|'nsite-root'|'nsite-named'|'article'|'image'|'video'} kind
+ * @property {'ncc-service'|'nsite-root'|'nsite-named'|'article'|'image'|'video'|'short-video'|'event'|'live-stream'} kind
  * @property {string} itemId
  * @property {string|null} title
  * @property {string|null} description

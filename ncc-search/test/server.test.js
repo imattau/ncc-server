@@ -208,3 +208,56 @@ test('GET /search skips live NIP-50 hits when a non-relevance sort is requested'
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].source, 'index');
 });
+
+test('GET /search passes validated client relays to the NIP-50 fan-out', async () => {
+  const store = fakeStore([]);
+  const calls = [];
+  const nip50Adapter = {
+    search: async (_query, options) => {
+      calls.push(options);
+      return [];
+    },
+  };
+  const app = createServer(store, nip50Adapter, { maxClientRelays: 2 });
+
+  const res = await app.inject({
+    method: 'GET',
+    url: '/search?q=wallet&relays=wss://a.example,wss://b.example,wss://c.example',
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(calls[0].extraRelays, ['wss://a.example/', 'wss://b.example/']);
+});
+
+test('GET /search ignores client relays when the operator disables them', async () => {
+  const store = fakeStore([]);
+  let received = null;
+  const nip50Adapter = {
+    search: async (_query, options) => {
+      received = options.extraRelays;
+      return [];
+    },
+  };
+  const app = createServer(store, nip50Adapter, { allowClientRelays: false });
+
+  await app.inject({ method: 'GET', url: '/search?q=wallet&relays=wss://a.example' });
+  assert.deepEqual(received, []);
+});
+
+test('GET /search drops local/private client relays before they reach the adapter', async () => {
+  const store = fakeStore([]);
+  let received = null;
+  const nip50Adapter = {
+    search: async (_query, options) => {
+      received = options.extraRelays;
+      return [];
+    },
+  };
+  const app = createServer(store, nip50Adapter);
+
+  await app.inject({
+    method: 'GET',
+    url: '/search?q=wallet&relays=wss://127.0.0.1,wss://relay.example',
+  });
+  assert.deepEqual(received, ['wss://relay.example/']);
+});

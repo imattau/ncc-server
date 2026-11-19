@@ -10,6 +10,10 @@
 import { fetchUrl } from './fetcher.js';
 
 const DEFAULT_CACHE_TTL_MS = 60 * 60_000; // relay capability changes rarely
+// The configured relays are a fixed, small set, but /search can probe relays
+// named by a request. Without a bound, a caller could grow this cache (and
+// the outbound NIP-11 fetches that fill it) indefinitely.
+const DEFAULT_MAX_ENTRIES = 200;
 
 function toInfoUrl(relayUrl) {
   const url = new URL(relayUrl);
@@ -40,30 +44,40 @@ export async function fetchRelayInfo(relayUrl, opts = {}) {
 }
 
 export class Nip11Prober {
-  /** @param {{ timeoutMs?: number, cacheTtlMs?: number }} [opts] */
+  /** @param {{ timeoutMs?: number, cacheTtlMs?: number, maxEntries?: number }} [opts] */
   constructor(opts = {}) {
     this.timeoutMs = opts.timeoutMs ?? 5000;
     this.cacheTtlMs = opts.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+    this.maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
     /** @type {Map<string, { supported: boolean, checkedAt: number }>} */
     this.cache = new Map();
   }
 
-  /** @param {string} relayUrl @returns {Promise<boolean>} */
-  async supportsNip50(relayUrl) {
+  /** @param {string} relayUrl @param {{ timeoutMs?: number }} [opts] */
+  async supportsNip50(relayUrl, opts = {}) {
     const cached = this.cache.get(relayUrl);
     if (cached && Date.now() - cached.checkedAt < this.cacheTtlMs) {
+      // Re-insert so Map iteration order is least-recently-used first.
+      this.cache.delete(relayUrl);
+      this.cache.set(relayUrl, cached);
       return cached.supported;
     }
 
-    const info = await fetchRelayInfo(relayUrl, { timeoutMs: this.timeoutMs });
+    const info = await fetchRelayInfo(relayUrl, { timeoutMs: opts.timeoutMs ?? this.timeoutMs });
     const supported = Array.isArray(info?.supported_nips) && info.supported_nips.includes(50);
+    this.cache.delete(relayUrl);
     this.cache.set(relayUrl, { supported, checkedAt: Date.now() });
+    while (this.cache.size > this.maxEntries) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
     return supported;
   }
 
-  /** @param {string[]} relays @returns {Promise<string[]>} the subset that advertise NIP-50 */
-  async filterCapable(relays) {
-    const checks = await Promise.all(relays.map(async (r) => [r, await this.supportsNip50(r)]));
+  /** @param {string[]} relays @param {{ timeoutMs?: number }} [opts] @returns {Promise<string[]>} the subset that advertise NIP-50 */
+  async filterCapable(relays, opts = {}) {
+    const checks = await Promise.all(relays.map(async (r) => [r, await this.supportsNip50(r, opts)]));
     return checks.filter(([, ok]) => ok).map(([r]) => r);
   }
 }

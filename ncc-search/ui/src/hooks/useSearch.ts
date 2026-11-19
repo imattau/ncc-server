@@ -4,11 +4,18 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { search, type SearchSort } from '@/lib/api';
 import { isLocalMode, subscribeLocalStatus } from '@/lib/local/client';
 
-export function useSearch(query: string, pageSize?: number, sort: SearchSort = 'relevance') {
+export function useSearch(
+  query: string,
+  pageSize?: number,
+  sort: SearchSort = 'relevance',
+  relays: string[] = [],
+) {
   const trimmed = query.trim();
   const queryClient = useQueryClient();
   const local = isLocalMode();
   const lastVersion = useRef<number | null>(null);
+  // A stable cache key for the relay set without depending on array identity.
+  const relayKey = relays.join(',');
 
   // The local index grows while the reader is on the page, so results would
   // otherwise be a snapshot of whatever had been crawled at query time. This
@@ -38,10 +45,12 @@ export function useSearch(query: string, pageSize?: number, sort: SearchSort = '
   }, [local, queryClient]);
 
   return useInfiniteQuery({
-    // The sort is part of the key, so changing it starts a fresh page 1
-    // instead of appending differently-ordered pages to the old ones.
-    queryKey: ['ncc-search', trimmed, pageSize ?? null, sort],
-    queryFn: ({ pageParam, signal }) => search(trimmed, { signal, limit: pageSize, offset: pageParam, sort }),
+    // The sort part of the key makes changing it start a fresh page 1
+    // instead of appending differently-ordered pages to the old ones. The
+    // relay key does the same when the reader switches relay sources.
+    queryKey: ['ncc-search', trimmed, pageSize ?? null, sort, relayKey],
+    queryFn: ({ pageParam, signal }) =>
+      search(trimmed, { signal, limit: pageSize, offset: pageParam, sort, relays }),
     initialPageParam: 0,
     // Each page's offset is just the count of rows fetched so far -- the
     // index's `rank` order is stable within a query, so this never skips

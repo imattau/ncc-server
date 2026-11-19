@@ -4,7 +4,9 @@ import { Nip50Adapter } from '../src/adapters/nip50.js';
 import { SERVICE_RECORD_KIND } from '../src/discovery.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from '../src/adapters/nsite.js';
 import { KIND_ARTICLE_EVENT } from '../src/adapters/article.js';
-import { KIND_PICTURE, KIND_VIDEO_NORMAL } from '../src/adapters/media.js';
+import { KIND_PICTURE, KIND_VIDEO_NORMAL, KIND_VIDEO_SHORT } from '../src/adapters/media.js';
+import { KIND_CALENDAR_DATE } from '../src/adapters/calendar.js';
+import { KIND_LIVE_STREAM } from '../src/adapters/live.js';
 
 function fakeConfig(overrides = {}) {
   return { relays: ['wss://relay.example'], fetchTimeoutMs: 1000, ...overrides };
@@ -34,11 +36,17 @@ function nsiteEvent({ id = 'e2', pubkey = 'b'.repeat(64), kind = KIND_NAMED_SITE
 function stubContentCrawler() {
   const ingestedArticles = [];
   const ingestedMedia = [];
+  const ingestedEvents = [];
+  const ingestedLive = [];
   return {
     ingestedArticles,
     ingestedMedia,
+    ingestedEvents,
+    ingestedLive,
     ingestArticle: (event) => ingestedArticles.push(event),
     ingestMedia: (event) => ingestedMedia.push(event),
+    ingestEvent: (event) => ingestedEvents.push(event),
+    ingestLiveStream: (event) => ingestedLive.push(event),
   };
 }
 
@@ -202,4 +210,108 @@ test('search() resolves to [] rather than hanging if querySync never returns wit
 
   assert.deepEqual(hits, []);
   assert.ok(elapsed < 1000, `expected the timeout race to resolve quickly, took ${elapsed}ms`);
+});
+
+test('search() maps an addressable short video (kind 22) to "short-video"', async () => {
+  const event = mediaEvent({ kind: KIND_VIDEO_SHORT, id: 'e7', title: 'A short' });
+  const contentCrawler = stubContentCrawler();
+  const adapter = new Nip50Adapter(fakePool([event]), fakeConfig(), { contentCrawler });
+  adapter.prober = { filterCapable: async (relays) => relays };
+
+  const hits = await adapter.search('short');
+  assert.equal(hits[0].kind, 'short-video');
+  assert.equal(contentCrawler.ingestedMedia.length, 1);
+});
+
+test('search() maps a NIP-52 event with its date, location and all-day flag', async () => {
+  const event = {
+    id: 'e8',
+    kind: KIND_CALENDAR_DATE,
+    pubkey: 'f'.repeat(64),
+    created_at: 1_700_000_000,
+    content: '',
+    tags: [
+      ['d', 'meetup'],
+      ['title', 'Nostr Meetup'],
+      ['summary', 'Monthly gathering'],
+      ['start', '2026-12-01'],
+      ['location', 'Berlin'],
+    ],
+  };
+  const contentCrawler = stubContentCrawler();
+  const adapter = new Nip50Adapter(fakePool([event]), fakeConfig(), { contentCrawler });
+  adapter.prober = { filterCapable: async (relays) => relays };
+
+  const hits = await adapter.search('meetup');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].kind, 'event');
+  assert.equal(hits[0].itemId, 'meetup');
+  assert.equal(hits[0].startsAt, Date.UTC(2026, 11, 1) / 1000);
+  assert.equal(hits[0].allDay, 1);
+  assert.equal(hits[0].location, 'Berlin');
+  assert.equal(contentCrawler.ingestedEvents.length, 1);
+});
+
+test('search() maps a NIP-53 live stream with its status and times', async () => {
+  const event = {
+    id: 'e9',
+    kind: KIND_LIVE_STREAM,
+    pubkey: 'a'.repeat(64),
+    created_at: 1_700_000_000,
+    content: '',
+    tags: [
+      ['d', 'stream'],
+      ['title', 'Friday stream'],
+      ['starts', '1700000000'],
+      ['status', 'live'],
+    ],
+  };
+  const contentCrawler = stubContentCrawler();
+  const adapter = new Nip50Adapter(fakePool([event]), fakeConfig(), { contentCrawler });
+  adapter.prober = { filterCapable: async (relays) => relays };
+
+  const hits = await adapter.search('stream');
+  assert.equal(hits[0].kind, 'live-stream');
+  assert.equal(hits[0].liveStatus, 'live');
+  assert.equal(hits[0].startsAt, 1700000000);
+  assert.equal(contentCrawler.ingestedLive.length, 1);
+});
+
+test('client relays are queried for live hits but never ingested into the crawler', async () => {
+  const configuredEvent = nccEvent({ id: 'configured', title: 'Configured hit' });
+  const extraEvent = nccEvent({ id: 'extra', pubkey: 'b'.repeat(64), dTag: 'extra', title: 'Extra hit' });
+  const queried = [];
+  const pool = {
+    querySync: async (relays) => {
+      queried.push(relays);
+      return relays.includes('wss://extra.example/') ? [extraEvent] : [configuredEvent];
+    },
+  };
+  const nccCrawler = stubCrawler();
+  const adapter = new Nip50Adapter(pool, fakeConfig(), { nccCrawler });
+  adapter.prober = {
+    filterCapable: async (relays) => relays,
+  };
+
+  const hits = await adapter.search('hit', { extraRelays: ['wss://extra.example'] });
+
+  assert.equal(hits.length, 2);
+  assert.deepEqual(queried, [['wss://relay.example'], ['wss://extra.example/']]);
+  assert.equal(nccCrawler.ingested.length, 1, 'only the configured relay\'s event is ingested');
+  assert.equal(nccCrawler.ingested[0], configuredEvent);
+});
+
+test('a relay already in NCC_SEARCH_RELAYS is not queried twice as a client relay', async () => {
+  const queried = [];
+  const pool = {
+    querySync: async (relays) => {
+      queried.push(relays);
+      return [];
+    },
+  };
+  const adapter = new Nip50Adapter(pool, fakeConfig());
+  adapter.prober = { filterCapable: async (relays) => relays };
+
+  await adapter.search('x', { extraRelays: ['wss://relay.example'] });
+  assert.deepEqual(queried, [['wss://relay.example']]);
 });

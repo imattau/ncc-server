@@ -6,6 +6,8 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 
+import { parseClientRelays } from './clientRelays.js';
+
 // The orders GET /search accepts for `?sort=`. Mirrors store.search's
 // SORT_ORDERS keys; anything else is treated as relevance.
 const SORT_VALUES = new Set(['relevance', 'newest', 'oldest', 'title', 'title-desc']);
@@ -16,6 +18,7 @@ const SORT_VALUES = new Set(['relevance', 'newest', 'oldest', 'title', 'title-de
  *   -- omit to run index-only, e.g. in tests or with NIP-50 disabled.
  * @param {{ corsOrigin?: string | boolean, crawlMonitor?: { snapshot: () => object },
  *           relayLearning?: { snapshot: () => object },
+ *           allowClientRelays?: boolean, maxClientRelays?: number,
  *           statusSource?: () => Promise<{ crawlers?: object, relayLearning?: object }|null> }} [options]
  *   `corsOrigin` defaults to `true` (reflect any request origin). This is a
  *   public, read-only, unauthenticated search API -- no cookies, no
@@ -86,7 +89,10 @@ export function createServer(store, nip50Adapter = null, options = {}) {
     let liveHits = [];
     if (nip50Adapter && req.query.live !== 'false' && offset === 0 && sort === 'relevance') {
       const seen = new Set(indexResults.map((r) => `${r.pubkey}\u0000${r.itemId}`));
-      const found = await nip50Adapter.search(q, { limit });
+      const extraRelays = options.allowClientRelays === false
+        ? []
+        : parseClientRelays(req.query.relays, { max: options.maxClientRelays ?? 3 });
+      const found = await nip50Adapter.search(q, { limit, extraRelays });
       // Dedupe against each other too, not just against the index: two
       // relays can each serve a different event id for the same
       // (pubkey, itemId) coordinate (e.g. after the author republished an

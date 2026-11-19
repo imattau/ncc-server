@@ -29,6 +29,16 @@ export interface LocalRow {
   updatedAt: number;
   /** Unix seconds, the same rule the backend stores (shared/postedAt.js). */
   postedAt: number | null;
+  /** NIP-52/NIP-53 scheduled start/end, Unix seconds. */
+  startsAt?: number | null;
+  endsAt?: number | null;
+  /** 1 for an all-day NIP-52 date-based event. */
+  allDay?: number | null;
+  /** NIP-52 location (several joined for display). */
+  location?: string | null;
+  /** NIP-53 publisher-declared status. */
+  liveStatus?: 'planned' | 'live' | 'ended' | null;
+  participantCount?: number | null;
   title: string | null;
   description: string | null;
   /** Plain text, capped at BODY_LIMIT. Never rendered as Markdown. */

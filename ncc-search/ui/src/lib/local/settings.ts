@@ -119,17 +119,90 @@ export function saveSettings(settings: LocalSettings): LocalSettings {
   return normalized;
 }
 
-/**
- * Relays for the main thread's read-only pool (profile names, article
- * previews, quoted notes). In the nsite edition these follow the crawl
- * settings, so a user who adds a relay gets names and previews from it too,
- * rather than the page having two unrelated relay lists.
- */
-export function uiRelays(): string[] {
+// --- relay source (site defaults vs the signed-in user's NIP-65 list) ------
+//
+// Kept separate from LocalSettings because server-hosted builds have no local
+// crawl settings at all, yet the same "use my relay list" preference applies
+// to their browser-side lookups and live-search fan-out. The previous site
+// list is stored alongside the NIP-65 list so switching back is lossless; the
+// nsite edition writes the effective list into LocalSettings when it changes.
+const RELAY_SOURCE_KEY = 'ncc-search:relay-source:v1';
+
+export type RelaySource = 'site' | 'nip65';
+
+export interface RelayPreference {
+  source: RelaySource;
+  /** The pubkey whose NIP-65 list `relays` came from. */
+  pubkey: string | null;
+  /** Cached read relays from kind:10002 when `source` is nip65. */
+  relays: string[];
+  /** The site/default list to restore when switching back. */
+  siteRelays: string[];
+}
+
+/** The relays this build/deployment is configured with, ignoring any nip65 choice. */
+export function siteRelays(): string[] {
   const configured = window.NCC_SEARCH_RELAYS_B64
     ? atob(window.NCC_SEARCH_RELAYS_B64)
     : import.meta.env.VITE_NCC_SEARCH_RELAYS ?? '';
   const explicit = normalizeRelays(configured.split(','));
   if (explicit.length) return explicit;
   return loadSettings().relays;
+}
+
+export function loadRelayPreference(): RelayPreference | null {
+  try {
+    const raw = localStorage.getItem(RELAY_SOURCE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<RelayPreference>;
+    if (parsed?.source !== 'site' && parsed?.source !== 'nip65') return null;
+    return {
+      source: parsed.source,
+      pubkey: typeof parsed.pubkey === 'string' ? parsed.pubkey : null,
+      relays: normalizeRelays(parsed.relays),
+      siteRelays: normalizeRelays(parsed.siteRelays ?? []),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveRelayPreference(preference: RelayPreference): RelayPreference {
+  const normalized: RelayPreference = {
+    source: preference.source,
+    pubkey: preference.pubkey,
+    relays: normalizeRelays(preference.relays),
+    siteRelays: normalizeRelays(preference.siteRelays),
+  };
+  try {
+    localStorage.setItem(RELAY_SOURCE_KEY, JSON.stringify(normalized));
+  } catch {
+    // Same as settings: the choice still applies for this session.
+  }
+  return normalized;
+}
+
+export function clearRelayPreference(): void {
+  try {
+    localStorage.removeItem(RELAY_SOURCE_KEY);
+  } catch {
+    // Nothing to clean up if storage is unavailable.
+  }
+}
+
+/** The relays currently in effect, NIP-65 choice included. */
+export function activeRelays(): string[] {
+  const preference = loadRelayPreference();
+  if (preference?.source === 'nip65' && preference.relays.length) return preference.relays;
+  return siteRelays();
+}
+
+/**
+ * Relays for the main thread's read-only pool (profile names, article
+ * previews, quoted notes). These follow the relay-source preference, so a
+ * reader who switches to their NIP-65 list gets names and previews from it
+ * too, rather than the page having two unrelated relay lists.
+ */
+export function uiRelays(): string[] {
+  return activeRelays();
 }

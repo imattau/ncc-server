@@ -210,6 +210,36 @@ back. Removing a node admin demotes the npanel user to `staff` instead of
 deleting it, so site grants made in npanel keep working. npanel refuses to
 demote its last admin, which is also reported as a warning.
 
+## Search results, events, shorts or live streams are missing
+
+`search-crawler` indexes NIP-23 articles, NIP-68/71 pictures and videos,
+NIP-52 calendar events (`31922`/`31923`), NIP-53 live streams (`30311`),
+nsites, npack releases, NCC service records and profiles. Event and live-stream
+discovery starts from the beginning the first time the adapter runs, so those
+tabs can stay empty for a while on a large relay history; check
+`/status`'s `rowsByKind` or the container logs for the `events` and
+`live-streams` sources.
+
+The **Shorts** tab only contains rows indexed as `short-video` (NIP-71 kinds
+`22`/`34236`). Rows indexed before that split are still `video`. Relabel them
+once with the maintenance script:
+
+~~~sh
+sudo docker-compose -p ncc-bundle exec search-crawler \
+  node src/reclassifyVideoKinds.js --dry-run
+sudo docker-compose -p ncc-bundle exec search-crawler \
+  node src/reclassifyVideoKinds.js
+~~~
+
+If **use my NIP-65 relay list** has no effect on live results, check:
+
+- the reader is signed in and their kind:10002 event has at least one `r` tag
+  with no marker or `read`;
+- `SEARCH_ALLOW_CLIENT_RELAYS` is not `false` on the `search` service
+  (`docker-compose -p ncc-bundle exec search printenv | grep NCC_SEARCH_ALLOW`);
+- the relay advertises NIP-50 in its NIP-11 document. The node's own index is
+  unchanged by this setting; only live, `source: "live"` hits use those relays.
+
 ## App catalogue is empty or unavailable
 
 The **Apps** page reads signed service packages from the node's `npack`

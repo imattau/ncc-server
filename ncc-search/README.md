@@ -2,7 +2,8 @@
 
 A separate, standalone process that discovers public Nostr-native content —
 NCC-02/NCC-05 service records, nsites (NIP-5A), NIP-23 articles, NIP-68/71
-pictures and videos, Nostr profiles (kind:0), and npack
+pictures and videos (normal and short-form), NIP-52 calendar events, NIP-53
+live streams, Nostr profiles (kind:0), and npack
 (github.com/imattau/npack) package releases — resolves each per its own
 normative contract, and serves unified full-text search over the result.
 
@@ -137,31 +138,43 @@ nsite (src/adapters/nsite.js + nsite-crawl.js)   -- NIP-5A static sites
                     if unverifiable (never shown as if confirmed)
   re-crawl on a fixed interval (NIP-5A defines no TTL field)
 
-content (src/adapters/article.js + media.js + content-crawl.js)
-  -- NIP-23 articles, NIP-68 pictures, NIP-71 videos
+content (src/adapters/article.js + media.js + calendar.js + live.js
+         + content-crawl.js)
+  -- NIP-23 articles, NIP-68 pictures, NIP-71 videos, NIP-52 events,
+     NIP-53 live streams
   discoverArticles/discoverMedia -- broad REQ for kind:30023 (articles) and
                     kind:20/21/22/34235/34236 (pictures/videos)
+  discoverEvents  -- broad REQ for kind:31922/31923 (date-/time-based
+                    calendar events); `d` and a title are required
+  discoverLiveStreams -- broad REQ for kind:30311; the event is addressable
+                    and updates while live, so newest wins
   resolveArticle -- the event's own `content` IS the article (Markdown);
                     stripMarkdown() turns it into FTS-indexable plain text.
                     No fetch step at all -- discovery hands over the full
                     record already resolved.
   resolveMedia   -- parses `imeta` tags (NIP-92, extended by NIP-68/71) for
-                    url/m/dim/alt/image/duration. This backend NEVER fetches
-                    the media bytes themselves: the browser loads images/
-                    video directly from their original host (see ui/), so
-                    there is nothing here to verify server-side either --
-                    reachability for these two kinds is checked client-side
-                    (ui/'s Web Worker), not by this process.
+                    url/m/dim/alt/image/duration. Kind 22/34236 is stored as
+                    `short-video` rather than being merged into `video`.
+                    This backend NEVER fetches the media bytes themselves:
+                    the browser loads images/video directly from their
+                    original host (see ui/), so there is nothing here to
+                    verify server-side either -- reachability for these kinds
+                    is checked client-side (ui/'s Web Worker), not by this
+                    process.
+  resolveEvent   -- NIP-52 title/summary/image/start/end/location; date-based
+                    starts are converted to UTC midnight and flagged
+                    all-day, so the UI can show a date without a time.
+  resolveLiveStream -- NIP-53 title/summary/image/streaming/recording/
+                    starts/ends/status/participant count.
   content-crawl.js -- discover -> resolve -> store immediately (no fetch
                     means no pending/schedule queue at all), plus the same
                     periodic NIP-05 enrichment pass nsite-crawl.js uses,
                     reusing nsite.js's resolveNip05() directly
-  hashtags.js    -- shared `t`-tag extraction for article.js/media.js (the
-                    only two conventions here that define one). This backend
-                    computes no ranking from them itself -- they're exposed
-                    so ui/'s NIP-07-signed-in ranking can match them against
-                    a user's own interests (see ui/README.md
-                    "Personalization")
+  hashtags.js    -- shared `t`-tag extraction for the article/media/event/
+                    live adapters. This backend computes no ranking from
+                    them itself -- they're exposed so ui/'s NIP-07-signed-in
+                    ranking can match them against a user's own interests
+                    (see ui/README.md "Personalization")
   resolveMedia also captures the NIP-68/71 `content-warning` tag's value
                     (or a generic "sensitive content" label if the tag has
                     no reason text) as `contentWarning`, stored verbatim and
@@ -229,8 +242,11 @@ store.js  -- one `services` table/FTS5 index for both crawl adapters,
              weight than profile handles and body text.
 server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
              rows always winning on a (pubkey, itemId) collision; add
-             &live=false to skip the live fan-out and &sort= to choose the
-             order -- see "Posting dates and result order" below), GET
+             &live=false to skip the live fan-out, &relays=wss://… (up to
+             `NCC_SEARCH_MAX_CLIENT_RELAYS`, wss only, private hosts refused)
+             to include a signed-in reader's own NIP-65 relays in that live
+             fan-out, and &sort= to choose the order -- see "Posting dates
+             and result order" below), GET
              /services/:pubkey/:itemId, GET /status (aggregate index
              size/counts and crawler health).
              Served by src/api.js only; the crawler (src/index.js) exposes
@@ -239,15 +255,20 @@ server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
 
 ## Posting dates and result order
 
-Article, image, video, nsite and npack rows record `posted_at`: when the event
-that produced the row was posted, in unix seconds. For NIP-23 articles the
-`published_at` tag wins -- that is the date the author calls the publication
-date, and unlike `created_at` it does not move when the article is edited and
-republished. Everything else uses the event's `created_at`. Profiles and
-NCC-02/05 service rows have no posting date: a kind:0 is a profile *update*,
-and an anchored service record has no single source event. `last_resolved_at`
-is a different thing (when the crawler last looked) and is still reported as
-`indexedAt`.
+Article, image, video, short-video, event, live-stream, nsite and npack rows
+record `posted_at`: when the event that produced the row was posted, in unix
+seconds. For NIP-23 articles the `published_at` tag wins -- that is the date
+the author calls the publication date, and unlike `created_at` it does not
+move when the article is edited and republished. Everything else uses the
+event's `created_at` (for a NIP-53 live stream, the latest update). Profiles
+and NCC-02/05 service rows have no posting date: a kind:0 is a profile
+*update*, and an anchored service record has no single source event.
+`last_resolved_at` is a different thing (when the crawler last looked) and is
+still reported as `indexedAt`.
+
+NIP-52 events and NIP-53 live streams also expose `startsAt`/`endsAt`
+(unix milliseconds), `allDay` (date-based NIP-52 events), `location` and, for
+live streams, `liveStatus` and `participantCount`.
 
 `GET /search` returns the date as `postedAt` (unix milliseconds, like
 `indexedAt`) and accepts `sort=`:
@@ -314,6 +335,44 @@ Compose deployment, use `SEARCH_LEARN_RELAYS=false`. `/status` reports the
 candidate and learned counts and the supporting-author count for each learned
 relay.
 
+## Client relays and the live fan-out
+
+A signed-in reader can tell the UI to use their NIP-65 read relays instead of
+the site's for browser-side lookups (names, previews, quoted notes) and, on
+the server-hosted edition, for the live NIP-50 fan-out. The UI sends those
+relays as `GET /search?relays=wss://…`; the node's own index is unchanged.
+
+The API treats the parameter as untrusted input:
+
+- only `wss://`, no credentials or fragments, and no localhost/`.local` or
+  private-IP literals (`src/relayUrl.js`);
+- at most `NCC_SEARCH_MAX_CLIENT_RELAYS` (default 3), deduplicated against
+  `NCC_SEARCH_RELAYS`;
+- NIP-11 capability probes for these relays are cached in a bounded LRU, with
+  a shorter timeout than the configured relays;
+- their hits are returned as `source: "live"` and are **never ingested** into
+  the index. Only `NCC_SEARCH_RELAYS` can add rows.
+
+Set `NCC_SEARCH_ALLOW_CLIENT_RELAYS=false` to ignore the parameter entirely.
+The residual risk is the outbound WebSocket/NIP-11 connection itself: a public
+endpoint can name public `wss://` hosts for the server to dial. It is bounded
+and read-only, but it is a real capability change from a fixed relay list.
+
+## Short videos and the existing index
+
+NIP-71 kind 22/34236 rows are stored as `short-video` from this build onward.
+Rows indexed before it are still `video`, and discovery resumes from per-relay
+cursors, so they are not revisited on their own. Run the one-off maintenance
+script once after deploying to relabel historical shorts:
+
+```sh
+docker-compose -p ncc-bundle exec search-crawler node src/reclassifyVideoKinds.js --dry-run
+docker-compose -p ncc-bundle exec search-crawler node src/reclassifyVideoKinds.js
+```
+
+It only asks relays for authors already in the index, only changes rows whose
+source event is kind 22/34236, and is safe to re-run.
+
 ## Known caveats / things to verify before relying on this
 
 - **SPKI fingerprint encoding** (`src/fetcher.js: spkiFingerprint`) — verified
@@ -338,6 +397,15 @@ relay.
   published only as the deprecated per-file `kind:34128` events won't be
   indexed. Add it as a third discovery filter if that turns out to matter in
   practice.
+- **NIP-53 status is publisher-declared.** A `status=live` event that has not
+  been updated for an hour is labelled `live · may have ended` in the UI,
+  following the spec's own guidance, rather than shown as a confident LIVE
+  chip. The index still keeps the row (with `liveStatus`) until the publisher
+  changes or deletes it.
+- **Short videos reclassified only by the maintenance script**: kind
+  22/34236 rows indexed before the `short-video` split stay `video` until
+  `src/reclassifyVideoKinds.js` runs (see "Short videos and the existing
+  index" above).
 - **NIP-05 has no defined relation to nsite in the spec** — attaching it is
   this project's own enrichment (parallel to how NCC-02 attestations add
   trust signal on top of a bare service record), not something NIP-5A asks

@@ -7,6 +7,9 @@ export type ResultKind =
   | 'article'
   | 'image'
   | 'video'
+  | 'short-video'
+  | 'event'
+  | 'live-stream'
   | 'profile'
   | 'npack';
 
@@ -37,6 +40,20 @@ export interface SearchResult {
    * `indexedAt` is the fallback those are labelled with.
    */
   postedAt?: number | null;
+  /**
+   * NIP-52/NIP-53 only: the scheduled start/end in Unix milliseconds, and
+   * whether the event is all-day (a NIP-52 date-based event, kind 31922).
+   * Null for every other kind.
+   */
+  startsAt?: number | null;
+  endsAt?: number | null;
+  allDay?: number | null;
+  /** NIP-52 location (several joined for display), null otherwise. */
+  location?: string | null;
+  /** NIP-53 publisher-declared status; null for every other kind. */
+  liveStatus?: 'planned' | 'live' | 'ended' | null;
+  /** NIP-53 current_participants, when the publisher supplied it. */
+  participantCount?: number | null;
   // For ncc-service/nsite rows, the backend's own reachability check.
   // Always null for article/image/video: this backend never fetches media
   // bytes or re-renders article content, so it has no reachability claim to
@@ -138,7 +155,14 @@ const API_BASE = import.meta.env.VITE_NCC_SEARCH_API_BASE
 
 export async function search(
   query: string,
-  opts: { limit?: number; offset?: number; sort?: SearchSort; signal?: AbortSignal } = {},
+  opts: {
+    limit?: number;
+    offset?: number;
+    sort?: SearchSort;
+    signal?: AbortSignal;
+    /** The signed-in user's NIP-65 read relays, when that setting is on. */
+    relays?: string[];
+  } = {},
 ): Promise<SearchResponse> {
   // The nsite edition runs its own crawler and index in a Web Worker (see
   // lib/local/), so the same components work with no server at all. Live
@@ -149,6 +173,10 @@ export async function search(
   if (opts.limit) url.searchParams.set('limit', String(opts.limit));
   if (opts.offset) url.searchParams.set('offset', String(opts.offset));
   if (opts.sort && opts.sort !== 'relevance') url.searchParams.set('sort', opts.sort);
+  // Only page 1 can use client relays: the live fan-out is first-page-only,
+  // so appending the list to later pages would leak their URLs into requests
+  // that cannot use them.
+  if (!opts.offset && opts.relays?.length) url.searchParams.set('relays', opts.relays.join(','));
 
   const res = await fetch(url, { signal: opts.signal });
   if (!res.ok) {

@@ -17,11 +17,44 @@ const KIND_LABEL: Record<ResultKind, string> = {
   article: 'article',
   image: 'image',
   video: 'video',
+  'short-video': 'short video',
+  event: 'event',
+  'live-stream': 'live stream',
   profile: 'profile',
   npack: 'package',
 };
 
-const MEDIA_KINDS = new Set<ResultKind>(['image', 'video']);
+const MEDIA_KINDS = new Set<ResultKind>(['image', 'video', 'short-video']);
+const VIDEO_KINDS = new Set<ResultKind>(['video', 'short-video']);
+
+/** NIP-52/NIP-53 start time; all-day events show a date without a time. */
+function scheduleLabel(result: SearchResult): string | null {
+  if (result.startsAt == null) return null;
+  const start = new Date(result.startsAt);
+  if (Number.isNaN(start.getTime())) return null;
+  return start.toLocaleString(undefined, result.allDay
+    ? { dateStyle: 'medium', timeZone: 'UTC' }
+    : { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/**
+ * NIP-53's status is publisher-declared. The spec itself says a `live` event
+ * with no update for an hour may be considered ended, so a stale claim is
+ * labelled rather than shown as a confident red LIVE chip.
+ */
+function liveLabel(result: SearchResult): { text: string; tone: 'live' | 'muted' } | null {
+  if (result.kind !== 'live-stream') return null;
+  if (result.liveStatus === 'live') {
+    const stale = typeof result.postedAt === 'number'
+      && Date.now() - result.postedAt > 60 * 60_000;
+    return stale
+      ? { text: 'live · may have ended', tone: 'muted' }
+      : { text: 'LIVE', tone: 'live' };
+  }
+  if (result.liveStatus === 'planned') return { text: 'planned', tone: 'muted' };
+  if (result.liveStatus === 'ended') return { text: 'ended', tone: 'muted' };
+  return null;
+}
 
 // Deterministic from the pubkey, not loaded from anywhere -- real search
 // engines show a site favicon on this line; this is the equivalent for an
@@ -146,7 +179,7 @@ function CompactThumbnail({ result }: { result: SearchResult }) {
   return (
     <div className="relative shrink-0">
       <img src={src} alt={alt} loading="lazy" decoding="async" className={COMPACT_THUMB_CLASS} />
-      {result.kind === 'video' && (
+      {VIDEO_KINDS.has(result.kind) && (
         <span
           aria-hidden="true"
           className="absolute inset-0 flex items-center justify-center rounded-md bg-black/10"
@@ -185,8 +218,12 @@ export function ResultRow({
   // thumbnail concept at all, and an nsite with no og:image just falls
   // through to the plain text row, same as always.
   const hasOptionalThumbnail =
-    (result.kind === 'article' || result.kind === 'profile' || result.kind.startsWith('nsite')) &&
-    !!result.thumbnailUrl;
+    (result.kind === 'article'
+      || result.kind === 'profile'
+      || result.kind === 'event'
+      || result.kind === 'live-stream'
+      || result.kind.startsWith('nsite'))
+    && !!result.thumbnailUrl;
   const useCompactThumbnail = isMedia || hasOptionalThumbnail;
 
   // An nsite's `endpoint` (the manifest's resolved entry path, e.g.
@@ -204,6 +241,8 @@ export function ResultRow({
   const title = result.title?.trim() || identity;
   const body = result.snippet || result.description || '';
   const status = useResultStatus(result);
+  const liveBadge = liveLabel(result);
+  const schedule = scheduleLabel(result);
   // Deliberately per-row state: the dialog mounts closed and its article
   // query stays disabled until this is true (see ArticlePreviewDialog), so
   // rendering a page of results never fetches article bodies.
@@ -230,6 +269,20 @@ export function ResultRow({
         <span className="truncate text-emerald-700 dark:text-emerald-400">{identity}</span>
         <span className="text-muted-foreground" aria-hidden="true">·</span>
         <span className="text-muted-foreground">{KIND_LABEL[result.kind]}</span>
+        {liveBadge && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <span
+              className={
+                liveBadge.tone === 'live'
+                  ? 'rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white'
+                  : 'text-xs text-muted-foreground'
+              }
+            >
+              {liveBadge.text}
+            </span>
+          </>
+        )}
         {isFollowed && (
           <>
             <span className="text-muted-foreground" aria-hidden="true">·</span>
@@ -271,6 +324,22 @@ export function ResultRow({
               </time>
             </>
           )
+        )}
+        {schedule && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <span className="text-xs text-muted-foreground" title="Scheduled start">
+              {result.kind === 'live-stream' ? 'starts' : 'event'} {schedule}
+            </span>
+          </>
+        )}
+        {result.location && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <span className="max-w-56 truncate text-xs text-muted-foreground" title={result.location}>
+              {result.location}
+            </span>
+          </>
         )}
         {/* Only reachable with safe search off -- see SearchPage.tsx's
             `results` filter. Labels what the publisher tagged; this app

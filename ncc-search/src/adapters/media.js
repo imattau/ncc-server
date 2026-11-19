@@ -40,10 +40,21 @@ export const MEDIA_KINDS = [
   KIND_VIDEO_SHORT_ADDRESSABLE,
 ];
 
+/** NIP-71's short-form variants (regular kind 22, addressable kind 34236). */
+export const SHORT_VIDEO_KINDS = new Set([KIND_VIDEO_SHORT, KIND_VIDEO_SHORT_ADDRESSABLE]);
+
 const ADDRESSABLE_KINDS = new Set([KIND_VIDEO_NORMAL_ADDRESSABLE, KIND_VIDEO_SHORT_ADDRESSABLE]);
 
-function storeKindFor(eventKind) {
-  return eventKind === KIND_PICTURE ? 'image' : 'video';
+/**
+ * The row kind a media event produces. NIP-71 defines short videos as a
+ * distinct presentation from normal videos, so they get their own `kind`
+ * rather than being merged into `video` and left indistinguishable in the UI.
+ * @param {number} eventKind
+ * @returns {'image'|'video'|'short-video'}
+ */
+export function storeKindFor(eventKind) {
+  if (eventKind === KIND_PICTURE) return 'image';
+  return SHORT_VIDEO_KINDS.has(eventKind) ? 'short-video' : 'video';
 }
 
 /**
@@ -138,7 +149,7 @@ export function resolveMedia(event) {
  * @typedef {Object} ResolvedMedia
  * @property {string} pubkey
  * @property {string} itemId - event id for regular kinds, `d` tag for addressable ones
- * @property {'image'|'video'} kind
+ * @property {'image'|'video'|'short-video'} kind
  * @property {string|null} title
  * @property {string|null} description
  * @property {string} body

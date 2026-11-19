@@ -1,5 +1,7 @@
 import { verifyEvent } from 'nostr-tools';
 
+import { safePublicRelayUrl as safeRelayUrl } from './relayUrl.js';
+
 const AUTHOR_CHECK_BATCH = 5;
 const MIN_SUPPORTING_AUTHORS = 3;
 const MAX_LEARNED_RELAYS = 10;
@@ -20,32 +22,6 @@ function parseReadRelays(event) {
     if (url) result.add(url);
   }
   return [...result];
-}
-
-function safeRelayUrl(value) {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'wss:' || url.username || url.password || url.hash) return null;
-    const host = url.hostname.toLowerCase();
-    if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return null;
-    if (isPrivateIp(host)) return null;
-    return url.href;
-  } catch {
-    return null;
-  }
-}
-
-function isPrivateIp(host) {
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const [a, b] = ipv4.slice(1).map(Number);
-    if ([a, b].some((part) => part > 255)) return true;
-    return a === 0 || a === 10 || a === 127 || a >= 224 ||
-      (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
-  }
-  const ipv6 = host.replace(/^\[|\]$/g, '').toLowerCase();
-  return ipv6 === '::' || ipv6 === '::1' || ipv6.startsWith('::ffff:') || ipv6.startsWith('fc') || ipv6.startsWith('fd') || ipv6.startsWith('fe8') || ipv6.startsWith('fe9') || ipv6.startsWith('fea') || ipv6.startsWith('feb');
 }
 
 function withTimeout(promise, timeoutMs) {

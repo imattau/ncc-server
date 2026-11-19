@@ -31,6 +31,7 @@ export function MediaGridCard({
 }) {
   const author = useAuthor(result.pubkey);
   const isImage = result.kind === 'image';
+  const isVideo = result.kind === 'video' || result.kind === 'short-video';
   const placeholder = useBlurhashPlaceholder(result.blurhash);
   const resized = useResizedImage(isImage ? sanitizeHref(result.mediaUrl) : null);
 
@@ -63,7 +64,7 @@ export function MediaGridCard({
         <div aria-hidden="true" className="size-full animate-pulse" />
       )}
 
-      {result.kind === 'video' && (
+      {isVideo && (
         <span
           aria-hidden="true"
           className="absolute inset-0 flex items-center justify-center bg-black/10"
