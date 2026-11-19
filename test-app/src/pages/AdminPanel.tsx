@@ -649,6 +649,7 @@ export default function AdminPanel() {
   const [catalogue, setCatalogue] = useState<PanelCatalogue | null>(null);
   const [catalogueState, setCatalogueState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [catalogueError, setCatalogueError] = useState('');
+  const [catalogueWarning, setCatalogueWarning] = useState('');
   const [catalogueToken, setCatalogueToken] = useState(0);
   const catalogueRefresh = useRef(false);
   const [selectedRelease, setSelectedRelease] = useState<PanelCatalogueEntry | null>(null);
@@ -906,11 +907,12 @@ export default function AdminPanel() {
     let timer: number | undefined;
     let polls = 0;
 
-    const load = (askForRefresh: boolean) => {
+    const load = (askForRefresh: boolean, canFallBack = askForRefresh) => {
       loadPanelCatalogue(apiBase, user.signer, askForRefresh, controller.signal)
         .then((loaded) => {
           if (controller.signal.aborted) return;
           setCatalogue(loaded);
+          if (askForRefresh) setCatalogueWarning('');
           if (loaded.refreshing && polls < CATALOGUE_REFRESH_POLLS) {
             polls += 1;
             setCatalogueState('loading');
@@ -923,8 +925,25 @@ export default function AdminPanel() {
         })
         .catch((error: unknown) => {
           if (controller.signal.aborted) return;
+          // A sidecar from before the async-refresh change blocks the whole
+          // relay query in the refresh request. Ask again without the refresh
+          // flag so the cached listing can still open the page.
+          if (canFallBack && error instanceof PanelApiError && error.status === 0) {
+            setCatalogueWarning(
+              'The node did not answer the refresh request. Showing the last catalogue it served. '
+              + 'If the panel was just updated, recreate the sidecar container with the matching image.',
+            );
+            load(false, false);
+            return;
+          }
+          const message = error instanceof Error ? error.message : 'Could not read the App catalogue';
           setCatalogueState('error');
-          setCatalogueError(error instanceof Error ? error.message : 'Could not read the App catalogue');
+          setCatalogueError(
+            error instanceof PanelApiError && error.status === 0 && message.includes('took too long')
+              ? `${message}. If the panel was just updated, the sidecar container may still be running `
+                + 'the previous image — recreate it with the matching SIDECAR_IMAGE.'
+              : message,
+          );
         });
     };
 
@@ -1436,6 +1455,7 @@ export default function AdminPanel() {
   const refreshCatalogue = () => {
     catalogueRefresh.current = true;
     setCatalogueError('');
+    setCatalogueWarning('');
     setCatalogueState('loading');
     setCatalogueToken((value) => value + 1);
   };
@@ -1849,6 +1869,13 @@ export default function AdminPanel() {
                   <CircleAlert size={14} />
                   <span>Could not read the App catalogue: {catalogueError}</span>
                   <button className="text-button" onClick={refreshCatalogue}>Try again</button>
+                </div>
+              )}
+
+              {catalogueWarning && catalogueState !== 'error' && (
+                <div className="panel-banner" role="status">
+                  <CircleAlert size={14} />
+                  <span>{catalogueWarning}</span>
                 </div>
               )}
 
