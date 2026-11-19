@@ -169,6 +169,47 @@ state. `Unreachable` with a running container usually means the probe target
 in the service record is wrong; `Degraded` usually means a relay publish
 failed or the record is older than twice the publish interval.
 
+## Admin changes do not reach npanel
+
+Adding a key from the panel writes the node admin list first, then grants
+npanel administrator access through npanel's dashboard API. A key that can
+open `/admin` but not the npanel dashboard is shown as **No npanel access**
+with a **Grant** action.
+
+Check that npanel is running and that its dashboard answers on its configured
+host:
+
+~~~sh
+sudo docker-compose -p ncc-bundle ps npanel sidecar
+PUBLIC_IPV4=$(sed -n 's/^PUBLIC_IPV4=//p' .env)
+curl -s -H "Host: ${PUBLIC_IPV4}" http://127.0.0.1:3200/api/instance
+~~~
+
+- Connection refused means npanel is stopped, or `NCC_NPANEL_URL` points
+  somewhere else. Recreate the sidecar after changing that variable.
+- `This domain is not configured` (404) means `NCC_NPANEL_HOST` does not match
+  npanel's `dashboard_host`. Compose sets both from `PUBLIC_IPV4`.
+- `401` means npanel rejected the signed URL, usually because the sidecar image
+  predates the sync or does not match the panel build.
+- `403` means the operator key is not an npanel admin. The panel cannot
+  bootstrap that itself; grant it on the host, then use **Grant** in the
+  Admins table:
+
+~~~sh
+NODE_PUBKEY=$(sed -n 's/^NCC_OPERATOR_PUBKEY=//p' .env)
+sudo docker-compose -p ncc-bundle exec npanel \
+  npanel --config /tmp/npanel.toml make-admin "$NODE_PUBKEY"
+~~~
+
+`sudo make bundle-add-admin NPUB=<npub>` does the same for any key and also
+sends a sidecar invite.
+
+The node change always succeeds first. If npanel is down or rejects the call,
+the panel keeps the change and shows the reason as a warning; nothing is rolled
+back. Removing a node admin demotes the npanel user to `staff` instead of
+deleting it, so site grants made in npanel keep working. npanel refuses to
+demote its last admin, which is also reported as a warning.
+
 ## App catalogue is empty or unavailable
 
 The **Apps** page reads signed service packages from the node's `npack`

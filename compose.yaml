@@ -38,6 +38,11 @@ services:
       # to health from probes and node logs only.
       NCC_NODE_AGENT_URL: "http://127.0.0.1:${NODE_AGENT_PORT:-3010}"
       NCC_NODE_AGENT_TOKEN: "${NODE_AGENT_TOKEN:-}"
+      # npanel keeps its own users table; the sidecar mirrors node admins into
+      # it through npanel's dashboard API. The dashboard routes by Host, so
+      # the Host header must match npanel's configured dashboard_host.
+      NCC_NPANEL_URL: "http://127.0.0.1:3200"
+      NCC_NPANEL_HOST: "${PUBLIC_IPV4}"
       # Read-only npack catalogue for the App catalogue. The daemon runs in
       # the `npack` service; the sidecar only reads its Unix socket.
       NCC_NPACK_SOCKET: /run/npack/npackd.sock

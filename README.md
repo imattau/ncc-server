@@ -170,11 +170,12 @@ sudo docker-compose -p ncc-bundle -f compose.yaml up -d
 ```
 
 To add an admin, open the panel's Admins section and paste the npub; the
-sidecar stores the key and sends an invite DM. The key can then open the panel
-and manage the node. `sudo make bundle-add-admin NPUB=npub1...` still grants
-Npanel administrator access and sends the sidecar invitation, but it records a
-pending invitation rather than adding the key from the panel. Ditto Relay has
-no additional-admin setting in this Compose bundle.
+sidecar stores the key, sends an invite DM and makes the key an npanel
+administrator. The key can then open the panel and manage the node. Removing
+a key demotes its npanel role to staff rather than deleting the user.
+`sudo make bundle-add-admin NPUB=npub1...` remains for recovery or when npanel
+is unavailable; it records a pending invitation rather than adding the key from
+the panel. Ditto Relay has no additional-admin setting in this Compose bundle.
 
 Service configuration is in `.env`. Persistent service data is stored outside
 the containers. Keep `.env`, the operator key, and persistent data backed up;

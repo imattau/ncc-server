@@ -274,9 +274,19 @@ admin directly to the internet.
 
 Open `ncc://<npub>/admin/` or `https://<PUBLIC_IPV4>:8448/admin`, sign in with
 the operator key, open **Admins**, and paste the new npub. The panel asks your
-signer for one NIP-98 signature, then the sidecar adds the key and sends it an
-invite DM. The key can open the panel immediately and is protected from removal
-only while it is not the operator key or the last admin.
+signer for one NIP-98 signature, then the sidecar adds the key, sends it an
+invite DM and makes it an **npanel administrator**. The key can open the panel
+immediately and is protected from removal only while it is not the operator
+key or the last admin. Removing a key demotes its npanel role to staff instead
+of deleting the user, so sites already granted in npanel keep working.
+
+The npanel grant uses npanel's own dashboard API over host loopback, signed
+with the operator key. It needs `NCC_NPANEL_HOST` (Compose sets it to
+`PUBLIC_IPV4`) and `NCC_NPANEL_URL` (default `http://127.0.0.1:3200`), and the
+operator key must already be an npanel admin. If npanel is down the node change
+still applies and the panel shows a warning; the **Grant** action next to a key
+retries it. Recreate the sidecar after pulling a release that adds these
+variables.
 
 Caddy proxies `/ncc-api/*` to the sidecar's loopback listener, and the sidecar
 verifies the NIP-98 signature against its admin list. Nothing else is exposed:
@@ -285,8 +295,9 @@ the sidecar UI on port 3000 stays local to the host.
 From the server checkout, `sudo make bundle-add-admin NPUB=npub1...` still
 grants an npub Npanel administrator access and sends a sidecar invitation. That
 path records a pending invitation; adding the same key from the panel makes it
-active. Ditto Relay does not expose an additional-admin setting through this
-Compose bundle, so the command leaves its operator identity unchanged.
+active and repeats the npanel grant. Ditto Relay does not expose an
+additional-admin setting through this Compose bundle, so the command leaves its
+operator identity unchanged.
 
 ## Recovery and upgrades
 
@@ -354,7 +365,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.4
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.5
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 

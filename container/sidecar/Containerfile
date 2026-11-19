@@ -15,6 +15,7 @@ COPY patches/ncc-sidecar-panel-admin-api.patch /tmp/ncc-sidecar-panel-admin-api.
 COPY patches/ncc-sidecar-panel-services.patch /tmp/ncc-sidecar-panel-services.patch
 COPY patches/ncc-sidecar-npack.patch /tmp/ncc-sidecar-npack.patch
 COPY patches/ncc-sidecar-panel-metrics.patch /tmp/ncc-sidecar-panel-metrics.patch
+COPY patches/ncc-sidecar-npanel-sync.patch /tmp/ncc-sidecar-npanel-sync.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -39,6 +40,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && if ! grep -q 'ncc-api/metrics' src/routes/panel-services.js; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-metrics.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-metrics.patch; \
+     fi \
+  && if ! grep -q 'npanel-admins' src/routes/panel-admin.js; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-npanel-sync.patch \
+       && patch -p1 < /tmp/ncc-sidecar-npanel-sync.patch; \
      fi \
   && npm ci \
   && npm --prefix ui ci \

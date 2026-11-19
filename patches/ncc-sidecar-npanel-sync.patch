@@ -1,0 +1,652 @@
+diff --git a/src/npanel-admins.js b/src/npanel-admins.js
+new file mode 100644
+index 0000000..bb9aef1
+--- /dev/null
++++ b/src/npanel-admins.js
+@@ -0,0 +1,238 @@
++/* global Buffer */
++/**
++ * Keep npanel's administrator list in step with the NCC node admin list.
++ *
++ * The panel's admin list lives in the sidecar database; npanel keeps its own
++ * `users` table and cannot read the sidecar's. The panel used to update only
++ * the sidecar, so a key added from the GUI could open the NCC panel but not
++ * npanel. This module bridges the two with npanel's own dashboard API.
++ *
++ * Calls go to npanel's loopback HTTP listener with the operator key's NIP-98
++ * signature. npanel routes the dashboard by Host header, so the request must
++ * carry npanel's configured `dashboard_host` (the bundle sets it to
++ * PUBLIC_IPV4) rather than the loopback address. Node's `fetch` overrides a
++ * custom Host header, which is why this uses `node:http` directly.
++ *
++ * Nothing here throws: a failed sync returns a structured result so a npanel
++ * outage cannot undo or block a change to the node's admin list.
++ */
++
++import http from 'node:http';
++import { createHash } from 'node:crypto';
++
++import { finalizeEvent } from 'nostr-tools/pure';
++
++const DEFAULT_URL = 'http://127.0.0.1:3200';
++const REQUEST_TIMEOUT_MS = 4000;
++const HOST_PATTERN = /^[A-Za-z0-9.[\]:-]+$/;
++const NIP98_KIND = 27235;
++
++/**
++ * Resolve the npanel endpoint from the environment.
++ *
++ * `NCC_NPANEL_URL` is the loopback listener (the sidecar uses host
++ * networking). `NCC_NPANEL_HOST` is what npanel believes its dashboard host
++ * is; it becomes the Host header and the NIP-98 `u` origin.
++ */
++export function npanelTarget(env = process.env) {
++  const host = String(env.NCC_NPANEL_HOST || '').trim();
++  if (!host || !HOST_PATTERN.test(host)) return null;
++
++  let url;
++  try {
++    url = new URL(String(env.NCC_NPANEL_URL || DEFAULT_URL));
++  } catch {
++    return null;
++  }
++  // The listener is a plain-HTTP loopback port. Supporting TLS here would
++  // mean validating npanel's own certificate for no benefit.
++  if (url.protocol !== 'http:') return null;
++
++  return {
++    host,
++    hostname: url.hostname,
++    port: Number(url.port || 80),
++  };
++}
++
++function nip98Header(secretKey, url, method, payload) {
++  const tags = [['u', url], ['method', method]];
++  if (payload !== null) {
++    tags.push(['payload', createHash('sha256').update(payload).digest('hex')]);
++  }
++  const event = finalizeEvent({
++    kind: NIP98_KIND,
++    created_at: Math.floor(Date.now() / 1000),
++    tags,
++    content: '',
++  }, secretKey);
++  return `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`;
++}
++
++function request(target, secretKey, path, { method = 'GET', body = null } = {}) {
++  const payload = body === null ? null : JSON.stringify(body);
++  const url = `http://${target.host}${path}`;
++  const authorization = nip98Header(secretKey, url, method, payload);
++
++  return new Promise((resolve, reject) => {
++    const request = http.request({
++      hostname: target.hostname,
++      port: target.port,
++      path,
++      method,
++      headers: {
++        Host: target.host,
++        Authorization: authorization,
++        Accept: 'application/json',
++        ...(payload === null ? {} : {
++          'Content-Type': 'application/json',
++          'Content-Length': Buffer.byteLength(payload),
++        }),
++      },
++    }, (response) => {
++      const chunks = [];
++      response.on('data', (chunk) => chunks.push(chunk));
++      response.on('error', reject);
++      response.on('end', () => {
++        const text = Buffer.concat(chunks).toString('utf8');
++        let parsed = null;
++        try {
++          parsed = text ? JSON.parse(text) : null;
++        } catch {
++          // A proxy or an older npanel may answer with HTML; the status is
++          // still useful, so keep the body as text.
++        }
++        resolve({ status: response.statusCode || 0, body: parsed, text });
++      });
++    });
++
++    request.setTimeout(REQUEST_TIMEOUT_MS, () => {
++      request.destroy(new Error('npanel request timed out'));
++    });
++    request.on('error', reject);
++    if (payload !== null) request.write(payload);
++    request.end();
++  });
++}
++
++function detail(response) {
++  const message = response.body && typeof response.body.error === 'string'
++    ? response.body.error
++    : '';
++  return message || `npanel returned HTTP ${response.status}`;
++}
++
++function describeResponse(response) {
++  if (response.status === 401) {
++    return `npanel rejected the operator key's signature (${detail(response)})`;
++  }
++  if (response.status === 403) {
++    return 'the node operator key is not an npanel admin';
++  }
++  if (response.status === 404) {
++    return `npanel did not serve its users API (${detail(response)})`;
++  }
++  return detail(response);
++}
++
++function describeError(error) {
++  if (error && error.code === 'ECONNREFUSED') {
++    return 'npanel is not reachable on its loopback port';
++  }
++  if (error && /timed out/i.test(String(error.message))) {
++    return 'npanel did not answer in time';
++  }
++  return `npanel request failed: ${error instanceof Error ? error.message : String(error)}`;
++}
++
++function failed(error, configured = true) {
++  return { configured, synced: false, role: null, error };
++}
++
++function unavailable(error, configured = true) {
++  return { configured, available: false, roles: {}, error };
++}
++
++/**
++ * Make a pubkey an npanel administrator. Idempotent: npanel answers 409 when
++ * the user already exists, and the role update then promotes them.
++ */
++export async function ensureNpanelAdmin(pubkey, { secretKey, env = process.env } = {}) {
++  const target = npanelTarget(env);
++  if (!target) return failed('npanel admin sync is not configured', false);
++  if (!secretKey) return failed('the node has no signing key for npanel');
++
++  try {
++    const created = await request(target, secretKey, '/api/users', {
++      method: 'POST',
++      body: { pubkey },
++    });
++    if (created.status !== 200 && created.status !== 201 && created.status !== 409) {
++      return failed(describeResponse(created));
++    }
++
++    const updated = await request(target, secretKey, `/api/users/${pubkey}`, {
++      method: 'PATCH',
++      body: { role: 'admin' },
++    });
++    if (updated.status === 200 && updated.body?.user?.role === 'admin') {
++      return { configured: true, synced: true, role: 'admin', error: null };
++    }
++    return failed(describeResponse(updated));
++  } catch (error) {
++    return failed(describeError(error));
++  }
++}
++
++/**
++ * Drop npanel administrator rights when a key leaves the node admin list.
++ * The user is kept as `staff` rather than deleted so any sites granted to
++ * them keep working; an unknown user is already effectively removed.
++ */
++export async function demoteNpanelAdmin(pubkey, { secretKey, env = process.env } = {}) {
++  const target = npanelTarget(env);
++  if (!target) return failed('npanel admin sync is not configured', false);
++  if (!secretKey) return failed('the node has no signing key for npanel');
++
++  try {
++    const updated = await request(target, secretKey, `/api/users/${pubkey}`, {
++      method: 'PATCH',
++      body: { role: 'staff' },
++    });
++    if (updated.status === 200 && updated.body?.user?.role === 'staff') {
++      return { configured: true, synced: true, role: 'staff', error: null };
++    }
++    if (updated.status === 404 && /user not found/i.test(detail(updated))) {
++      // No npanel user to demote, which is the desired end state. A 404 for
++      // any other reason means the request never reached the dashboard.
++      return { configured: true, synced: true, role: null, error: null };
++    }
++    return failed(describeResponse(updated));
++  } catch (error) {
++    return failed(describeError(error));
++  }
++}
++
++/** Current npanel roles keyed by hex pubkey, for the panel's admin list. */
++export async function readNpanelRoles({ secretKey, env = process.env } = {}) {
++  const target = npanelTarget(env);
++  if (!target) return unavailable('npanel admin sync is not configured', false);
++  if (!secretKey) return unavailable('the node has no signing key for npanel');
++
++  try {
++    const response = await request(target, secretKey, '/api/users');
++    if (response.status !== 200 || !Array.isArray(response.body?.users)) {
++      return unavailable(describeResponse(response));
++    }
++    const roles = {};
++    for (const user of response.body.users) {
++      if (!user || typeof user.pubkey !== 'string') continue;
++      if (user.role === 'admin' || user.role === 'staff') {
++        roles[user.pubkey.toLowerCase()] = user.role;
++      }
++    }
++    return { configured: true, available: true, roles, error: null };
++  } catch (error) {
++    return unavailable(describeError(error));
++  }
++}
+diff --git a/src/routes/panel-admin.js b/src/routes/panel-admin.js
+index 3245251..dd9453d 100644
+--- a/src/routes/panel-admin.js
++++ b/src/routes/panel-admin.js
+@@ -16,6 +16,9 @@ import {
+   addAdmin, addLog, getAdmins, getConfig, getServices, removeAdmin,
+ } from '../db.js';
+ import { sendInviteDM } from '../dm.js';
++import {
++  demoteNpanelAdmin, ensureNpanelAdmin, readNpanelRoles,
++} from '../npanel-admins.js';
+ import { fromNsec, getPublicKey, toNpub } from 'ncc-06-js';
+ 
+ const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
+@@ -42,30 +45,60 @@ function admins() {
+   return getAdmins();
+ }
+ 
+-function adminList() {
++function adminList(roles = null) {
+   return getAdmins().map((admin) => ({
+     pubkey: admin.pubkey,
+     npub: nip19.npubEncode(admin.pubkey),
+     status: admin.status || 'active',
+     createdAt: admin.created_at || null,
++    // Omitted when npanel could not be read, so the panel does not show
++    // "no access" for every key just because npanel is down.
++    ...(roles === null ? {} : { npanelRole: roles[admin.pubkey] ?? null }),
+   }));
+ }
+ 
++/** The node identity signs both NCC records and npanel's admin API. */
++function signingSecret() {
++  try {
++    const services = getServices();
++    const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
++    return sidecar?.service_nsec ? fromNsec(sidecar.service_nsec) : null;
++  } catch (error) {
++    console.warn('[Panel] Could not read the node signing key:', error.message);
++    return null;
++  }
++}
++
++/**
++ * The admin list plus each key's npanel role. npanel is a separate
++ * application with its own users table; the panel shows both so a key that
++ * never reached npanel is visible instead of silently diverging.
++ */
++async function adminsWithNpanel(secretKey = signingSecret()) {
++  const npanel = await readNpanelRoles({ secretKey });
++  return {
++    admins: adminList(npanel.available ? npanel.roles : null),
++    npanel: {
++      configured: npanel.configured,
++      available: npanel.available,
++      error: npanel.error,
++    },
++  };
++}
++
+ /**
+  * Tell the new admin they were added. Best effort: the key is already
+  * usable, and the publish cycle sends the recovery payload separately.
+  */
+ async function notifyNewAdmin(pubkey) {
+   try {
+-    const services = getServices();
+-    const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
+-    if (!sidecar?.service_nsec) return false;
++    const secretKey = signingSecret();
++    if (!secretKey) return false;
+ 
+     const appConfig = getConfig('app_config') || {};
+     const relays = Array.isArray(appConfig.publication_relays) ? appConfig.publication_relays : [];
+     if (!relays.length) return false;
+ 
+-    const secretKey = fromNsec(sidecar.service_nsec);
+     const identity = toNpub(getPublicKey(secretKey));
+ 
+     return await sendInviteDM({
+@@ -84,7 +117,7 @@ async function notifyNewAdmin(pubkey) {
+ export default async function panelAdminRoutes(server) {
+   server.get('/ncc-api/admins', async (request, reply) => {
+     if (!authorizePanelRequest(request, reply)) return;
+-    return { admins: adminList() };
++    return adminsWithNpanel();
+   });
+ 
+   server.post('/ncc-api/admins', async (request, reply) => {
+@@ -98,18 +131,26 @@ export default async function panelAdminRoutes(server) {
+     }
+ 
+     const existing = getAdmins().find((admin) => admin.pubkey === pubkey);
+-    if (existing && existing.status !== 'pending') {
+-      return { added: false, inviteSent: false, admins: adminList() };
+-    }
++    const added = !existing || existing.status === 'pending';
++
++    // Re-posting an existing key is how the panel retries a npanel grant
++    // that failed earlier, so the sync runs even when nothing changed here.
++    if (added) addAdmin(pubkey, 'active');
++    const secretKey = signingSecret();
++    const npanel = await ensureNpanelAdmin(pubkey, { secretKey });
+ 
+-    addAdmin(pubkey, 'active');
+-    addLog('info', 'Admin key added from the NCC admin panel', {
++    addLog('info', added
++      ? 'Admin key added from the NCC admin panel'
++      : 'Admin key updated from the NCC admin panel', {
+       pubkey,
+       addedBy: caller.pubkey,
++      npanel: npanel.synced ? npanel.role : 'failed',
++      ...(npanel.error ? { npanelError: npanel.error } : {}),
+     });
+ 
+-    const inviteSent = await notifyNewAdmin(pubkey);
+-    return { added: true, inviteSent, admins: adminList() };
++    const inviteSent = added ? await notifyNewAdmin(pubkey) : false;
++    const list = await adminsWithNpanel(secretKey);
++    return { added, inviteSent, npanel, admins: list.admins };
+   });
+ 
+   server.delete('/ncc-api/admins/:pubkey', async (request, reply) => {
+@@ -135,11 +176,16 @@ export default async function panelAdminRoutes(server) {
+     }
+ 
+     removeAdmin(pubkey);
++    const secretKey = signingSecret();
++    const npanel = await demoteNpanelAdmin(pubkey, { secretKey });
+     addLog('info', 'Admin key removed from the NCC admin panel', {
+       pubkey,
+       removedBy: caller.pubkey,
++      npanel: npanel.synced ? (npanel.role ?? 'removed') : 'failed',
++      ...(npanel.error ? { npanelError: npanel.error } : {}),
+     });
+ 
+-    return { removed: true, admins: adminList() };
++    const remaining = await adminsWithNpanel(secretKey);
++    return { removed: true, npanel, admins: remaining.admins };
+   });
+ }
+diff --git a/test/panel-npanel-sync.test.js b/test/panel-npanel-sync.test.js
+new file mode 100644
+index 0000000..db907a0
+--- /dev/null
++++ b/test/panel-npanel-sync.test.js
+@@ -0,0 +1,261 @@
++/* global Buffer */
++import { test } from 'node:test';
++import assert from 'node:assert';
++import http from 'node:http';
++import { createHash } from 'node:crypto';
++
++import { generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools/pure';
++
++import {
++  demoteNpanelAdmin, ensureNpanelAdmin, npanelTarget, readNpanelRoles,
++} from '../src/npanel-admins.js';
++
++const DASHBOARD_HOST = '203.0.113.10';
++const secretKey = generateSecretKey();
++const operatorPubkey = getPublicKey(secretKey);
++const targetPubkey = getPublicKey(generateSecretKey());
++const secondPubkey = getPublicKey(generateSecretKey());
++
++function authProblem(request, body) {
++  const header = request.headers.authorization;
++  if (typeof header !== 'string') return 'missing authorization';
++  const match = /^Nostr\s+(\S+)$/i.exec(header);
++  if (!match) return 'malformed authorization';
++
++  let event;
++  try {
++    event = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
++  } catch {
++    return 'unreadable authorization';
++  }
++  if (!verifyEvent(event)) return 'bad signature';
++
++  const tags = new Map(event.tags.map(([name, value]) => [name, value]));
++  const expectedUrl = `http://${DASHBOARD_HOST}${request.url}`;
++  if (tags.get('u') !== expectedUrl) return `u tag ${tags.get('u')} != ${expectedUrl}`;
++  if (tags.get('method') !== request.method) return 'method tag mismatch';
++  if (body && tags.get('payload') !== createHash('sha256').update(body).digest('hex')) {
++    return 'payload tag mismatch';
++  }
++  return null;
++}
++
++/**
++ * A deliberately small stand-in for npanel's dashboard API. It records the
++ * exact requests and enforces the Host/NIP-98 contract the real binary has.
++ */
++async function startNpanel({ users = new Map(), reject = null } = {}) {
++  const calls = [];
++  const server = http.createServer((request, response) => {
++    let body = '';
++    request.on('data', (chunk) => { body += chunk; });
++    request.on('end', () => {
++      const send = (status, payload) => {
++        response.writeHead(status, { 'Content-Type': 'application/json' });
++        response.end(JSON.stringify(payload));
++      };
++      const problem = authProblem(request, body);
++      calls.push({
++        method: request.method,
++        path: request.url,
++        host: request.headers.host,
++        authError: problem,
++        body: body ? JSON.parse(body) : null,
++      });
++
++      if (request.headers.host !== DASHBOARD_HOST) {
++        send(404, { error: 'This domain is not configured.' });
++        return;
++      }
++      if (problem) {
++        send(401, { error: problem });
++        return;
++      }
++      if (reject) {
++        send(reject, { error: reject === 403 ? 'This account has no access to npanel. Ask an admin to add you.' : 'nope' });
++        return;
++      }
++
++      if (request.method === 'GET' && request.url === '/api/users') {
++        send(200, {
++          users: [...users].map(([pubkey, role]) => ({ pubkey, role })),
++        });
++        return;
++      }
++      if (request.method === 'POST' && request.url === '/api/users') {
++        const pubkey = JSON.parse(body).pubkey;
++        if (users.has(pubkey)) {
++          send(409, { error: 'That user already has access.' });
++          return;
++        }
++        users.set(pubkey, 'staff');
++        send(201, { user: { pubkey, role: 'staff' } });
++        return;
++      }
++      const match = /^\/api\/users\/([0-9a-f]{64})$/.exec(request.url);
++      if (request.method === 'PATCH' && match) {
++        const pubkey = match[1];
++        const role = JSON.parse(body).role;
++        if (!users.has(pubkey)) {
++          send(404, { error: 'User not found.' });
++          return;
++        }
++        const admins = [...users.values()].filter((value) => value === 'admin').length;
++        if (role === 'staff' && users.get(pubkey) === 'admin' && admins <= 1) {
++          send(409, { error: "That's the last admin. Promote someone else first." });
++          return;
++        }
++        users.set(pubkey, role);
++        send(200, { user: { pubkey, role } });
++        return;
++      }
++      send(404, { error: 'User not found.' });
++    });
++  });
++
++  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
++  const env = {
++    NCC_NPANEL_URL: `http://127.0.0.1:${server.address().port}`,
++    NCC_NPANEL_HOST: DASHBOARD_HOST,
++  };
++  return { server, calls, users, env, close: () => new Promise((resolve) => server.close(resolve)) };
++}
++
++test('npanel target needs a dashboard host and a loopback http URL', () => {
++  assert.deepStrictEqual(
++    npanelTarget({ NCC_NPANEL_HOST: '203.0.113.10' }),
++    { host: '203.0.113.10', hostname: '127.0.0.1', port: 3200 },
++  );
++  assert.strictEqual(npanelTarget({}), null);
++  assert.strictEqual(npanelTarget({ NCC_NPANEL_HOST: 'host/path' }), null);
++  assert.strictEqual(npanelTarget({ NCC_NPANEL_HOST: 'host', NCC_NPANEL_URL: 'https://127.0.0.1:3200' }), null);
++  assert.strictEqual(npanelTarget({ NCC_NPANEL_HOST: 'host', NCC_NPANEL_URL: 'nonsense' }), null);
++});
++
++test('A new npanel user is created and promoted to admin', async () => {
++  const npanel = await startNpanel();
++  try {
++    const result = await ensureNpanelAdmin(targetPubkey, { secretKey, env: npanel.env });
++    assert.deepStrictEqual(result, { configured: true, synced: true, role: 'admin', error: null });
++    assert.strictEqual(npanel.users.get(targetPubkey), 'admin');
++
++    const [created, promoted] = npanel.calls;
++    assert.strictEqual(created.method, 'POST');
++    assert.deepStrictEqual(created.body, { pubkey: targetPubkey });
++    assert.strictEqual(created.host, DASHBOARD_HOST);
++    assert.strictEqual(created.authError, null);
++    assert.strictEqual(promoted.method, 'PATCH');
++    assert.deepStrictEqual(promoted.body, { role: 'admin' });
++    assert.strictEqual(promoted.authError, null);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('An existing npanel staff user is promoted instead of duplicated', async () => {
++  const npanel = await startNpanel({ users: new Map([[targetPubkey, 'staff']]) });
++  try {
++    const result = await ensureNpanelAdmin(targetPubkey, { secretKey, env: npanel.env });
++    assert.strictEqual(result.synced, true);
++    assert.strictEqual(npanel.users.get(targetPubkey), 'admin');
++    assert.deepStrictEqual(npanel.calls.map((call) => call.method), ['POST', 'PATCH']);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('A npanel rejection is reported without throwing', async () => {
++  const npanel = await startNpanel({ reject: 403 });
++  try {
++    const result = await ensureNpanelAdmin(targetPubkey, { secretKey, env: npanel.env });
++    assert.strictEqual(result.synced, false);
++    assert.match(result.error, /not an npanel admin/);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('An unreachable npanel is reported without throwing', async () => {
++  const npanel = await startNpanel();
++  const env = npanel.env;
++  await npanel.close();
++  const result = await ensureNpanelAdmin(targetPubkey, { secretKey, env });
++  assert.strictEqual(result.synced, false);
++  assert.match(result.error, /not reachable/);
++});
++
++test('Removing a node admin demotes the npanel user to staff', async () => {
++  const npanel = await startNpanel({
++    users: new Map([[operatorPubkey, 'admin'], [targetPubkey, 'admin']]),
++  });
++  try {
++    const result = await demoteNpanelAdmin(targetPubkey, { secretKey, env: npanel.env });
++    assert.deepStrictEqual(result, { configured: true, synced: true, role: 'staff', error: null });
++    assert.strictEqual(npanel.users.get(targetPubkey), 'staff');
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('Demoting a key with no npanel user succeeds', async () => {
++  const npanel = await startNpanel({ users: new Map([[operatorPubkey, 'admin']]) });
++  try {
++    const result = await demoteNpanelAdmin(targetPubkey, { secretKey, env: npanel.env });
++    assert.deepStrictEqual(result, { configured: true, synced: true, role: null, error: null });
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('The last npanel admin cannot be demoted, and that is reported', async () => {
++  const npanel = await startNpanel({ users: new Map([[targetPubkey, 'admin']]) });
++  try {
++    const result = await demoteNpanelAdmin(targetPubkey, { secretKey, env: npanel.env });
++    assert.strictEqual(result.synced, false);
++    assert.match(result.error, /last admin/);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('The npanel role map is read for the admin list', async () => {
++  const npanel = await startNpanel({
++    users: new Map([[operatorPubkey, 'admin'], [secondPubkey, 'staff']]),
++  });
++  try {
++    const result = await readNpanelRoles({ secretKey, env: npanel.env });
++    assert.strictEqual(result.available, true);
++    assert.deepStrictEqual(result.roles, {
++      [operatorPubkey]: 'admin',
++      [secondPubkey]: 'staff',
++    });
++    assert.strictEqual(npanel.calls[0].method, 'GET');
++    assert.strictEqual(npanel.calls[0].authError, null);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('An unconfigured node reports npanel as absent rather than failing', async () => {
++  const result = await readNpanelRoles({ secretKey, env: {} });
++  assert.deepStrictEqual(result, {
++    configured: false,
++    available: false,
++    roles: {},
++    error: 'npanel admin sync is not configured',
++  });
++  const sync = await ensureNpanelAdmin(targetPubkey, { secretKey, env: {} });
++  assert.strictEqual(sync.configured, false);
++  assert.strictEqual(sync.synced, false);
++});
++
++test('A missing signing key is reported, not thrown', async () => {
++  const npanel = await startNpanel();
++  try {
++    const result = await ensureNpanelAdmin(targetPubkey, { secretKey: null, env: npanel.env });
++    assert.strictEqual(result.synced, false);
++    assert.match(result.error, /no signing key/);
++  } finally {
++    await npanel.close();
++  }
++});

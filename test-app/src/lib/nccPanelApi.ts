@@ -23,11 +23,28 @@ import {
 } from './nccPanel';
 import type { NostrEvent } from 'nostr-tools';
 
+export type PanelNpanelRole = 'admin' | 'staff';
+
+/**
+ * The node's admin list is separate from npanel's own users table. The
+ * sidecar mirrors changes into npanel and reports how that went, so a
+ * partial success can be shown instead of silently diverging.
+ */
+export interface PanelNpanelStatus {
+  configured: boolean;
+  available?: boolean;
+  synced?: boolean;
+  role?: PanelNpanelRole | null;
+  error: string | null;
+}
+
 export interface PanelAdmin {
   pubkey: string;
   npub: string;
   status: string;
   createdAt: string | null;
+  /** Omitted when npanel could not be read, so "no access" is never guessed. */
+  npanelRole?: PanelNpanelRole | null;
 }
 
 export interface PanelAdminResult {
@@ -35,6 +52,7 @@ export interface PanelAdminResult {
   added?: boolean;
   removed?: boolean;
   inviteSent?: boolean;
+  npanel?: PanelNpanelStatus;
 }
 
 export interface PanelIdentity {
@@ -174,11 +192,29 @@ function readAdmin(value: unknown): PanelAdmin | null {
   if (typeof record.pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(record.pubkey)) return null;
   if (typeof record.npub !== 'string' || !record.npub.startsWith('npub1')) return null;
 
+  const npanelRole = record.npanelRole === 'admin' || record.npanelRole === 'staff'
+    ? record.npanelRole
+    : record.npanelRole === null ? null : undefined;
+
   return {
     pubkey: record.pubkey.toLowerCase(),
     npub: record.npub,
     status: typeof record.status === 'string' ? record.status : 'active',
     createdAt: typeof record.createdAt === 'string' ? record.createdAt : null,
+    ...(npanelRole === undefined ? {} : { npanelRole }),
+  };
+}
+
+function readNpanelStatus(value: unknown): PanelNpanelStatus | undefined {
+  const record = objectValue(value);
+  if (!record) return undefined;
+
+  return {
+    configured: record.configured === true,
+    available: typeof record.available === 'boolean' ? record.available : undefined,
+    synced: typeof record.synced === 'boolean' ? record.synced : undefined,
+    role: record.role === 'admin' || record.role === 'staff' ? record.role : null,
+    error: stringOrNull(record.error),
   };
 }
 
@@ -195,12 +231,14 @@ function readResult(payload: unknown): PanelAdminResult {
   const admins = record.admins
     .map(readAdmin)
     .filter((admin): admin is PanelAdmin => admin !== null);
+  const npanel = readNpanelStatus(record.npanel);
 
   return {
     admins,
     added: record.added === true,
     removed: record.removed === true,
     inviteSent: record.inviteSent === true,
+    ...(npanel ? { npanel } : {}),
   };
 }
 
@@ -1288,4 +1326,4 @@ export async function loadPanelMetrics(
 }
 
 // Exported for the parser tests; the public API above is the supported surface.
-export { readCatalogue, readCatalogueEntry, readCatalogueService, readMetrics };
+export { readCatalogue, readCatalogueEntry, readCatalogueService, readMetrics, readResult };

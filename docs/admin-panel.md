@@ -20,7 +20,10 @@ signer on another device.
 
 The operator key opens the panel directly. Any other key is checked against
 the node's admin list in the sidecar, so an operator can add another admin
-from the **Admins** section. Admin management, the editable **Settings**
+from the **Admins** section. Adding a key also makes it an npanel
+administrator, and removing one demotes its npanel role to staff; the Admins
+table shows both states and can repair a key that never reached npanel. Admin
+management, the editable **Settings**
 (public identity, publication relays, publication cadence), the **Installed**
 service controls and the **Apps** catalogue's publisher trust list are the
 write actions in the panel; all are authorized server-side by a NIP-98
@@ -41,10 +44,12 @@ The sidecar keeps the admin list and the node settings, and listens on host
 loopback only. Caddy publishes it at `/ncc-api/*` on the admin listener and
 verifies nothing itself: the sidecar checks each request.
 
-- `GET /ncc-api/admins` — list admins
-- `POST /ncc-api/admins` with `{"npub": "npub1…"}` — add an admin and
-  send a best-effort invite DM
-- `DELETE /ncc-api/admins/<pubkey or npub>` — remove an admin
+- `GET /ncc-api/admins` — list admins and their npanel roles
+- `POST /ncc-api/admins` with `{"npub": "npub1…"}` — add an admin, send a
+  best-effort invite DM and grant npanel admin access (posting an existing key
+  retries that grant)
+- `DELETE /ncc-api/admins/<pubkey or npub>` — remove an admin and demote its
+  npanel role to staff
 - `GET /ncc-api/settings` — read relays, identity, cadence and publication state
 - `GET /ncc-api/records` — query the node's published NCC records from its relays
 - `GET /ncc-api/services` — health, probe, container and publication state
@@ -81,6 +86,30 @@ ignores a trailing slash and tolerates a proxy that omits the default port,
 so a TLS-terminating proxy in front of Caddy does not break the signature. A
 mismatch now reports both the signed URL and the URLs the sidecar expected,
 which is what made the mobile "url tag does not match" failure diagnosable.
+
+### Npanel administrator access
+
+npanel keeps its own `users` table, so a key on the sidecar admin list is not
+automatically able to open the npanel dashboard. The sidecar bridges the two
+by calling npanel's dashboard API on host loopback, signing with the operator
+key's NIP-98 event and sending `Host: <PUBLIC_IPV4>` (npanel routes its
+dashboard by Host, and its `dashboard_host` is `PUBLIC_IPV4`):
+
+- adding a node admin creates the npanel user if needed and sets `role=admin`;
+- removing a node admin sets `role=staff` instead of deleting the user, so
+  sites already granted to that key keep working;
+- `GET /ncc-api/admins` returns each key's `npanelRole` and whether npanel
+  could be read, so the table shows **Npanel admin**, **Npanel staff** or
+  **No npanel access**, with a **Grant** action for a key that is missing
+  admin rights.
+
+The node's admin list is always changed first. If npanel is down or rejects
+the operator key, the panel keeps the change and shows the reason as a
+warning; nothing is rolled back. `NCC_NPANEL_URL` (default
+`http://127.0.0.1:3200`) and `NCC_NPANEL_HOST` (Compose sets it to
+`PUBLIC_IPV4`) configure the call. A node that does not run npanel reports
+`configured: false` and skips the sync. The operator key must itself be an
+npanel admin, which first-run provisioning arranges with `make-admin`.
 
 ### Settings writes
 
@@ -252,6 +281,7 @@ protocol handler rewrites it to a public origin that the sidecar's CORS policy
 rejects), and forwards the original `Host` so the sidecar can rebuild the
 signed URL. The routes come from
 `patches/ncc-sidecar-panel-admin-api.patch`,
+`patches/ncc-sidecar-npanel-sync.patch`,
 `patches/ncc-sidecar-panel-services.patch` and
 `patches/ncc-sidecar-npack.patch`, applied when the sidecar image is
 built. A sidecar image without the patches answers 401/404, and the panel

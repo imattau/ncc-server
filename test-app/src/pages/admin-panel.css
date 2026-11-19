@@ -110,3 +110,18 @@
 .resource-track i{display:block;height:100%;border-radius:4px;background:#9bc75f}
 .resource-foot{font-size:9px;color:#929b94}
 @media(max-width:760px){.resource-grid{grid-template-columns:1fr}}
+.admin-access{display:grid;gap:4px;min-width:0}
+.npanel-state{display:flex;align-items:center;gap:5px;font-size:8px;color:#8d978f;white-space:nowrap}
+.npanel-state:before{content:"";width:5px;height:5px;border-radius:50%;background:#c6cec5;flex:none}
+.npanel-state.admin{color:#628169}
+.npanel-state.admin:before{background:#6cb27c}
+.npanel-state.staff{color:#a37d44}
+.npanel-state.staff:before{background:#d6a34d}
+.npanel-state.none{color:#9aa39b}
+.npanel-state.none:before{background:#c9d0c6}
+.npanel-state button{border:0;background:none;padding:0 0 0 2px;color:#58724b;font-size:8px;font-weight:700;text-decoration:underline;text-underline-offset:2px}
+.npanel-state button:disabled{color:#a9b2a8;text-decoration:none}
+.invite-warning{display:flex;align-items:flex-start;gap:6px;margin-top:10px;padding:8px 9px;border-radius:6px;background:#fdf5e8;color:#9a722f;font-size:9px;line-height:1.5}
+.invite-warning svg{flex:none;margin-top:1px}
+.invite-warning button{margin-left:auto;border:0;background:none;color:#8a6526;font-size:9px;font-weight:700;white-space:nowrap}
+@media(max-width:760px){.admin-access{grid-column:2;grid-row:1}.admin-access .admin-state{font-size:8px}.npanel-state{font-size:7px}}

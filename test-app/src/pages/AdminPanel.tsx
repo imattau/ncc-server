@@ -57,6 +57,7 @@ import {
   type PanelCatalogueEntry,
   type PanelCatalogueService,
   type PanelMetrics,
+  type PanelNpanelStatus,
   type PanelServiceHealth,
   type PanelServiceLogs,
   type PanelServiceStatus,
@@ -173,6 +174,11 @@ function relativeTime(unixSeconds: number): string {
   if (diff < 3600) return `${Math.round(diff / 60)} min ago`;
   if (diff < 86400) return `${Math.round(diff / 3600)} hr ago`;
   return `${Math.round(diff / 86400)} d ago`;
+}
+
+function npanelProblem(status?: PanelNpanelStatus | null): string {
+  const reason = status?.error?.trim();
+  return `Npanel was not updated${reason ? `: ${reason}` : ''}.`;
 }
 
 function durationLabel(seconds: number): string {
@@ -694,6 +700,9 @@ export default function AdminPanel() {
   const [inviteNpub, setInviteNpub] = useState('');
   const [inviteError, setInviteError] = useState('');
   const [inviteDone, setInviteDone] = useState('');
+  const [inviteWarning, setInviteWarning] = useState('');
+  const [npanelStatus, setNpanelStatus] = useState<PanelNpanelStatus | null>(null);
+  const [grantingPubkey, setGrantingPubkey] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const [settings, setSettings] = useState<PanelSettings | null>(null);
@@ -799,6 +808,7 @@ export default function AdminPanel() {
       .then((result) => {
         if (controller.signal.aborted) return;
         setAdmins(result.admins);
+        setNpanelStatus(result.npanel ?? null);
         setAdminsState('ready');
         setVerifyError('');
         setVerified({ pubkey: signerPubkey, access: 'admin' });
@@ -828,6 +838,7 @@ export default function AdminPanel() {
       .then((result) => {
         if (controller.signal.aborted) return;
         setAdmins(result.admins);
+        setNpanelStatus(result.npanel ?? null);
         setAdminsState('ready');
       })
       .catch((error: unknown) => {
@@ -1234,6 +1245,7 @@ export default function AdminPanel() {
     event.preventDefault();
     setInviteError('');
     setInviteDone('');
+    setInviteWarning('');
 
     const value = inviteNpub.trim();
     if (!pubkeyFromAdminInput(value)) {
@@ -1249,18 +1261,59 @@ export default function AdminPanel() {
     try {
       const result = await addPanelAdmin(apiBase, user.signer, value);
       setAdmins(result.admins);
+      setNpanelStatus(result.npanel ?? null);
       setAdminsState('ready');
       setInviteNpub('');
       setConfirmRemove(null);
-      const message = result.added
+
+      const added = result.added
         ? `Key added${result.inviteSent ? ' and the sidecar sent an invite' : ''}.`
         : 'That key is already an admin.';
-      setInviteDone(message);
-      notify(message);
+      const npanel = result.npanel;
+      if (npanel?.configured && npanel.synced === false) {
+        setInviteDone(added);
+        setInviteWarning(npanelProblem(npanel));
+        notify('Admin saved; npanel access was not granted');
+      } else {
+        const message = npanel?.synced
+          ? `${added} Npanel admin access granted.`
+          : added;
+        setInviteDone(message);
+        notify(message);
+      }
     } catch (error) {
       setInviteError(error instanceof Error ? error.message : 'Could not add the key');
     } finally {
       setAdminBusy(false);
+    }
+  };
+
+  // Re-posting an existing admin is how a npanel grant is retried; the
+  // sidecar skips the duplicate invite and only runs the sync.
+  const handleGrantNpanel = async (admin: PanelAdmin) => {
+    if (!apiBase || !user) return;
+
+    setAdminBusy(true);
+    setGrantingPubkey(admin.pubkey);
+    setInviteError('');
+    setInviteDone('');
+    setInviteWarning('');
+    try {
+      const result = await addPanelAdmin(apiBase, user.signer, admin.npub);
+      setAdmins(result.admins);
+      setNpanelStatus(result.npanel ?? null);
+      setAdminsState('ready');
+      if (result.npanel?.synced) {
+        setInviteDone('Npanel admin access granted.');
+        notify('Npanel admin access granted');
+      } else {
+        setInviteWarning(npanelProblem(result.npanel));
+      }
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : 'Could not grant npanel access');
+    } finally {
+      setAdminBusy(false);
+      setGrantingPubkey(null);
     }
   };
 
@@ -1271,18 +1324,32 @@ export default function AdminPanel() {
       setConfirmRemove(pubkey);
       setInviteError('');
       setInviteDone('');
+      setInviteWarning('');
       notify('Click remove again to confirm');
       return;
     }
 
     setAdminBusy(true);
     setInviteError('');
+    setInviteDone('');
+    setInviteWarning('');
     try {
       const result = await removePanelAdmin(apiBase, user.signer, pubkey);
       setAdmins(result.admins);
+      setNpanelStatus(result.npanel ?? null);
       setAdminsState('ready');
-      setInviteDone('Admin key removed.');
-      notify('Admin key removed');
+      const npanel = result.npanel;
+      if (npanel?.configured && npanel.synced === false) {
+        setInviteDone('Admin key removed.');
+        setInviteWarning(npanelProblem(npanel));
+        notify('Admin removed; npanel access was not changed');
+      } else {
+        const message = npanel?.synced && npanel.role === 'staff'
+          ? 'Admin key removed. Npanel role set to staff.'
+          : 'Admin key removed.';
+        setInviteDone(message);
+        notify('Admin key removed');
+      }
     } catch (error) {
       setInviteError(error instanceof Error ? error.message : 'Could not remove the key');
     } finally {
@@ -2311,7 +2378,7 @@ export default function AdminPanel() {
                 <div>
                   <div className="eyebrow">ACCESS CONTROL <span>·</span> NOSTR KEYS</div>
                   <h1>People who run this node.</h1>
-                  <p>Admins sign in with their Nostr key. The sidecar stores the list, and every change is signed by you.</p>
+                  <p>Admins sign in with their Nostr key. The node stores the list, and every change is signed by you.</p>
                 </div>
               </div>
 
@@ -2321,7 +2388,7 @@ export default function AdminPanel() {
                   <strong>{apiAvailable ? 'Access follows the node admin list.' : 'Admin management is inactive on this node.'}</strong>
                   <p>
                     {apiAvailable
-                      ? 'Each request is authorized by a NIP-98 signature from your signer; the sidecar verifies it against the active admins for this node.'
+                      ? 'Each request is authorized by a NIP-98 signature from your signer. Adding or removing a key also updates its npanel administrator role.'
                       : 'This node does not serve /ncc-api yet. Deploy the current sidecar and Caddy images to manage keys from this panel.'}
                   </p>
                 </div>
@@ -2332,7 +2399,7 @@ export default function AdminPanel() {
                 <div className="section-heading">
                   <div>
                     <h2>Node administrators <span className="count-chip">{adminRows.length}</span></h2>
-                    <p>{admins ? 'Keys the sidecar accepts for this node.' : 'Verified operator for this node.'}</p>
+                    <p>{admins ? 'Keys that can open this panel and administer npanel.' : 'Verified operator for this node.'}</p>
                   </div>
                   {adminsLoading && (
                     <span className="admin-loading" role="status"><span className="button-spinner dark" /> Reading the admin list…</span>
@@ -2345,6 +2412,13 @@ export default function AdminPanel() {
                     const owner = Boolean(operatorPubkey && admin.pubkey === operatorPubkey);
                     const removable = Boolean(!owner && admins && apiAvailable);
                     const confirm = confirmRemove === admin.pubkey;
+                    const npanelRole = admin.npanelRole;
+                    const canGrant = Boolean(
+                      npanelRole !== undefined
+                      && npanelRole !== 'admin'
+                      && !owner
+                      && canManageAdmins,
+                    );
 
                     return (
                       <div className="admin-table-row" key={admin.pubkey || admin.npub}>
@@ -2363,8 +2437,34 @@ export default function AdminPanel() {
                             </small>
                           </span>
                         </div>
-                        <span className={`admin-state ${admin.status === 'pending' ? 'pending' : ''}`}>
-                          <i />{owner ? 'Owner · verified' : admin.status === 'pending' ? 'Invited' : 'Admin'}
+                        <span className="admin-access">
+                          <span className={`admin-state ${admin.status === 'pending' ? 'pending' : ''}`}>
+                            <i />{owner ? 'Owner · verified' : admin.status === 'pending' ? 'Invited' : 'Admin'}
+                          </span>
+                          {npanelRole !== undefined && (
+                            <span
+                              className={`npanel-state ${npanelRole ?? 'none'}`}
+                              title={owner && npanelRole !== 'admin'
+                                ? 'Make the operator key an npanel admin on the host; the panel cannot bootstrap that itself'
+                                : undefined}
+                            >
+                              {npanelRole === 'admin'
+                                ? 'Npanel admin'
+                                : npanelRole === 'staff'
+                                  ? 'Npanel staff'
+                                  : 'No npanel access'}
+                              {canGrant && (
+                                <button
+                                  type="button"
+                                  disabled={adminBusy}
+                                  title="Grant npanel administrator access to this key"
+                                  onClick={() => handleGrantNpanel(admin)}
+                                >
+                                  {grantingPubkey === admin.pubkey ? 'Granting…' : 'Grant'}
+                                </button>
+                              )}
+                            </span>
+                          )}
                         </span>
                         <span className="admin-added">{owner ? 'Operator key' : addedLabel(admin.createdAt)}</span>
                         {removable ? (
@@ -2394,6 +2494,27 @@ export default function AdminPanel() {
                   })}
                 </div>
 
+                {npanelStatus?.configured && npanelStatus.available === false && (
+                  <div className="invite-warning" role="status">
+                    <CircleAlert size={13} />
+                    <span>
+                      Npanel access could not be read: {npanelStatus.error ?? 'npanel did not answer'}.
+                      Keys can still be managed here.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdmins(null);
+                        setAdminsState('idle');
+                        setAdminsError('');
+                        setAdminsToken((value) => value + 1);
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
                 {adminsState === 'error' && (
                   <div className="invite-error" role="alert">
                     <CircleAlert size={14} />
@@ -2419,7 +2540,7 @@ export default function AdminPanel() {
                     <h2>Add an admin</h2>
                     <p>
                       {apiAvailable
-                        ? 'Allow another Nostr key to open this panel and manage the node.'
+                        ? 'Allow another Nostr key to open this panel, manage the node and administer npanel.'
                         : 'Adding another key needs the sidecar admin API, which this node does not serve yet.'}
                     </p>
                   </div>
@@ -2431,7 +2552,12 @@ export default function AdminPanel() {
                     <input
                       id="admin-npub"
                       value={inviteNpub}
-                      onChange={(event) => { setInviteNpub(event.target.value); setInviteDone(''); setInviteError(''); }}
+                      onChange={(event) => {
+                        setInviteNpub(event.target.value);
+                        setInviteDone('');
+                        setInviteError('');
+                        setInviteWarning('');
+                      }}
                       placeholder="npub1…"
                       autoComplete="off"
                       spellCheck={false}
@@ -2449,6 +2575,9 @@ export default function AdminPanel() {
                   {inviteError && (
                     <p className="invite-error" role="alert"><CircleAlert size={12} /> {inviteError}</p>
                   )}
+                  {inviteWarning && (
+                    <p className="invite-warning" role="status"><CircleAlert size={12} /> {inviteWarning}</p>
+                  )}
                   {inviteDone && (
                     <p className="invite-success"><Check size={12} /> {inviteDone}</p>
                   )}
@@ -2460,7 +2589,7 @@ export default function AdminPanel() {
                 <CircleHelp size={15} />
                 <span>
                   {apiAvailable
-                    ? 'An admin key works only while it stays in the sidecar list. Removing a key takes effect immediately.'
+                    ? 'An admin key works only while it stays in the node admin list. Removing a key takes effect immediately and demotes its npanel role to staff.'
                     : 'This panel reads the operator key from the node config. Admin management stays inactive until the node serves /ncc-api.'}
                 </span>
               </div>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cadenceProblem,
+  readResult,
   relayInputToUrl,
   resolvePanelApiBase,
   type PanelCadence,
@@ -69,5 +70,61 @@ describe('cadenceProblem', () => {
       .toContain('Locator TTL');
     expect(cadenceProblem(cadence({ refreshIntervalMinutes: 2880, ncc05TtlHours: 60, ncc02ExpiryDays: 2 })))
       .toContain('Service record expiry');
+  });
+});
+
+describe('readResult npanel status', () => {
+  const pubkey = 'a'.repeat(64);
+  const admin = (extra: Record<string, unknown> = {}) => ({
+    pubkey,
+    npub: 'npub1example',
+    status: 'active',
+    createdAt: null,
+    ...extra,
+  });
+
+  it('keeps npanel roles and a sync result', () => {
+    const result = readResult({
+      added: true,
+      inviteSent: true,
+      admins: [admin({ npanelRole: 'admin' })],
+      npanel: { configured: true, synced: true, role: 'admin', error: null },
+    });
+    expect(result.added).toBe(true);
+    expect(result.admins[0].npanelRole).toBe('admin');
+    expect(result.npanel).toEqual({
+      configured: true,
+      available: undefined,
+      synced: true,
+      role: 'admin',
+      error: null,
+    });
+  });
+
+  it('distinguishes a key without npanel access from an unknown role', () => {
+    const known = readResult({ admins: [admin({ npanelRole: null })] });
+    expect(known.admins[0]).toHaveProperty('npanelRole', null);
+
+    const unknown = readResult({ admins: [admin()] });
+    expect(unknown.admins[0]).not.toHaveProperty('npanelRole');
+  });
+
+  it('reads the list-level npanel availability and ignores bad roles', () => {
+    const result = readResult({
+      admins: [admin({ npanelRole: 'owner' })],
+      npanel: { configured: true, available: false, error: 'npanel is not reachable' },
+    });
+    expect(result.admins[0]).not.toHaveProperty('npanelRole');
+    expect(result.npanel).toEqual({
+      configured: true,
+      available: false,
+      synced: undefined,
+      role: null,
+      error: 'npanel is not reachable',
+    });
+  });
+
+  it('omits npanel when an older sidecar did not report it', () => {
+    expect(readResult({ admins: [] })).not.toHaveProperty('npanel');
   });
 });
