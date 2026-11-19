@@ -26,9 +26,10 @@ service controls and the **Apps** catalogue's publisher trust list are the
 write actions in the panel; all are authorized server-side by a NIP-98
 signature from the connected key (see below). The panel asks the sidecar to
 republish a record or restart a container; it never changes containers
-itself, and package installation stays a host command. Host metrics such as
-CPU and storage are still not collected, so the panel shows "not collected"
-rather than invented values.
+itself, and package installation stays a host command. Host CPU load, memory
+and disk are read from the node-agent and shown in the sidebar and on the
+overview; anything the agent cannot measure is shown as `unknown` rather than
+invented.
 
 NCC records are public, so gating the panel is a usability and honesty
 measure, not a confidentiality boundary. Every management action must go
@@ -48,6 +49,7 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/records` — query the node's published NCC records from its relays
 - `GET /ncc-api/services` — health, probe, container and publication state
 - `GET /ncc-api/services/<id>/logs?limit=200` — node events and container output
+- `GET /ncc-api/metrics` — host CPU, memory, disk and Docker usage
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
@@ -157,12 +159,34 @@ which briefly interrupts all three.
 
 The Docker socket is not mounted into the sidecar. A small **node-agent**
 companion container reuses the sidecar image, mounts the socket, and exposes
-only container state, recent logs and restart for containers labelled
-`com.docker.compose.project=ncc-bundle`. The sidecar calls it on host loopback
-with `NODE_AGENT_TOKEN`. The agent replies before restarting, so restarting
-Caddy cannot cut the response that is proxied through it. Without the agent,
-the page still shows probe and publication health and node logs; restart and
-container logs are disabled with an explanation.
+container state, recent logs and restart for containers labelled
+`com.docker.compose.project=ncc-bundle`, plus host CPU, memory and disk
+metrics. The sidecar calls it on host loopback with `NODE_AGENT_TOKEN`. The
+agent replies before restarting, so restarting Caddy cannot cut the response
+that is proxied through it. Without the agent, the page still shows probe and
+publication health and node logs; restart, container logs and host metrics
+are disabled with an explanation.
+
+### Node metrics
+
+The sidebar **Storage** card and the overview's **Node resources** row show
+host CPU load, memory use and disk capacity. The node-agent collects them
+from sources it already has access to, with no extra mounts or privileges:
+
+- CPU: `/proc/loadavg` and a short `/proc/stat` sample, with the core count
+  from Docker's `/info`.
+- Memory: `/proc/meminfo` (`MemAvailable` where the kernel provides it).
+- Disk: `statfs('/')`, which in a container reports the overlay's backing
+  filesystem, i.e. the disk Docker stores containers on.
+- Docker data: image, container, volume and build-cache bytes from
+  `/system/df`, shown separately from the filesystem total.
+
+The sidecar serves the result at `GET /ncc-api/metrics` after the usual NIP-98
+check. Readings are taken when the panel opens and when **Refresh** is
+pressed, not on a timer: every read needs a fresh signature, and polling
+would make a NIP-46 signer prompt over and over. A host without the agent, or
+one where the agent cannot read a source, reports that field as `unknown`;
+the panel never fills in a number it did not receive.
 
 ### App catalogue
 

@@ -1,0 +1,211 @@
+diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
+index bb96999..466f5be 100644
+--- a/src/routes/panel-services.js
++++ b/src/routes/panel-services.js
+@@ -205,11 +205,11 @@ function probe(target, timeoutMs = PROBE_TIMEOUT_MS) {
+   });
+ }
+ 
+-async function agentRequest(path, { method = 'GET', body } = {}) {
++async function agentRequest(path, { method = 'GET', body, timeoutMs = AGENT_TIMEOUT_MS } = {}) {
+   if (!AGENT_TOKEN) throw new Error('Host control agent is not configured');
+ 
+   const controller = new AbortController();
+-  const timer = setTimeout(() => controller.abort(), AGENT_TIMEOUT_MS);
++  const timer = setTimeout(() => controller.abort(), timeoutMs);
+   try {
+     const response = await fetch(`${AGENT_URL}${path}`, {
+       method,
+@@ -331,6 +331,76 @@ function readLimit(value, fallback = 200) {
+   return Math.min(Math.max(parsed, 1), MAX_LOG_LINES);
+ }
+ 
++function numberOrNull(value, { min = null, max = null } = {}) {
++  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
++  if (min !== null && value < min) return null;
++  if (max !== null && value > max) return null;
++  return value;
++}
++
++function percentOrNull(value) {
++  return numberOrNull(value, { min: 0, max: 100 });
++}
++
++/**
++ * Normalise the node-agent's metrics payload. The agent is part of this
++ * stack, but the panel renders whatever it reports: a malformed or missing
++ * field becomes null so the UI can say "unknown" instead of showing a wrong
++ * number.
++ */
++export function readMetrics(value) {
++  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
++  const section = (entry) => (entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : null);
++  const host = section(record.host) ?? {};
++  const cpu = section(record.cpu);
++  const memory = section(record.memory);
++  const storage = section(record.storage);
++  const docker = section(record.docker);
++
++  const text = (entry) => (typeof entry === 'string' && entry.trim() ? entry : null);
++  const bytes = (entry) => numberOrNull(entry, { min: 0 });
++
++  return {
++    collectedAt: numberOrNull(record.collectedAt, { min: 0 }),
++    host: {
++      hostname: text(host.hostname),
++      kernel: text(host.kernel),
++      os: text(host.os),
++      dockerVersion: text(host.dockerVersion),
++      uptimeSeconds: numberOrNull(host.uptimeSeconds, { min: 0 }),
++    },
++    cpu: cpu ? {
++      cores: numberOrNull(cpu.cores, { min: 1 }),
++      load1: numberOrNull(cpu.load1, { min: 0 }),
++      load5: numberOrNull(cpu.load5, { min: 0 }),
++      load15: numberOrNull(cpu.load15, { min: 0 }),
++      usagePercent: percentOrNull(cpu.usagePercent),
++    } : null,
++    memory: memory ? {
++      totalBytes: bytes(memory.totalBytes),
++      availableBytes: bytes(memory.availableBytes),
++      usedBytes: bytes(memory.usedBytes),
++      usedPercent: percentOrNull(memory.usedPercent),
++    } : null,
++    storage: storage ? {
++      totalBytes: bytes(storage.totalBytes),
++      freeBytes: bytes(storage.freeBytes),
++      usedBytes: bytes(storage.usedBytes),
++      usedPercent: percentOrNull(storage.usedPercent),
++    } : null,
++    docker: docker ? {
++      imagesBytes: bytes(docker.imagesBytes),
++      containersBytes: bytes(docker.containersBytes),
++      volumesBytes: bytes(docker.volumesBytes),
++      buildCacheBytes: bytes(docker.buildCacheBytes),
++      totalBytes: bytes(docker.totalBytes),
++      images: numberOrNull(docker.images, { min: 0 }),
++      containers: numberOrNull(docker.containers, { min: 0 }),
++      volumes: numberOrNull(docker.volumes, { min: 0 }),
++    } : null,
++  };
++}
++
+ export default async function panelServicesRoutes(server) {
+   server.get('/ncc-api/services', async (request, reply) => {
+     if (!authorizePanelRequest(request, reply)) return;
+@@ -525,4 +595,36 @@ export default async function panelServicesRoutes(server) {
+       });
+     }
+   });
++
++  // Host CPU, memory and disk for the panel's Storage card and Overview.
++  // The node-agent is optional: when it is absent or has no token, this
++  // answers 200 with available:false so the page can say "unavailable"
++  // rather than failing to load.
++  server.get('/ncc-api/metrics', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    if (!AGENT_TOKEN) {
++      return {
++        available: false,
++        error: 'Host control agent is not configured',
++        metrics: null,
++      };
++    }
++
++    try {
++      // `/system/df` can take a few seconds on an image-heavy host, so allow
++      // more than the control routes' five-second budget.
++      const payload = await agentRequest('/v1/metrics', { timeoutMs: 10_000 });
++      return { available: true, error: null, metrics: readMetrics(payload) };
++    } catch (error) {
++      const message = error instanceof Error && error.message !== 'fetch failed'
++        ? error.message
++        : 'The host control agent is unreachable';
++      return {
++        available: false,
++        error: message,
++        metrics: null,
++      };
++    }
++  });
+ }
+diff --git a/test/panel-metrics.test.js b/test/panel-metrics.test.js
+new file mode 100644
+index 0000000..f9d83a5
+--- /dev/null
++++ b/test/panel-metrics.test.js
+@@ -0,0 +1,73 @@
++import { test } from 'node:test';
++import assert from 'node:assert';
++
++import { readMetrics } from '../src/routes/panel-services.js';
++
++const sample = {
++  collectedAt: 1_700_000_000,
++  host: {
++    hostname: 'node',
++    kernel: '6.8.0',
++    os: 'Ubuntu 24.04',
++    dockerVersion: '27.3.1',
++    uptimeSeconds: 86_400,
++  },
++  cpu: { cores: 8, load1: 0.4, load5: 0.6, load15: 0.8, usagePercent: 12.5 },
++  memory: {
++    totalBytes: 16_000,
++    availableBytes: 6_000,
++    usedBytes: 10_000,
++    usedPercent: 62.5,
++  },
++  storage: {
++    totalBytes: 100_000,
++    freeBytes: 25_000,
++    usedBytes: 75_000,
++    usedPercent: 75,
++  },
++  docker: {
++    imagesBytes: 1_000,
++    containersBytes: 200,
++    volumesBytes: 300,
++    buildCacheBytes: 400,
++    totalBytes: 1_900,
++    images: 12,
++    containers: 7,
++    volumes: 3,
++  },
++};
++
++test('Metrics: a complete payload is kept as reported', () => {
++  assert.deepStrictEqual(readMetrics(sample), sample);
++});
++
++test('Metrics: missing sections become null instead of zero', () => {
++  const metrics = readMetrics({ collectedAt: 1 });
++  assert.strictEqual(metrics.collectedAt, 1);
++  assert.strictEqual(metrics.host.hostname, null);
++  assert.strictEqual(metrics.cpu, null);
++  assert.strictEqual(metrics.memory, null);
++  assert.strictEqual(metrics.storage, null);
++  assert.strictEqual(metrics.docker, null);
++});
++
++test('Metrics: out-of-range percentages and negative sizes are rejected', () => {
++  const metrics = readMetrics({
++    cpu: { cores: 0, usagePercent: 120 },
++    memory: { totalBytes: -1, usedPercent: -4 },
++    storage: { totalBytes: 10, freeBytes: 4, usedPercent: 150 },
++  });
++  assert.strictEqual(metrics.cpu.cores, null);
++  assert.strictEqual(metrics.cpu.usagePercent, null);
++  assert.strictEqual(metrics.memory.totalBytes, null);
++  assert.strictEqual(metrics.memory.usedPercent, null);
++  assert.strictEqual(metrics.storage.usedPercent, null);
++});
++
++test('Metrics: non-numeric and non-object input is ignored', () => {
++  assert.doesNotThrow(() => readMetrics(null));
++  assert.strictEqual(readMetrics('nope').cpu, null);
++  assert.strictEqual(readMetrics({ cpu: [] }).cpu, null);
++  assert.strictEqual(readMetrics({ host: { hostname: '  ' } }).host.hostname, null);
++  assert.strictEqual(readMetrics({ docker: { images: 0 } }).docker.images, 0);
++});

@@ -3,8 +3,9 @@
  *
  * The sidecar is deliberately hardened and has no Docker access. This small
  * companion process runs with the sidecar image, mounts the Docker socket,
- * and exposes only three operations for containers in this Compose project:
- * read container state, read recent logs, and restart a named service.
+ * and exposes only four operations: read container state, read recent logs,
+ * restart a named service, and read host resource metrics. Container
+ * operations are limited to this Compose project.
  *
  * It is not a general Docker proxy. Every request names Compose services,
  * and the agent resolves them through the `com.docker.compose.project` label,
@@ -14,7 +15,9 @@
  * caller. `GET /health` is unauthenticated so Compose can probe the process.
  */
 
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
 
 const DOCKER_SOCKET = process.env.NCC_DOCKER_SOCKET || '/var/run/docker.sock';
@@ -25,6 +28,9 @@ const TOKEN = process.env.NCC_AGENT_TOKEN || '';
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_LOG_LINES = 500;
 const MAX_CONTAINERS = 50;
+const METRICS_CACHE_MS = 5_000;
+const DOCKER_USAGE_CACHE_MS = 60_000;
+const CPU_SAMPLE_MS = 200;
 const SERVICE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 if (!TOKEN) {
@@ -125,6 +131,229 @@ async function dockerJson(path, options) {
   } catch {
     throw new Error('Docker returned a non-JSON response');
   }
+}
+
+// --- host metrics ---------------------------------------------------------
+//
+// The panel's Storage card and Overview resource cards read these values.
+// They come from three places, all already available to this process:
+// `/proc` (host-wide on a normal Docker host), `statfs('/')` (the overlay's
+// backing filesystem, i.e. the host disk Docker stores containers on), and
+// Docker's own `/info` and `/system/df`.
+
+let metricsCache = { at: 0, value: null };
+let metricsInFlight = null;
+let usageCache = { at: 0, value: null };
+let usageInFlight = null;
+
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function percent(used, total) {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return null;
+  return Math.round(Math.min(100, Math.max(0, (used / total) * 100)) * 10) / 10;
+}
+
+async function readText(file) {
+  try {
+    return await fs.promises.readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+async function readCpuTimes() {
+  const text = await readText('/proc/stat');
+  if (!text) return null;
+  const line = text.split('\n')[0] || '';
+  const values = line.trim().split(/\s+/).slice(1).map(Number);
+  // user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice
+  if (values.length < 4 || values.some((value) => !Number.isFinite(value))) return null;
+  const idle = values[3] + (values[4] || 0);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return total > 0 ? { idle, total } : null;
+}
+
+/** Host CPU usage over a short sample; null rather than a made-up value. */
+async function cpuUsagePercent() {
+  const first = await readCpuTimes();
+  if (!first) return null;
+  await new Promise((resolve) => setTimeout(resolve, CPU_SAMPLE_MS));
+  const second = await readCpuTimes();
+  if (!second) return null;
+  const total = second.total - first.total;
+  const idle = second.idle - first.idle;
+  if (total <= 0 || idle < 0) return null;
+  return percent(total - idle, total);
+}
+
+async function loadAverage() {
+  const text = await readText('/proc/loadavg');
+  if (!text) return null;
+  const [load1, load5, load15] = text.trim().split(/\s+/).slice(0, 3).map(Number);
+  if (![load1, load5, load15].every(Number.isFinite)) return null;
+  return { load1, load5, load15 };
+}
+
+async function memoryMetrics() {
+  const text = await readText('/proc/meminfo');
+  let total = null;
+  let available = null;
+
+  if (text) {
+    const read = (key) => {
+      const match = new RegExp(`^${key}:\\s+(\\d+)`, 'm').exec(text);
+      return match ? Number(match[1]) * 1024 : null;
+    };
+    total = read('MemTotal');
+    available = read('MemAvailable') ?? read('MemFree');
+  }
+  if (!Number.isFinite(total) || total <= 0) {
+    const fallback = os.totalmem();
+    total = Number.isFinite(fallback) && fallback > 0 ? fallback : null;
+    available = Number.isFinite(os.freemem()) ? os.freemem() : null;
+  }
+  if (total === null) return null;
+
+  const used = available === null ? null : Math.max(0, total - available);
+  return {
+    totalBytes: total,
+    availableBytes: available,
+    usedBytes: used,
+    usedPercent: used === null ? null : percent(used, total),
+  };
+}
+
+/**
+ * Capacity of the filesystem Docker stores containers on. Inside a container
+ * `/` is an overlay mount, and overlayfs reports the statistics of its upper
+ * layer, which lives under Docker's root directory on the host disk. The
+ * Docker socket cannot be used for this: it is bind-mounted from the host's
+ * `/run`, which is usually a small tmpfs.
+ */
+async function storageMetrics() {
+  try {
+    const stat = await fs.promises.statfs('/');
+    const total = Number(stat.bsize) * Number(stat.blocks);
+    const free = Number(stat.bsize) * Number(stat.bavail);
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(free)) return null;
+    const used = Math.max(0, total - free);
+    return {
+      totalBytes: total,
+      freeBytes: free,
+      usedBytes: used,
+      usedPercent: percent(used, total),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sumBytes(list, read) {
+  if (!Array.isArray(list)) return 0;
+  return list.reduce((total, entry) => {
+    const value = read(entry);
+    return total + (Number.isFinite(value) && value > 0 ? value : 0);
+  }, 0);
+}
+
+/**
+ * Docker's own usage breakdown. `/system/df` walks images, volumes and build
+ * cache, so it is cached longer than the cheap host readings.
+ */
+function dockerUsage() {
+  const now = Date.now();
+  if (usageCache.value && now - usageCache.at < DOCKER_USAGE_CACHE_MS) {
+    return Promise.resolve(usageCache.value);
+  }
+  if (usageInFlight) return usageInFlight;
+
+  usageInFlight = dockerJson('/system/df')
+    .then((df) => {
+      const imagesBytes = finiteNumber(df?.LayersSize)
+        ?? sumBytes(df?.Images, (entry) => finiteNumber(entry?.Size));
+      const containersBytes = sumBytes(df?.Containers, (entry) => finiteNumber(entry?.SizeRw));
+      const volumesBytes = sumBytes(df?.Volumes, (entry) => finiteNumber(entry?.UsageData?.Size));
+      const buildCacheBytes = sumBytes(df?.BuildCache, (entry) => finiteNumber(entry?.Size));
+      const value = {
+        imagesBytes,
+        containersBytes,
+        volumesBytes,
+        buildCacheBytes,
+        totalBytes: imagesBytes + containersBytes + volumesBytes + buildCacheBytes,
+        images: Array.isArray(df?.Images) ? df.Images.length : null,
+        containers: Array.isArray(df?.Containers) ? df.Containers.length : null,
+        volumes: Array.isArray(df?.Volumes) ? df.Volumes.length : null,
+      };
+      usageCache = { at: Date.now(), value };
+      return value;
+    })
+    .catch(() => null)
+    .finally(() => {
+      usageInFlight = null;
+    });
+
+  return usageInFlight;
+}
+
+async function collectMetrics() {
+  const [info, usage, load, memory, storage, usagePercent, uptimeText] = await Promise.all([
+    dockerJson('/info').catch(() => null),
+    dockerUsage(),
+    loadAverage(),
+    memoryMetrics(),
+    storageMetrics(),
+    cpuUsagePercent(),
+    readText('/proc/uptime'),
+  ]);
+
+  const uptime = uptimeText ? Number(uptimeText.trim().split(/\s+/)[0]) : null;
+  const cores = Number.isInteger(info?.NCPU) && info.NCPU > 0
+    ? info.NCPU
+    : (os.cpus().length || null);
+
+  return {
+    collectedAt: Math.floor(Date.now() / 1000),
+    host: {
+      // Docker reports the host's name; os.hostname() would be the container.
+      hostname: typeof info?.Name === 'string' ? info.Name : null,
+      kernel: typeof info?.KernelVersion === 'string' ? info.KernelVersion : null,
+      os: typeof info?.OperatingSystem === 'string' ? info.OperatingSystem : null,
+      dockerVersion: typeof info?.ServerVersion === 'string' ? info.ServerVersion : null,
+      uptimeSeconds: Number.isFinite(uptime) ? Math.round(uptime) : null,
+    },
+    cpu: {
+      cores,
+      load1: load?.load1 ?? null,
+      load5: load?.load5 ?? null,
+      load15: load?.load15 ?? null,
+      usagePercent,
+    },
+    memory,
+    storage,
+    docker: usage,
+  };
+}
+
+/** One collection at a time, reused for a few seconds across panel reads. */
+function cachedMetrics() {
+  const now = Date.now();
+  if (metricsCache.value && now - metricsCache.at < METRICS_CACHE_MS) {
+    return Promise.resolve(metricsCache.value);
+  }
+  if (metricsInFlight) return metricsInFlight;
+
+  metricsInFlight = collectMetrics()
+    .then((value) => {
+      metricsCache = { at: Date.now(), value };
+      return value;
+    })
+    .finally(() => {
+      metricsInFlight = null;
+    });
+
+  return metricsInFlight;
 }
 
 function composeService(container) {
@@ -354,6 +583,13 @@ async function handleRestart(request, response) {
   }, 600);
 }
 
+async function handleMetrics(response) {
+  // A partial reading is still useful: the panel checks each field and shows
+  // "unknown" for whatever the host did not provide.
+  const metrics = await cachedMetrics();
+  sendJson(response, 200, metrics);
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
@@ -378,6 +614,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'POST' && url.pathname === '/v1/restart') {
       await handleRestart(request, response);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/metrics') {
+      await handleMetrics(response);
       return;
     }
     sendJson(response, 404, { error: 'Not found' });

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useNostrLogin } from '@nostrify/react/login';
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleAlert,
-  CircleHelp, Copy, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
-  LockKeyhole, LogOut, Menu, MoreHorizontal, Plus, Radio, RefreshCw, Search,
+  CircleHelp, Copy, Cpu, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
+  LockKeyhole, LogOut, MemoryStick, Menu, MoreHorizontal, Plus, Radio, RefreshCw, Search,
   Server, Settings2, Shield, ShieldCheck, Smartphone, TerminalSquare, Trash2,
   Users, Waves, X,
   type LucideIcon,
@@ -37,6 +37,7 @@ import {
   loadPanelCatalogue,
   loadPanelCatalogueIcon,
   loadPanelCatalogueService,
+  loadPanelMetrics,
   loadPanelRecords,
   loadPanelServiceLogs,
   loadPanelServices,
@@ -55,6 +56,7 @@ import {
   type PanelCatalogue,
   type PanelCatalogueEntry,
   type PanelCatalogueService,
+  type PanelMetrics,
   type PanelServiceHealth,
   type PanelServiceLogs,
   type PanelServiceStatus,
@@ -179,6 +181,20 @@ function durationLabel(seconds: number): string {
   if (value < 3600) return `${Math.round(value / 60)}m`;
   if (value < 86400) return `${Math.round(value / 3600)}h`;
   return `${Math.round(value / 86400)}d`;
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value < 0) return '—';
+  if (value < 1024) return `${Math.round(value)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[unit]}`;
 }
 
 function expiryLabel(service: PanelService): string {
@@ -707,6 +723,11 @@ export default function AdminPanel() {
   const [logsError, setLogsError] = useState('');
   const [logsToken, setLogsToken] = useState(0);
   const [logsTab, setLogsTab] = useState<'container' | 'node'>('container');
+  const [metrics, setMetrics] = useState<PanelMetrics | null>(null);
+  const [metricsState, setMetricsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('loading');
+  const [metricsError, setMetricsError] = useState('');
+  const [metricsRouteMissing, setMetricsRouteMissing] = useState(false);
+  const [metricsToken, setMetricsToken] = useState(0);
 
   const operatorNpub = config?.npub ?? null;
   const operatorPubkey = useMemo(() => operatorPubkeyFromNpub(operatorNpub), [operatorNpub]);
@@ -954,6 +975,35 @@ export default function AdminPanel() {
       if (timer) window.clearTimeout(timer);
     };
   }, [section, authorized, apiBase, user, catalogueToken]);
+
+  // Host metrics are not section-bound: the sidebar Storage card is on every
+  // page. They load once per session and on Refresh, not on a timer, because
+  // every read asks the signer for a NIP-98 event and polling would prompt a
+  // NIP-46 signer over and over.
+  useEffect(() => {
+    if (!authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadPanelMetrics(apiBase, user.signer, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setMetrics(loaded);
+        setMetricsError(loaded.error ?? '');
+        setMetricsRouteMissing(false);
+        setMetricsState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        // A node running the new panel against a sidecar image without the
+        // route is a deployment mismatch, not an agent failure.
+        setMetricsRouteMissing(error instanceof PanelApiError && error.status === 404);
+        setMetricsError(error instanceof Error ? error.message : 'Could not read host metrics');
+        setMetricsState('error');
+      });
+
+    return () => controller.abort();
+  }, [authorized, apiBase, user, metricsToken]);
 
   // Descriptor fields and the verified artifact are loaded only when the
   // details dialog opens; listing the catalogue stays one request.
@@ -1420,6 +1470,7 @@ export default function AdminPanel() {
     setRecordsError('');
     setRefreshing(true);
     setRefreshToken((value) => value + 1);
+    setMetricsToken((value) => value + 1);
   };
 
   const refreshHealth = () => {
@@ -1629,6 +1680,14 @@ export default function AdminPanel() {
   const settingsUnavailable = !apiAvailable || (settingsState === 'error' && settings === null);
   const displayedRelays = settings ? relayDraft : (config?.relays ?? []);
 
+  const storage = metrics?.storage?.totalBytes ? metrics.storage : null;
+  const memory = metrics?.memory?.totalBytes ? metrics.memory : null;
+  const cpu = metrics?.cpu ?? null;
+  const dockerUsage = metrics?.docker ?? null;
+  const storagePercent = storage?.usedPercent ?? null;
+  const metricsUnavailable = metricsState === 'error' || (metrics !== null && !metrics.available);
+  const metricsNote = metrics?.error ?? (metricsState === 'error' ? metricsError : '');
+
   const groups = activityGroups(snapshot?.activity ?? []);
   const recentActivity = snapshot?.activity.slice(0, 3) ?? [];
 
@@ -1665,9 +1724,37 @@ export default function AdminPanel() {
 
         <div className="sidebar-bottom">
           <div className="storage-card">
-            <div className="storage-top"><HardDrive size={15} /><span>Storage</span><span className="storage-value">—</span></div>
-            <div className="storage-track"><i style={{ width: '0%' }} /></div>
-            <small>Host metrics are not collected in this build</small>
+            <div className="storage-top">
+              <HardDrive size={15} />
+              <span>Storage</span>
+              <span className="storage-value">
+                {storagePercent === null ? '—' : `${Math.round(storagePercent)}%`}
+              </span>
+            </div>
+            <div
+              className="storage-track"
+              role={storage ? 'progressbar' : undefined}
+              aria-valuemin={storage ? 0 : undefined}
+              aria-valuemax={storage ? 100 : undefined}
+              aria-valuenow={storage ? Math.round(storagePercent ?? 0) : undefined}
+              aria-label={storage ? 'Host disk used' : undefined}
+            >
+              <i style={{ width: `${storagePercent ?? 0}%` }} />
+            </div>
+            <small title={metricsNote || undefined}>
+              {storage
+                ? `${formatBytes(storage.freeBytes)} free of ${formatBytes(storage.totalBytes)}`
+                : metricsState === 'loading'
+                  ? 'Reading host metrics…'
+                  : metricsUnavailable
+                    ? 'Host metrics unavailable'
+                    : 'Host metrics have not loaded yet'}
+            </small>
+            {dockerUsage?.totalBytes ? (
+              <small className="storage-docker" title="Images, containers, volumes and build cache">
+                Docker data {formatBytes(dockerUsage.totalBytes)}
+              </small>
+            ) : null}
           </div>
           <a
             className="help-link"
@@ -1738,7 +1825,7 @@ export default function AdminPanel() {
                 <div className="metric-card">
                   <div className="metric-label">RELAY DELIVERY <span className="metric-icon blue"><Radio size={16} /></span></div>
                   <div className="metric-value">{connectedRelays}<small> / {relayTotal} relays</small></div>
-                  <div className="metric-foot">Queried live from this browser</div>
+                  <div className="metric-foot">Queried by the node from its relays</div>
                 </div>
                 <div className="metric-card">
                   <div className="metric-label">LOCATOR FRESHNESS <span className="metric-icon peach"><Activity size={16} /></span></div>
@@ -1749,6 +1836,98 @@ export default function AdminPanel() {
                   <div className="metric-foot">{locatorTtl === null ? 'No locator TTL published' : `${durationLabel(locatorTtl)} locator TTL`}</div>
                 </div>
               </div>
+
+              <section className="content-section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Node resources</h2>
+                    <p>Host CPU, memory and disk, collected by the node agent</p>
+                  </div>
+                  <span className="resource-collected">
+                    {metricsState === 'loading' && !metrics
+                      ? 'Reading…'
+                      : metrics?.collectedAt
+                        ? `Collected ${relativeTime(metrics.collectedAt)}`
+                        : 'Not collected'}
+                  </span>
+                </div>
+
+                {!metrics && metricsState === 'loading' ? (
+                  <div className="empty-state">Reading host metrics…</div>
+                ) : metricsUnavailable ? (
+                  <div className="empty-state">
+                    {metricsRouteMissing
+                      ? 'This sidecar image does not serve host metrics. Recreate it with the matching SIDECAR_IMAGE.'
+                      : `The node agent did not report host metrics${metricsNote ? `: ${metricsNote}` : ''}. Container controls use the same agent.`}
+                    <button className="text-button" onClick={refresh} disabled={refreshing}>Try again</button>
+                  </div>
+                ) : (
+                  <div className="resource-grid">
+                    <div className="resource-card">
+                      <div className="resource-head"><span>CPU LOAD</span><Cpu size={15} /></div>
+                      <div className="resource-value">
+                        {cpu?.load1 === null || cpu?.load1 === undefined
+                          ? 'unknown'
+                          : cpu.load1.toFixed(2)}
+                        {cpu?.cores ? <small> · {cpu.cores} cores</small> : null}
+                      </div>
+                      <div className="resource-foot">
+                        {cpu?.load5 === null || cpu?.load5 === undefined
+                          ? 'Load average unavailable'
+                          : `5 min ${cpu.load5.toFixed(2)} · 15 min ${cpu.load15 === null || cpu.load15 === undefined ? '—' : cpu.load15.toFixed(2)}`}
+                      </div>
+                    </div>
+
+                    <div className="resource-card">
+                      <div className="resource-head"><span>MEMORY</span><MemoryStick size={15} /></div>
+                      <div className="resource-value">
+                        {memory?.usedPercent === null || memory?.usedPercent === undefined
+                          ? 'unknown'
+                          : `${Math.round(memory.usedPercent)}%`}
+                        {memory?.totalBytes ? <small> · {formatBytes(memory.totalBytes)}</small> : null}
+                      </div>
+                      <div
+                        className="resource-track"
+                        role={memory ? 'progressbar' : undefined}
+                        aria-valuemin={memory ? 0 : undefined}
+                        aria-valuemax={memory ? 100 : undefined}
+                        aria-valuenow={memory ? Math.round(memory.usedPercent ?? 0) : undefined}
+                        aria-label={memory ? 'Host memory used' : undefined}
+                      >
+                        <i style={{ width: `${memory?.usedPercent ?? 0}%` }} />
+                      </div>
+                      <div className="resource-foot">
+                        {memory
+                          ? `${formatBytes(memory.usedBytes)} used · ${formatBytes(memory.availableBytes)} available`
+                          : 'Memory usage unavailable'}
+                      </div>
+                    </div>
+
+                    <div className="resource-card">
+                      <div className="resource-head"><span>DISK</span><HardDrive size={15} /></div>
+                      <div className="resource-value">
+                        {storagePercent === null ? 'unknown' : `${Math.round(storagePercent)}%`}
+                        {storage?.totalBytes ? <small> · {formatBytes(storage.totalBytes)}</small> : null}
+                      </div>
+                      <div
+                        className="resource-track"
+                        role={storage ? 'progressbar' : undefined}
+                        aria-valuemin={storage ? 0 : undefined}
+                        aria-valuemax={storage ? 100 : undefined}
+                        aria-valuenow={storage ? Math.round(storagePercent ?? 0) : undefined}
+                        aria-label={storage ? 'Host disk used' : undefined}
+                      >
+                        <i style={{ width: `${storagePercent ?? 0}%` }} />
+                      </div>
+                      <div className="resource-foot">
+                        {storage
+                          ? `${formatBytes(storage.freeBytes)} free${dockerUsage?.totalBytes ? ` · Docker data ${formatBytes(dockerUsage.totalBytes)}` : ''}`
+                          : 'Disk usage unavailable'}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </section>
 
               <section className="content-section">
                 <div className="section-heading">

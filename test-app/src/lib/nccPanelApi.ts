@@ -1116,5 +1116,176 @@ export async function loadPanelCatalogueIcon(
   return response.blob();
 }
 
+// --- host metrics ---------------------------------------------------------
+
+export interface PanelHostInfo {
+  hostname: string | null;
+  kernel: string | null;
+  os: string | null;
+  dockerVersion: string | null;
+  uptimeSeconds: number | null;
+}
+
+export interface PanelCpuMetrics {
+  cores: number | null;
+  load1: number | null;
+  load5: number | null;
+  load15: number | null;
+  usagePercent: number | null;
+}
+
+export interface PanelMemoryMetrics {
+  totalBytes: number | null;
+  availableBytes: number | null;
+  usedBytes: number | null;
+  usedPercent: number | null;
+}
+
+export interface PanelStorageMetrics {
+  totalBytes: number | null;
+  freeBytes: number | null;
+  usedBytes: number | null;
+  usedPercent: number | null;
+}
+
+export interface PanelDockerUsage {
+  imagesBytes: number | null;
+  containersBytes: number | null;
+  volumesBytes: number | null;
+  buildCacheBytes: number | null;
+  totalBytes: number | null;
+  images: number | null;
+  containers: number | null;
+  volumes: number | null;
+}
+
+export interface PanelMetrics {
+  available: boolean;
+  error: string | null;
+  collectedAt: number | null;
+  host: PanelHostInfo;
+  cpu: PanelCpuMetrics | null;
+  memory: PanelMemoryMetrics | null;
+  storage: PanelStorageMetrics | null;
+  docker: PanelDockerUsage | null;
+}
+
+const METRICS_REQUEST_TIMEOUT_MS = 10_000;
+
+function nonNegativeOrNull(value: unknown): number | null {
+  const number = numberOrNull(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
+function percentOrNull(value: unknown): number | null {
+  const number = numberOrNull(value);
+  return number !== null && number >= 0 && number <= 100 ? number : null;
+}
+
+function readHostInfo(value: unknown): PanelHostInfo {
+  const record = objectValue(value) ?? {};
+  return {
+    hostname: stringOrNull(record.hostname),
+    kernel: stringOrNull(record.kernel),
+    os: stringOrNull(record.os),
+    dockerVersion: stringOrNull(record.dockerVersion),
+    uptimeSeconds: nonNegativeOrNull(record.uptimeSeconds),
+  };
+}
+
+function readCpuMetrics(value: unknown): PanelCpuMetrics | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  const cores = numberOrNull(record.cores);
+  return {
+    cores: cores !== null && cores >= 1 ? cores : null,
+    load1: nonNegativeOrNull(record.load1),
+    load5: nonNegativeOrNull(record.load5),
+    load15: nonNegativeOrNull(record.load15),
+    usagePercent: percentOrNull(record.usagePercent),
+  };
+}
+
+function readMemoryMetrics(value: unknown): PanelMemoryMetrics | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    totalBytes: nonNegativeOrNull(record.totalBytes),
+    availableBytes: nonNegativeOrNull(record.availableBytes),
+    usedBytes: nonNegativeOrNull(record.usedBytes),
+    usedPercent: percentOrNull(record.usedPercent),
+  };
+}
+
+function readStorageMetrics(value: unknown): PanelStorageMetrics | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    totalBytes: nonNegativeOrNull(record.totalBytes),
+    freeBytes: nonNegativeOrNull(record.freeBytes),
+    usedBytes: nonNegativeOrNull(record.usedBytes),
+    usedPercent: percentOrNull(record.usedPercent),
+  };
+}
+
+function readDockerUsage(value: unknown): PanelDockerUsage | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    imagesBytes: nonNegativeOrNull(record.imagesBytes),
+    containersBytes: nonNegativeOrNull(record.containersBytes),
+    volumesBytes: nonNegativeOrNull(record.volumesBytes),
+    buildCacheBytes: nonNegativeOrNull(record.buildCacheBytes),
+    totalBytes: nonNegativeOrNull(record.totalBytes),
+    images: nonNegativeOrNull(record.images),
+    containers: nonNegativeOrNull(record.containers),
+    volumes: nonNegativeOrNull(record.volumes),
+  };
+}
+
+function readMetrics(payload: unknown): PanelMetrics {
+  const record = objectValue(payload);
+  if (!record) {
+    throw new PanelApiError(0, 'The node returned an unexpected metrics response');
+  }
+  const metrics = objectValue(record.metrics);
+
+  return {
+    available: record.available === true,
+    error: stringOrNull(record.error),
+    collectedAt: metrics ? nonNegativeOrNull(metrics.collectedAt) : null,
+    host: readHostInfo(metrics?.host),
+    cpu: metrics ? readCpuMetrics(metrics.cpu) : null,
+    memory: metrics ? readMemoryMetrics(metrics.memory) : null,
+    storage: metrics ? readStorageMetrics(metrics.storage) : null,
+    docker: metrics ? readDockerUsage(metrics.docker) : null,
+  };
+}
+
+/**
+ * Host CPU, memory and disk from the node agent. A node without the agent
+ * answers with `available: false` rather than an error, so the panel can keep
+ * the rest of the page working and say the values are unavailable.
+ */
+export async function loadPanelMetrics(
+  base: string,
+  signer: PanelSigner,
+  signal?: AbortSignal,
+): Promise<PanelMetrics> {
+  // The agent samples CPU for a moment and may ask Docker for its disk usage;
+  // this bound keeps a wedged agent from holding the sidebar open.
+  const timeout = AbortSignal.timeout(METRICS_REQUEST_TIMEOUT_MS);
+  return readMetrics(
+    await requestJson(
+      base,
+      signer,
+      'GET',
+      '/metrics',
+      undefined,
+      signal ? AbortSignal.any([signal, timeout]) : timeout,
+    ),
+  );
+}
+
 // Exported for the parser tests; the public API above is the supported surface.
-export { readCatalogue, readCatalogueEntry, readCatalogueService };
+export { readCatalogue, readCatalogueEntry, readCatalogueService, readMetrics };

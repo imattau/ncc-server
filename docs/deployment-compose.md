@@ -5,7 +5,8 @@ verification, and recovery on a dedicated Debian 12 or Ubuntu host.
 
 The bundle uses Docker Compose for the NCC-06 sidecar, Caddy, Npanel, Ditto
 Relay, Ditto Web, ncc-search (the Nostr content search engine and its UI),
-OpenSearch, Tor, a small node-agent for the admin panel's container controls,
+OpenSearch, Tor, a small node-agent for the admin panel's container controls
+and host metrics,
 and a read-only npack daemon for the App catalogue. Caddy and the sidecar use
 host networking. Do not install the bundle where another service owns the
 ports or Caddy configuration.
@@ -328,10 +329,10 @@ profiles, publication relays or cadence, reuses the web onion for `addr`, and
 republishes. Fresh installs do this automatically. Adding a custom service
 with `make service-add` also creates its onion automatically.
 
-The admin panel's Restart and container-log tabs use the `node-agent`
-companion container, which is the only process with the Docker socket. Add a
-token to `.env` if the installer did not create one, then recreate both
-containers:
+The admin panel's Restart and container-log tabs, and the sidebar Storage
+card and Overview resource metrics, use the `node-agent` companion container,
+which is the only process with the Docker socket. Add a token to `.env` if the
+installer did not create one, then recreate both containers:
 
 ~~~sh
 grep -q '^NODE_AGENT_TOKEN=..*' .env \
@@ -341,8 +342,9 @@ sudo docker-compose -p ncc-bundle up -d sidecar node-agent
 
 The agent binds `127.0.0.1:3010` and only accepts restarts and log reads for
 containers labelled `com.docker.compose.project=ncc-bundle`. If it is absent,
-the panel still shows probe and record health and the node-event log tab. The
-agent runs from `SIDECAR_IMAGE`, so pin that image to a release that includes
+the panel still shows probe and record health and the node-event log tab, and
+the host resource cards say the values are unavailable. The agent runs from
+`SIDECAR_IMAGE`, so pin that image to a release that includes
 `node-agent.mjs` before starting it.
 
 The App catalogue uses the `npack` container, which runs npackd read-only and
@@ -352,7 +354,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.3
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.4
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 

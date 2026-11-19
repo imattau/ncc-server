@@ -153,6 +153,15 @@ the agent cannot reach `/var/run/docker.sock`. The agent runs as root only to
 use that socket, accepts restarts only for containers in the `ncc-bundle`
 project, and binds `127.0.0.1:3010`.
 
+The sidebar **Storage** card and the overview's **Node resources** row use
+the same agent. `Host metrics unavailable` means the sidecar could not reach
+it; the tooltip carries the agent's error. CPU load and memory are the host's
+`/proc` values as seen from the container (normally host-wide), disk is the
+filesystem Docker stores containers on, and the Docker-data line is
+`/system/df`. Metrics are read when the panel loads or **Refresh** is pressed,
+not on a timer, so a remote signer is not asked to approve signatures
+repeatedly.
+
 Restarting `web`, `addr` or `admin` restarts Caddy, so the panel page can
 briefly stop responding; reload it after a few seconds. Health is computed
 from the service's local probe, the last publication result and container
