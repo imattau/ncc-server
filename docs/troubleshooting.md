@@ -204,6 +204,15 @@ sudo docker-compose -p ncc-bundle exec npanel \
 `sudo make bundle-add-admin NPUB=<npub>` does the same for any key and also
 sends a sidecar invite.
 
+Sidecar 0.2.8 and later also reconcile on their own: ten seconds after
+startup, and then every `NPANEL_RECONCILE_MINUTES` (default 5, `0` disables),
+they add any node admin npanel has never seen. That covers keys added before
+the mirror existed and keys added while npanel was down, without pressing
+**Grant**. The pass never demotes, and leaves a `staff` role for **Grant**. If
+an existing admin still shows **No npanel access** after that, the key is not
+on the node admin list the panel shows; the sidecar log records
+`npanel admins reconciled` with a count when the pass adds any.
+
 The node change always succeeds first. If npanel is down or rejects the call,
 the panel keeps the change and shows the reason as a warning; nothing is rolled
 back. Removing a node admin demotes the npanel user to `staff` instead of

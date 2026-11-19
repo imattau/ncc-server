@@ -10,12 +10,12 @@
 #   jobs:
 #     publish-package:
 #       needs: build-image
-#       uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.7
+#       uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.8
 #       with:
 #         version: 1.0.0
 #         publisher: npub1...
 #         image: ghcr.io/acme/hello:1.0.0
-#         tool_ref: v0.2.7
+#         tool_ref: v0.2.8
 #       secrets:
 #         NOSTR_SECRET_KEY: ${{ secrets.NOSTR_SECRET_KEY }}
 #

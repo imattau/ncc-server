@@ -294,7 +294,9 @@ with the operator key. It needs `NCC_NPANEL_HOST` (Compose sets it to
 `PUBLIC_IPV4`) and `NCC_NPANEL_URL` (default `http://127.0.0.1:3200`), and the
 operator key must already be an npanel admin. If npanel is down the node change
 still applies and the panel shows a warning; the **Grant** action next to a key
-retries it. Recreate the sidecar after pulling a release that adds these
+retries it. The sidecar also reconciles on its own after startup and every
+`NPANEL_RECONCILE_MINUTES` (default 5, `0` disables), adding node admins npanel
+has never seen. Recreate the sidecar after pulling a release that adds these
 variables.
 
 Caddy proxies `/ncc-api/*` to the sidecar's loopback listener, and the sidecar
@@ -374,7 +376,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.7
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.8
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 

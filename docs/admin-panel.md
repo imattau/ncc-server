@@ -111,6 +111,14 @@ warning; nothing is rolled back. `NCC_NPANEL_URL` (default
 `configured: false` and skips the sync. The operator key must itself be an
 npanel admin, which first-run provisioning arranges with `make-admin`.
 
+The sidecar also reconciles the list on its own. Shortly after startup, and
+then every `NPANEL_RECONCILE_MINUTES` (default 5; set `0` to disable), it
+reads npanel's users once and adds any node admin npanel has never seen. That
+is what picks up keys added before the mirror existed, or while npanel was
+down, without anyone pressing a button. The pass never demotes: an existing
+`staff` row is left for **Grant**, so a deliberate npanel demotion is not
+undone behind the operator's back.
+
 The dashboard is reachable both at `https://<PUBLIC_IPV4>:8445` and at its
 `ncc://` address in the NCC Browser. The latter needs an npanel image built
 from 0.7.3 or later: ncc-browser loads a service from the per-service origin

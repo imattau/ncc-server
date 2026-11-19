@@ -40,9 +40,11 @@ services:
       NCC_NODE_AGENT_TOKEN: "${NODE_AGENT_TOKEN:-}"
       # npanel keeps its own users table; the sidecar mirrors node admins into
       # it through npanel's dashboard API. The dashboard routes by Host, so
-      # the Host header must match npanel's configured dashboard_host.
+      # the Host header must match npanel's configured dashboard_host. The
+      # reconcile fills in admins npanel never learned about; 0 disables it.
       NCC_NPANEL_URL: "http://127.0.0.1:3200"
       NCC_NPANEL_HOST: "${PUBLIC_IPV4}"
+      NCC_NPANEL_RECONCILE_MINUTES: "${NPANEL_RECONCILE_MINUTES:-5}"
       # Read-only npack catalogue for the App catalogue. The daemon runs in
       # the `npack` service; the sidecar only reads its Unix socket.
       NCC_NPACK_SOCKET: /run/npack/npackd.sock

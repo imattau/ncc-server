@@ -1,9 +1,31 @@
+diff --git a/src/index.js b/src/index.js
+index c467579..53ce3c4 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -5,6 +5,7 @@ import { initDb, wipeDb } from './db/index.js';
+ import { isInitialized, getServices } from './db.js';
+ import { startWebServer } from './web.js';
+ import { startManager } from './app.js';
++import { startNpanelReconcile } from './npanel-reconcile.js';
+ 
+ async function main() {
+   const args = process.argv.slice(2);
+@@ -61,6 +62,9 @@ async function main() {
+ 
+   // Start background manager
+   startApp();
++
++  // Fill in any node admin npanel never learned about (npanel-reconcile.js).
++  startNpanelReconcile();
+ }
+ 
+ main().catch(err => {
 diff --git a/src/npanel-admins.js b/src/npanel-admins.js
 new file mode 100644
-index 0000000..bb9aef1
+index 0000000..bfcb55d
 --- /dev/null
 +++ b/src/npanel-admins.js
-@@ -0,0 +1,238 @@
+@@ -0,0 +1,306 @@
 +/* global Buffer */
 +/**
 + * Keep npanel's administrator list in step with the NCC node admin list.
@@ -27,10 +49,14 @@ index 0000000..bb9aef1
 +import { createHash } from 'node:crypto';
 +
 +import { finalizeEvent } from 'nostr-tools/pure';
++import { fromNsec } from 'ncc-06-js';
++
++import { getServices } from './db.js';
 +
 +const DEFAULT_URL = 'http://127.0.0.1:3200';
 +const REQUEST_TIMEOUT_MS = 4000;
 +const HOST_PATTERN = /^[A-Za-z0-9.[\]:-]+$/;
++const HEX_PUBKEY_PATTERN = /^[0-9a-f]{64}$/;
 +const NIP98_KIND = 27235;
 +
 +/**
@@ -59,6 +85,24 @@ index 0000000..bb9aef1
 +    hostname: url.hostname,
 +    port: Number(url.port || 80),
 +  };
++}
++
++/**
++ * The node identity signs both NCC records and npanel's admin API.
++ *
++ * The sidecar service row holds the shared operator key; every standard
++ * service runs under it. Returns null when the node has no key yet (first
++ * run) so callers can report that instead of signing as nobody.
++ */
++export function nodeSigningSecret() {
++  try {
++    const services = getServices();
++    const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
++    return sidecar?.service_nsec ? fromNsec(sidecar.service_nsec) : null;
++  } catch (error) {
++    console.warn('[Panel] Could not read the node signing key:', error.message);
++    return null;
++  }
 +}
 +
 +function nip98Header(secretKey, url, method, payload) {
@@ -242,21 +286,208 @@ index 0000000..bb9aef1
 +    return unavailable(describeError(error));
 +  }
 +}
++
++/**
++ * Add npanel users for node admins npanel has never heard of.
++ *
++ * The mirror above runs only when a key is added or granted, so keys that
++ * predate it -- or that were added while npanel was down -- have no row and
++ * are refused by npanel's dashboard. This pass closes that gap: it reads the
++ * npanel user list once and creates the missing admins.
++ *
++ * It deliberately does not touch existing `staff` rows: a demotion is either
++ * the result of removing a node admin (where staff is the desired end state)
++ * or a deliberate npanel decision, and neither should be undone by a
++ * background pass. Staff keys are promoted by the panel's Grant action.
++ *
++ * @param {string[]} pubkeys hex pubkeys that should be npanel admins
++ * @returns {Promise<{ configured: boolean, checked: number, granted: number, failed: number, error: string|null }>}
++ */
++export async function reconcileNpanelAdmins(pubkeys, { secretKey, env = process.env } = {}) {
++  const target = npanelTarget(env);
++  if (!target) return { configured: false, checked: 0, granted: 0, failed: 0, error: null };
++
++  const wanted = [...new Set((pubkeys ?? [])
++    .map((pubkey) => String(pubkey).trim().toLowerCase())
++    .filter((pubkey) => HEX_PUBKEY_PATTERN.test(pubkey)))];
++  if (wanted.length === 0) return { configured: true, checked: 0, granted: 0, failed: 0, error: null };
++
++  const current = await readNpanelRoles({ secretKey, env });
++  if (!current.available) {
++    return { configured: true, checked: wanted.length, granted: 0, failed: 0, error: current.error };
++  }
++
++  let granted = 0;
++  let failed = 0;
++  let firstError = null;
++  for (const pubkey of wanted) {
++    if (current.roles[pubkey] !== undefined) continue;
++    const result = await ensureNpanelAdmin(pubkey, { secretKey, env });
++    if (result.synced) {
++      granted += 1;
++    } else {
++      failed += 1;
++      firstError ??= result.error;
++    }
++  }
++  return { configured: true, checked: wanted.length, granted, failed, error: firstError };
++}
+diff --git a/src/npanel-reconcile.js b/src/npanel-reconcile.js
+new file mode 100644
+index 0000000..44e27ec
+--- /dev/null
++++ b/src/npanel-reconcile.js
+@@ -0,0 +1,129 @@
++/**
++ * Reconcile the node admin list into npanel, once after startup and then
++ * periodically.
++ *
++ * The v0.2.5 mirror runs when a key is added or granted, which leaves two
++ * gaps: keys that were already on the node list before that release, and keys
++ * added while npanel was down. Both show up in npanel as "No access" even
++ * though the node trusts them. This pass reads npanel's user list and adds
++ * the missing admins.
++ *
++ * It is deliberately one-way and best effort:
++ *   - it never demotes anyone, and leaves existing `staff` rows alone (the
++ *     panel's Grant action is how a staff key becomes an admin);
++ *   - a failure only logs, so a npanel outage cannot affect the node;
++ *   - it runs on the loopback listener with the operator key, like the
++ *     add/remove mirror.
++ *
++ * `NCC_NPANEL_RECONCILE_MINUTES` sets the cadence in minutes (default 5);
++ * 0 disables the pass.
++ */
++
++import { addLog, getAdmins } from './db.js';
++import { nodeSigningSecret, reconcileNpanelAdmins } from './npanel-admins.js';
++
++const DEFAULT_MINUTES = 5;
++const FIRST_DELAY_MS = 10_000;
++const HEX_PUBKEY_PATTERN = /^[0-9a-f]{64}$/;
++
++/** @type {{ stop: () => void } | null} */
++let handle = null;
++let timer = null;
++let running = false;
++
++/** The node's admins plus the operator key, deduplicated and validated. */
++function wantedPubkeys(env) {
++  const pubkeys = new Set();
++
++  try {
++    for (const admin of getAdmins()) {
++      if (admin?.pubkey) pubkeys.add(admin.pubkey.toLowerCase());
++    }
++  } catch (error) {
++    // The sidecar only starts this after initialization, so a read failure
++    // here is transient; the operator key below still gets reconciled.
++    console.warn('[Panel] Could not read the node admin list:', error.message);
++  }
++
++  const operator = String(env.NCC_OPERATOR_PUBKEY || '').trim().toLowerCase();
++  if (HEX_PUBKEY_PATTERN.test(operator)) pubkeys.add(operator);
++
++  return [...pubkeys].filter((pubkey) => HEX_PUBKEY_PATTERN.test(pubkey));
++}
++
++/**
++ * Start the reconcile loop.
++ *
++ * Returns the existing handle when called twice, or null when disabled. The
++ * timer is unref'd: a pending pass never keeps the process alive.
++ *
++ * @param {{ env?: NodeJS.ProcessEnv, log?: (level: string, message: string, metadata?: object) => void }} [options]
++ * @returns {{ stop: () => void } | null}
++ */
++export function startNpanelReconcile(options = {}) {
++  if (handle) return handle;
++
++  const env = options.env ?? process.env;
++  const log = options.log ?? addLog;
++  const configured = String(env.NCC_NPANEL_RECONCILE_MINUTES ?? '').trim();
++  const minutes = configured === '' ? DEFAULT_MINUTES : Number(configured);
++  if (!Number.isFinite(minutes) || minutes <= 0) return null;
++
++  const intervalMs = Math.max(1, Math.floor(minutes)) * 60_000;
++  let lastError = null;
++
++  const schedule = (delay) => {
++    timer = setTimeout(run, delay);
++    timer.unref?.();
++  };
++
++  async function run() {
++    if (running) return;
++    running = true;
++    try {
++      const result = await reconcileNpanelAdmins(wantedPubkeys(env), {
++        secretKey: nodeSigningSecret(),
++        env,
++      });
++      if (result.configured) {
++        if (result.granted > 0) {
++          log('info', 'npanel admins reconciled', {
++            checked: result.checked,
++            granted: result.granted,
++            ...(result.failed ? { failed: result.failed } : {}),
++          });
++        }
++        // Log a problem when it appears or changes, not on every cycle.
++        if (result.error) {
++          if (result.error !== lastError) {
++            log('warn', 'npanel admins not reconciled', { error: result.error });
++          }
++          lastError = result.error;
++        } else {
++          lastError = null;
++        }
++      }
++    } catch (error) {
++      // Every request path catches its own failures; this is the last resort
++      // so a bug here cannot take the sidecar down.
++      const message = error?.message ?? String(error);
++      if (message !== lastError) {
++        log('warn', 'npanel admins not reconciled', { error: message });
++        lastError = message;
++      }
++    } finally {
++      running = false;
++      schedule(intervalMs);
++    }
++  }
++
++  handle = {
++    stop() {
++      if (timer) clearTimeout(timer);
++      timer = null;
++      handle = null;
++    },
++  };
++  schedule(FIRST_DELAY_MS);
++  return handle;
++}
 diff --git a/src/routes/panel-admin.js b/src/routes/panel-admin.js
-index 3245251..dd9453d 100644
+index 3245251..66e1cc0 100644
 --- a/src/routes/panel-admin.js
 +++ b/src/routes/panel-admin.js
-@@ -16,6 +16,9 @@ import {
-   addAdmin, addLog, getAdmins, getConfig, getServices, removeAdmin,
+@@ -13,10 +13,13 @@
+ import { nip19 } from 'nostr-tools';
+ import { authorizePanelRequest } from '../panel-auth.js';
+ import {
+-  addAdmin, addLog, getAdmins, getConfig, getServices, removeAdmin,
++  addAdmin, addLog, getAdmins, getConfig, removeAdmin,
  } from '../db.js';
  import { sendInviteDM } from '../dm.js';
+-import { fromNsec, getPublicKey, toNpub } from 'ncc-06-js';
 +import {
-+  demoteNpanelAdmin, ensureNpanelAdmin, readNpanelRoles,
++  demoteNpanelAdmin, ensureNpanelAdmin, nodeSigningSecret, readNpanelRoles,
 +} from '../npanel-admins.js';
- import { fromNsec, getPublicKey, toNpub } from 'ncc-06-js';
++import { getPublicKey, toNpub } from 'ncc-06-js';
  
  const PUBKEY_PATTERN = /^[0-9a-f]{64}$/i;
-@@ -42,30 +45,60 @@ function admins() {
+ 
+@@ -42,30 +45,48 @@ function admins() {
    return getAdmins();
  }
  
@@ -273,24 +504,12 @@ index 3245251..dd9453d 100644
    }));
  }
  
-+/** The node identity signs both NCC records and npanel's admin API. */
-+function signingSecret() {
-+  try {
-+    const services = getServices();
-+    const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
-+    return sidecar?.service_nsec ? fromNsec(sidecar.service_nsec) : null;
-+  } catch (error) {
-+    console.warn('[Panel] Could not read the node signing key:', error.message);
-+    return null;
-+  }
-+}
-+
 +/**
 + * The admin list plus each key's npanel role. npanel is a separate
 + * application with its own users table; the panel shows both so a key that
 + * never reached npanel is visible instead of silently diverging.
 + */
-+async function adminsWithNpanel(secretKey = signingSecret()) {
++async function adminsWithNpanel(secretKey = nodeSigningSecret()) {
 +  const npanel = await readNpanelRoles({ secretKey });
 +  return {
 +    admins: adminList(npanel.available ? npanel.roles : null),
@@ -311,7 +530,7 @@ index 3245251..dd9453d 100644
 -    const services = getServices();
 -    const sidecar = services.find((service) => service.type === 'sidecar') || services[0];
 -    if (!sidecar?.service_nsec) return false;
-+    const secretKey = signingSecret();
++    const secretKey = nodeSigningSecret();
 +    if (!secretKey) return false;
  
      const appConfig = getConfig('app_config') || {};
@@ -322,7 +541,7 @@ index 3245251..dd9453d 100644
      const identity = toNpub(getPublicKey(secretKey));
  
      return await sendInviteDM({
-@@ -84,7 +117,7 @@ async function notifyNewAdmin(pubkey) {
+@@ -84,7 +105,7 @@ async function notifyNewAdmin(pubkey) {
  export default async function panelAdminRoutes(server) {
    server.get('/ncc-api/admins', async (request, reply) => {
      if (!authorizePanelRequest(request, reply)) return;
@@ -331,7 +550,7 @@ index 3245251..dd9453d 100644
    });
  
    server.post('/ncc-api/admins', async (request, reply) => {
-@@ -98,18 +131,26 @@ export default async function panelAdminRoutes(server) {
+@@ -98,18 +119,26 @@ export default async function panelAdminRoutes(server) {
      }
  
      const existing = getAdmins().find((admin) => admin.pubkey === pubkey);
@@ -343,7 +562,7 @@ index 3245251..dd9453d 100644
 +    // Re-posting an existing key is how the panel retries a npanel grant
 +    // that failed earlier, so the sync runs even when nothing changed here.
 +    if (added) addAdmin(pubkey, 'active');
-+    const secretKey = signingSecret();
++    const secretKey = nodeSigningSecret();
 +    const npanel = await ensureNpanelAdmin(pubkey, { secretKey });
  
 -    addAdmin(pubkey, 'active');
@@ -365,11 +584,11 @@ index 3245251..dd9453d 100644
    });
  
    server.delete('/ncc-api/admins/:pubkey', async (request, reply) => {
-@@ -135,11 +176,16 @@ export default async function panelAdminRoutes(server) {
+@@ -135,11 +164,16 @@ export default async function panelAdminRoutes(server) {
      }
  
      removeAdmin(pubkey);
-+    const secretKey = signingSecret();
++    const secretKey = nodeSigningSecret();
 +    const npanel = await demoteNpanelAdmin(pubkey, { secretKey });
      addLog('info', 'Admin key removed from the NCC admin panel', {
        pubkey,
@@ -385,10 +604,10 @@ index 3245251..dd9453d 100644
  }
 diff --git a/test/panel-npanel-sync.test.js b/test/panel-npanel-sync.test.js
 new file mode 100644
-index 0000000..db907a0
+index 0000000..968fa77
 --- /dev/null
 +++ b/test/panel-npanel-sync.test.js
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,335 @@
 +/* global Buffer */
 +import { test } from 'node:test';
 +import assert from 'node:assert';
@@ -398,8 +617,9 @@ index 0000000..db907a0
 +import { generateSecretKey, getPublicKey, verifyEvent } from 'nostr-tools/pure';
 +
 +import {
-+  demoteNpanelAdmin, ensureNpanelAdmin, npanelTarget, readNpanelRoles,
++  demoteNpanelAdmin, ensureNpanelAdmin, npanelTarget, readNpanelRoles, reconcileNpanelAdmins,
 +} from '../src/npanel-admins.js';
++import { startNpanelReconcile } from '../src/npanel-reconcile.js';
 +
 +const DASHBOARD_HOST = '203.0.113.10';
 +const secretKey = generateSecretKey();
@@ -649,4 +869,77 @@ index 0000000..db907a0
 +  } finally {
 +    await npanel.close();
 +  }
++});
++
++test('Reconcile adds only the admins npanel does not know', async () => {
++  const npanel = await startNpanel({ users: new Map([[operatorPubkey, 'admin']]) });
++  try {
++    const result = await reconcileNpanelAdmins([operatorPubkey, targetPubkey], {
++      secretKey,
++      env: npanel.env,
++    });
++    assert.deepStrictEqual(result, {
++      configured: true, checked: 2, granted: 1, failed: 0, error: null,
++    });
++    assert.strictEqual(npanel.users.get(targetPubkey), 'admin');
++    assert.deepStrictEqual(
++      npanel.calls.map((call) => `${call.method} ${call.path}`),
++      ['GET /api/users', 'POST /api/users', `PATCH /api/users/${targetPubkey}`],
++    );
++    assert.strictEqual(npanel.calls[0].authError, null, 'the signed request is accepted');
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('Reconcile leaves an existing staff user alone for the Grant action', async () => {
++  const npanel = await startNpanel({
++    users: new Map([[operatorPubkey, 'admin'], [targetPubkey, 'staff']]),
++  });
++  try {
++    const result = await reconcileNpanelAdmins([targetPubkey], { secretKey, env: npanel.env });
++    assert.deepStrictEqual(result, {
++      configured: true, checked: 1, granted: 0, failed: 0, error: null,
++    });
++    assert.strictEqual(npanel.users.get(targetPubkey), 'staff');
++    assert.deepStrictEqual(npanel.calls.map((call) => call.method), ['GET']);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('Reconcile reports a npanel rejection without throwing', async () => {
++  const npanel = await startNpanel({ reject: 403 });
++  try {
++    const result = await reconcileNpanelAdmins([targetPubkey], { secretKey, env: npanel.env });
++    assert.strictEqual(result.configured, true);
++    assert.strictEqual(result.granted, 0);
++    assert.match(result.error, /not an npanel admin/);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('Reconcile is a no-op when npanel is not configured', async () => {
++  const result = await reconcileNpanelAdmins([targetPubkey], { secretKey, env: {} });
++  assert.deepStrictEqual(result, {
++    configured: false, checked: 0, granted: 0, failed: 0, error: null,
++  });
++});
++
++test('Reconcile ignores malformed keys instead of querying npanel', async () => {
++  const npanel = await startNpanel();
++  try {
++    const result = await reconcileNpanelAdmins(['not-a-key', ''], { secretKey, env: npanel.env });
++    assert.deepStrictEqual(result, {
++      configured: true, checked: 0, granted: 0, failed: 0, error: null,
++    });
++    assert.deepStrictEqual(npanel.calls, []);
++  } finally {
++    await npanel.close();
++  }
++});
++
++test('The reconcile loop can be turned off', () => {
++  assert.strictEqual(startNpanelReconcile({ env: { NCC_NPANEL_RECONCILE_MINUTES: '0' } }), null);
 +});

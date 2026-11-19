@@ -65,7 +65,7 @@ hello-1.0.0.npk
   "probe_path": "/",
   "env": { "LOG_LEVEL": "info" },
   "volumes": { "hello-data": "/data" },
-  "min_bundle_version": "0.2.7"
+  "min_bundle_version": "0.2.8"
 }
 ```
 
@@ -123,7 +123,7 @@ repository, installs the pinned npack release, builds and (when
 ```yaml
 publish-package:
   needs: build-image
-  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.7
+  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.8
   with:
     version: 1.0.0
     publisher: npub1...
