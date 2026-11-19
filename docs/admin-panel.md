@@ -111,6 +111,13 @@ warning; nothing is rolled back. `NCC_NPANEL_URL` (default
 `configured: false` and skips the sync. The operator key must itself be an
 npanel admin, which first-run provisioning arranges with `make-admin`.
 
+The dashboard is reachable both at `https://<PUBLIC_IPV4>:8445` and at its
+`ncc://` address in the NCC Browser. The latter needs an npanel image built
+from 0.7.3 or later: ncc-browser loads a service from the per-service origin
+`ncc://<npub>.<service>`, which older NIP-98 checks rejected. The error
+`Auth event was signed for npub1….npanel, not …` means the image predates
+that fix; see `troubleshooting.md` for the upgrade.
+
 ### Settings writes
 
 All settings apply to the whole node, because every standard service shares

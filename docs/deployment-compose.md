@@ -53,9 +53,9 @@ Forward and allow these TCP ports:
 | 8448 | VM port 8448 | Pinned HTTPS admin panel (NCC service; sign-in required) |
 
 Forward the ports for the services you want clients to reach. ncc-search's UI
-and API share port 8447 so browser certificate trust covers both. Npanel uses
-its own HTTPS origin on port 8445 because its frontend's instance probe does
-not work under the ncc:// origin.
+and API share port 8447 so browser certificate trust covers both. Npanel keeps
+its own HTTPS origin on port 8445: opening its `ncc://` address works too, but
+the port is the direct address the docs, healthcheck and curl checks use.
 
 Do not forward ports 3000, 3010, 3200, 3201, 3220, 3230, 8081, 9050, 9051,
 9200, 13131, or the `TOR_*_PORT` loopback listeners (18045-18048 by default).
@@ -374,7 +374,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.6
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.7
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 

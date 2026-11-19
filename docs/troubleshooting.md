@@ -210,6 +210,33 @@ back. Removing a node admin demotes the npanel user to `staff` instead of
 deleting it, so site grants made in npanel keep working. npanel refuses to
 demote its last admin, which is also reported as a warning.
 
+## npanel sign-in fails with "Auth event was signed for …"
+
+If the npanel dashboard refuses every authenticated request with
+
+~~~text
+Auth event was signed for npub1….npanel, not 107.x.x.x
+~~~
+
+the page was opened at its `ncc://` address and the running npanel image is
+older than 0.7.3. ncc-browser loads a service from the per-service origin
+`ncc://<npub>.<service>`, while those npanel releases only accepted the bare
+`ncc://<npub>` form in NIP-98, so the signature was made for a host npanel
+would not accept.
+
+Either open the https origin instead (`https://<PUBLIC_IPV4>:8445`, the direct
+address), or upgrade `NPANEL_IMAGE` to a release built from npanel 0.7.3 or
+later and recreate the container:
+
+~~~sh
+NPANEL_IMAGE=ghcr.io/imattau/ncc-server-npanel:0.2.7
+sudo docker-compose -p ncc-bundle pull npanel
+sudo docker-compose -p ncc-bundle up -d --force-recreate npanel
+~~~
+
+This is npanel's own NIP-98 host check, not the sidecar's admin sync;
+`NCC_PUBKEY` is already set from the operator key.
+
 ## Search results, events, shorts or live streams are missing
 
 `search-crawler` indexes NIP-23 articles, NIP-68/71 pictures and videos,

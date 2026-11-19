@@ -23,7 +23,7 @@ on:
           - caddy-panel
           - npack
       version:
-        description: Image tag, for example 0.2.6 or sidecar-2026-11-16
+        description: Image tag, for example 0.2.7 or sidecar-2026-11-16
         type: string
         required: true
 
@@ -69,7 +69,7 @@ jobs:
             build_args: ''
           - component: npanel
             image: ncc-server-npanel
-            context: https://github.com/imattau/npanel.git#9bcf347a330351d9876ba7958ce1dbfdac458fa4
+            context: https://github.com/imattau/npanel.git#19c41cf01cf4f82f548f38a6869af6a2dd51e824
             file: Dockerfile
             build_args: ''
           - component: ditto-web
