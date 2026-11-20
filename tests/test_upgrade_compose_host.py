@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = pathlib.Path(__file__).parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -90,6 +91,45 @@ class PinTests(unittest.TestCase):
         self.assertIn('SIDECAR_IMAGE', updated)
 
 
+class ReleaseImageTests(unittest.TestCase):
+    def test_only_release_owned_images_are_checked(self):
+        lines = [
+            'SIDECAR_IMAGE=ghcr.io/imattau/ncc-server-sidecar:0.2.12',
+            'NPANEL_IMAGE=ghcr.io/myfork/npanel:latest',
+            'SEARCH_IMAGE=ghcr.io/imattau/ncc-server-search@sha256:' + 'a' * 64,
+            '# CADDY_IMAGE=ghcr.io/imattau/ncc-server-caddy:latest',
+        ]
+        pinned, _, _ = UPGRADE.plan_env_pins(lines, '0.2.13')
+        refs = UPGRADE.image_refs_to_pin(pinned, '0.2.13')
+
+        self.assertIn('ghcr.io/imattau/ncc-server-sidecar:0.2.13', refs)
+        self.assertIn('ghcr.io/imattau/ncc-server-caddy:0.2.13', refs)
+        self.assertIn('ghcr.io/imattau/ncc-server-tor:0.2.13', refs)
+        self.assertNotIn('ghcr.io/myfork/npanel:latest', refs)
+        self.assertFalse(any('@sha256:' in ref for ref in refs))
+
+    def test_a_missing_image_fails_with_one_clear_error(self):
+        missing = 'ghcr.io/imattau/ncc-server-ditto-web:0.2.13'
+        with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=False):
+            with self.assertRaises(UPGRADE.UpgradeError) as caught:
+                UPGRADE.check_release_images([missing])
+
+        message = str(caught.exception)
+        self.assertIn('not published yet', message)
+        self.assertIn(missing, message)
+
+    def test_published_images_pass(self):
+        with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=True):
+            UPGRADE.check_release_images(['ghcr.io/imattau/ncc-server-sidecar:0.2.13'])
+
+    def test_an_unavailable_registry_check_does_not_block_the_upgrade(self):
+        with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=None):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                UPGRADE.check_release_images(['ghcr.io/imattau/ncc-server-sidecar:0.2.13'])
+
+        self.assertIn('Skipping the release image check', output.getvalue())
+
+
 class CleanTreeTests(unittest.TestCase):
     def test_ignores_generated_public_files_but_not_compose(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -116,8 +156,9 @@ class DryRunTests(unittest.TestCase):
         'RELAY_IMAGE=ghcr.io/myfork/relay:latest\n'
     )
 
-    def run_upgrade(self, project, status, log, release, lock, *, dry_run=True, target='v0.2.13'):
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    def run_upgrade(self, project, status, log, release, lock, *, dry_run=True, target='v0.2.13', manifest_exists=True):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+                mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=manifest_exists):
             return UPGRADE.run(argparse.Namespace(
                 project_dir=str(project),
                 target=target,
@@ -168,6 +209,25 @@ class DryRunTests(unittest.TestCase):
             self.assertIn('local changes', payload['error'])
             self.assertEqual(payload['step'], 'checkout')
 
+    def test_unpublished_images_fail_before_env_is_rewritten(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            make_repo(project, env_text=self.ENV)
+            status = project / 'state' / 'status.json'
+            log = project / 'state' / 'upgrade.log'
+            release = project / 'state' / 'release.json'
+            lock = project / 'state' / 'upgrade.lock'
+
+            code = self.run_upgrade(
+                project, status, log, release, lock, dry_run=False, manifest_exists=False)
+
+            self.assertEqual(code, 1)
+            payload = json.loads(status.read_text())
+            self.assertEqual(payload['state'], 'failed')
+            self.assertEqual(payload['step'], 'images')
+            self.assertIn('not published yet', payload['error'])
+            self.assertEqual((project / '.env').read_text(), self.ENV)
+
 
 class FullRunTests(unittest.TestCase):
     ENV = (
@@ -198,7 +258,8 @@ class FullRunTests(unittest.TestCase):
             release = project / 'state' / 'release.json'
             lock = project / 'state' / 'upgrade.lock'
 
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=True):
                 code = UPGRADE.run(argparse.Namespace(
                     project_dir=str(project),
                     target='v0.2.14',

@@ -107,8 +107,12 @@ The custom services use separate public GHCR images. Set their `*_IMAGE`
 values in `.env` to pin or upgrade components independently. The
 `Publish component images` GitHub Actions workflow publishes multi-platform
 images on `v*` tags, or one selected component from its manual dispatch form.
-Make each GHCR package public after its first publish so VPS installs can pull
-without credentials.
+The same tag run then creates the GitHub release, after every image is in the
+registry, so the panel's upgrade check never offers a release that cannot be
+pulled. Add optional hand-written notes as `docs/releases/<tag>.md` before
+tagging; otherwise the release uses generated notes. A manual dispatch does
+not create a release. Make each GHCR package public after its first publish so
+VPS installs can pull without credentials.
 
 The admin panel's Overview page checks the host checkout against the latest
 GitHub release. When it is behind, **Upgrade to vX.Y.Z** runs the same full

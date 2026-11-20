@@ -6,10 +6,11 @@ node-agent writes a small request file when an administrator starts an
 upgrade; a systemd path unit runs this script, which:
 
   1. checks out the requested release tag from the configured origin;
-  2. pins the bundle's own upstream images in .env to that release;
-  3. runs the same install-compose-host.sh the manual installer update uses;
-  4. reconciles per-service Tor endpoints (non-fatal);
-  5. records the installed release for the panel's next version check.
+  2. checks that every image the release pins is published;
+  3. pins the bundle's own upstream images in .env to that release;
+  4. runs the same install-compose-host.sh the manual installer update uses;
+  5. reconciles per-service Tor endpoints (non-fatal);
+  6. records the installed release for the panel's next version check.
 
 It also works manually (`--manual --target v0.2.13`) for the first install
 that has no upgrade helper yet. A status file is written after every step so
@@ -49,6 +50,7 @@ UPSTREAM = 'ghcr.io/imattau/ncc-server-'
 STEPS = (
     ('prepare', 'Preparing the upgrade'),
     ('checkout', 'Checking out the release'),
+    ('images', 'Checking release images'),
     ('pin', 'Pinning bundle images'),
     ('install', 'Pulling and recreating containers'),
     ('tor', 'Reconciling Tor endpoints'),
@@ -240,6 +242,83 @@ def plan_env_pins(lines, version):
     return output, updated, skipped
 
 
+def image_refs_to_pin(pinned, version):
+    """The release's own image references among the planned `.env` pins.
+
+    `plan_env_pins` leaves custom registries, digest pins and unrelated values
+    alone, so only the references that actually move with this release are
+    checked.
+    """
+    suffix = ':' + version
+    refs = []
+    for line in pinned:
+        match = re.match(r'^\s*(?:#\s*)?[A-Z0-9_]+=(.*)$', line)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        if value.startswith(UPSTREAM) and value.endswith(suffix) and value not in refs:
+            refs.append(value)
+    return refs
+
+
+def image_manifest_exists(ref):
+    """Whether the registry has `ref`, or None when Docker cannot say.
+
+    Returns False only when Docker reached the registry and it answered that
+    the manifest does not exist. A missing CLI or a Docker too old for
+    `manifest inspect` is "unknown", not "missing", so such a host still
+    upgrades instead of being blocked by the check.
+    """
+    try:
+        result = subprocess.run(
+            ['docker', 'manifest', 'inspect', ref],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.SubprocessError:
+        return None
+    if result.returncode == 0:
+        return True
+    detail = (result.stderr or result.stdout or '').strip()
+    if 'is not a docker command' in detail or 'unknown command' in detail:
+        return None
+    return False
+
+
+def check_release_images(refs):
+    """Fail before `.env` changes when the release is not pullable yet.
+
+    The admin panel offers an upgrade when the GitHub release exists; the
+    image workflow now creates that release last, but a release made by hand,
+    a deleted image or a failed matrix can still leave the tags missing. This
+    turns what would otherwise be a wall of `manifest unknown` pulls into one
+    clear error, before any pin is written.
+    """
+    unknown = False
+    missing = []
+    for ref in refs:
+        exists = image_manifest_exists(ref)
+        if exists is None:
+            unknown = True
+            break
+        if not exists:
+            missing.append(ref)
+    if unknown:
+        print('Skipping the release image check: docker manifest inspect is unavailable.')
+        return
+    if missing:
+        raise UpgradeError(
+            'The images for this release are not published yet: '
+            + ', '.join(missing)
+            + '. Try again once the release workflow has finished.'
+        )
+
+
 def backup_env(path, directory):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     backup = pathlib.Path(directory) / f'{path.name}.bak-{stamp}'
@@ -404,10 +483,14 @@ def run(args):
             if checkout.returncode != 0:
                 raise UpgradeError((checkout.stderr or checkout.stdout).strip() or f'Could not check out {target}')
 
-        step('pin')
+        step('images')
+        version = target.lstrip('v')
         env_path = project / '.env'
         lines = env_path.read_text().splitlines()
-        pinned, updated, skipped = plan_env_pins(lines, target.lstrip('v'))
+        pinned, updated, skipped = plan_env_pins(lines, version)
+        check_release_images(image_refs_to_pin(pinned, version))
+
+        step('pin')
         status['pins'] = {'updated': updated, 'skipped': skipped}
         if not args.dry_run:
             backup_env(env_path, status_path.parent / 'env-backups')

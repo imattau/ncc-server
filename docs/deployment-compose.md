@@ -416,14 +416,18 @@ The Overview page shows **Upgrade to vX.Y.Z** when
 latest non-prerelease GitHub release for the checkout's origin. The check is
 cached for fifteen minutes. An untagged checkout, a `latest` image with no
 release file, or an unreachable GitHub makes the answer unknown and hides the
-action; it is never guessed.
+action; it is never guessed. For a `v*` tag the image workflow creates the
+GitHub release only after every component image is pushed, so the button does
+not appear while a release is still building.
 
 The button does not run an arbitrary command. The sidecar submits a validated
 release tag to the node-agent, which writes
 `/var/lib/ncc-server-upgrade/request.json`; the
 `ncc-server-upgrade.path` systemd unit runs the fixed
 `/usr/local/sbin/ncc-server-upgrade` launcher as root. The runner checks out
-the tag, pins `ghcr.io/imattau/ncc-server-*` values in `.env`, runs
+the tag, verifies that each image the release pins has a manifest in the
+registry (failing with one clear message when they are not published yet),
+pins `ghcr.io/imattau/ncc-server-*` values in `.env`, runs
 `install-compose-host.sh`, reconciles Tor endpoints, and records the new
 release. `install-compose-host.sh` installs the launcher, the path/service
 units, the state directories and the release file, so a fresh install and an
