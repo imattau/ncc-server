@@ -1,4 +1,5 @@
 import { useState, type MouseEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { Play, Image as ImageIcon, Video as VideoIcon } from 'lucide-react';
 import type { SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
@@ -145,12 +146,13 @@ export function MediaGridCard({
       >
         {cell}
       </a>
-      {preview && (
+      {preview && createPortal(
         <MediaPreviewDialog
           result={result}
           open={previewOpen}
           onClose={() => setPreviewOpen(false)}
-        />
+        />,
+        document.body,
       )}
     </>
   );
