@@ -19,8 +19,14 @@ const ACTION_LINK_CLASS =
 // grey tile. This dialog needs no popup: it shows the media (or a named
 // failure) right here, and keeps the original URL one click away.
 //
-// Kept mounted but inert until `open` is true, same pattern as
-// ArticlePreviewDialog: rendering a page of results costs nothing.
+// The dialog element stays mounted but inert until `open` is true, same
+// pattern as ArticlePreviewDialog: rendering a page of results costs nothing.
+// The media itself is *not* inert, though: a mounted `<video src autoPlay>`
+// keeps playing when its `<dialog>` is merely hidden with `close()`, and
+// Android WebView allows that autoplay without a gesture
+// (`mediaPlaybackRequiresUserGesture = false` in NCC Browser). So the
+// `<img>`/`<video>` only exists while `open`, and closing it explicitly
+// pauses and releases the element -- see the effect below.
 export function MediaPreviewDialog({
   result,
   open,
@@ -31,6 +37,7 @@ export function MediaPreviewDialog({
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const titleId = useId();
   const author = useAuthor(open ? result.pubkey : undefined);
   const [failed, setFailed] = useState(false);
@@ -56,6 +63,53 @@ export function MediaPreviewDialog({
       document.body.style.overflow = previous;
     };
   }, [open, result.itemId]);
+
+  // Android WebView does not reliably stop a <video> when its dialog is
+  // hidden or removed: the audio can outlive the view that owns it, which is
+  // how a preview used to keep playing after it was closed, and even after
+  // leaving nccsearch. Pausing on hide, and tearing the source down on close,
+  // makes the stop explicit instead of leaving it to the renderer. The
+  // element is captured here rather than read from the ref in the cleanup:
+  // by the time a passive cleanup runs, React may already have detached it,
+  // but pause()/load() still work on a detached media element.
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    const pause = () => {
+      try {
+        video?.pause();
+      } catch {
+        // A torn-down element can throw; nothing is left to stop.
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) pause();
+    };
+    const release = () => {
+      if (!video) return;
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      } catch {
+        // Same as above: the media element is already gone.
+      }
+    };
+    // pagehide covers an iframe being unloaded (NCC Browser's Android shell
+    // does that when its nccsearch panel closes); visibilitychange covers the
+    // app being backgrounded while the document itself survives.
+    window.addEventListener('pagehide', pause);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', pause);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      release();
+    };
+    // `failed` and the source are dependencies because either one decides
+    // whether the <video> actually exists: re-running here is what captures
+    // a player that mounts one render after `open` (the error flag is reset
+    // in the effect above), and what releases one that unmounts on error.
+  }, [open, failed, target?.src]);
 
   return (
     <dialog
@@ -106,7 +160,7 @@ export function MediaPreviewDialog({
         </header>
 
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black/90 p-2 sm:p-4">
-          {!target ? (
+          {!open ? null : !target ? (
             <p className="max-w-md px-6 py-10 text-center text-sm text-white/80">
               This result has no media file yet. It may still be indexing — try again in a
               moment, or search for its author.
@@ -139,6 +193,7 @@ export function MediaPreviewDialog({
             />
           ) : (
             <video
+              ref={videoRef}
               src={target.src}
               poster={target.poster ?? undefined}
               controls
