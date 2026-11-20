@@ -36,7 +36,7 @@ env:
   SIDECAR_REV: d67fa15b40a3461588c96da56710bec6fd670b5b
   DITTO_RELAY_REV: e8974053dcf99ac952d1951deaffec105aeb08f1
   NPANEL_REV: 9bcf347a330351d9876ba7958ce1dbfdac458fa4
-  DITTO_WEB_REV: 29709b8b53d68109dfc14af7f3a44563d177e880
+  DITTO_WEB_REV: bfbeef619021d965583301a035749324c3c7c413
 
 jobs:
   publish:
@@ -78,7 +78,7 @@ jobs:
             file: ./container/ditto-web/Containerfile
             build_args: |
               DITTO_REPO=https://gitlab.com/imattau/ditto.git
-              DITTO_REV=29709b8b53d68109dfc14af7f3a44563d177e880
+              DITTO_REV=bfbeef619021d965583301a035749324c3c7c413
           - component: search
             image: ncc-server-search
             context: .
