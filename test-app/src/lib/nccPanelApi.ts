@@ -802,6 +802,142 @@ export async function restartPanelService(
   };
 }
 
+// --- node images -----------------------------------------------------------
+
+export interface PanelNodeImageContainer {
+  name: string;
+  state: string;
+  health: string | null;
+}
+
+export interface PanelNodeImageUpdate {
+  state: string;
+  changed: boolean;
+  imageId: string | null;
+  error: string | null;
+}
+
+export interface PanelNodeImage {
+  service: string;
+  label: string;
+  description: string;
+  role: 'core' | 'infrastructure';
+  image: string | null;
+  tag: string | null;
+  imageId: string | null;
+  imageCreatedAt: string | null;
+  state: string;
+  health: string | null;
+  containers: PanelNodeImageContainer[];
+  updatable: boolean;
+  update: PanelNodeImageUpdate | null;
+}
+
+export interface PanelNodeImages {
+  agent: { available: boolean; error: string | null };
+  updating: boolean;
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+  images: PanelNodeImage[];
+}
+
+function readNodeImage(value: unknown): PanelNodeImage | null {
+  const record = objectValue(value);
+  if (!record || typeof record.service !== 'string' || !record.service) return null;
+
+  const containers = Array.isArray(record.containers) ? record.containers : [];
+  const update = objectValue(record.update);
+
+  return {
+    service: record.service,
+    label: typeof record.label === 'string' ? record.label : record.service,
+    description: typeof record.description === 'string' ? record.description : '',
+    role: record.role === 'infrastructure' ? 'infrastructure' : 'core',
+    image: stringOrNull(record.image),
+    tag: stringOrNull(record.tag),
+    imageId: stringOrNull(record.imageId),
+    imageCreatedAt: stringOrNull(record.imageCreatedAt),
+    state: typeof record.state === 'string' ? record.state : 'unknown',
+    health: stringOrNull(record.health),
+    containers: containers.flatMap((entry): PanelNodeImageContainer[] => {
+      const container = objectValue(entry);
+      if (!container) return [];
+      return [{
+        name: typeof container.name === 'string' ? container.name : '',
+        state: typeof container.state === 'string' ? container.state : 'unknown',
+        health: stringOrNull(container.health),
+      }];
+    }),
+    updatable: record.updatable === true,
+    update: update ? {
+      state: typeof update.state === 'string' ? update.state : 'unknown',
+      changed: update.changed === true,
+      imageId: stringOrNull(update.imageId),
+      error: stringOrNull(update.error),
+    } : null,
+  };
+}
+
+export function readNodeImages(payload: unknown): PanelNodeImages {
+  const record = objectValue(payload);
+  if (!record || !Array.isArray(record.images)) {
+    throw new PanelApiError(0, 'The node returned an unexpected image list');
+  }
+
+  const agent = objectValue(record.agent) ?? {};
+  return {
+    agent: {
+      available: agent.available === true,
+      error: stringOrNull(agent.error),
+    },
+    updating: record.updating === true,
+    startedAt: numberOrNull(record.startedAt),
+    finishedAt: numberOrNull(record.finishedAt),
+    error: stringOrNull(record.error),
+    images: record.images
+      .map(readNodeImage)
+      .filter((image): image is PanelNodeImage => image !== null),
+  };
+}
+
+/** The bundle's own images with their current tag and last update result. */
+export async function loadPanelImages(
+  base: string,
+  signer: PanelSigner,
+  signal?: AbortSignal,
+): Promise<PanelNodeImages> {
+  return readNodeImages(await requestJson(base, signer, 'GET', '/images', undefined, signal));
+}
+
+/**
+ * Pull a bundle image's tag and recreate its container when the digest
+ * changed. The node accepts the work before the pull; reload the list for
+ * the result.
+ */
+export async function updatePanelImage(
+  base: string,
+  signer: PanelSigner,
+  service: string,
+  signal?: AbortSignal,
+): Promise<{ service: string; accepted: boolean }> {
+  const payload = await requestJson(
+    base, signer, 'POST',
+    `/images/${encodeURIComponent(service)}/update`,
+    undefined,
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || typeof record.service !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the image update');
+  }
+
+  return {
+    service: record.service,
+    accepted: record.accepted === true,
+  };
+}
+
 // --- npack service catalogue ------------------------------------------------
 
 export interface PanelCatalogueIcon {

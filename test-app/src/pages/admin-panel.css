@@ -125,3 +125,27 @@
 .invite-warning svg{flex:none;margin-top:1px}
 .invite-warning button{margin-left:auto;border:0;background:none;color:#8a6526;font-size:9px;font-weight:700;white-space:nowrap}
 @media(max-width:760px){.admin-access{grid-column:2;grid-row:1}.admin-access .admin-state{font-size:8px}.npanel-state{font-size:7px}}
+.node-images-section{margin-top:0;margin-bottom:30px}
+.node-image-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px}
+.node-image-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:13px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.node-image-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.node-image-title{display:grid;gap:3px;min-width:0}
+.node-image-title strong{font-size:11px}
+.node-image-title small{font-size:8px;letter-spacing:.07em;text-transform:uppercase;color:#97a096;font-weight:750}
+.node-image-card>p{margin:0;color:#879189;font-size:9px;line-height:1.55;min-height:28px}
+.node-image-ref{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;color:#5f6d63;background:#f7f9f4;border:1px solid #eef1ea;border-radius:6px;padding:6px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node-image-meta{display:flex;flex-wrap:wrap;gap:4px 8px;color:#98a197;font-size:8px}
+.node-image-meta span{white-space:nowrap}
+.node-image-status{font-size:9px;color:#8a948c;min-height:24px;line-height:1.4}
+.node-image-status.good{color:#5b8b63}
+.node-image-status.warn{color:#9a722f}
+.node-image-status.error{color:#a85a4c}
+.node-image-status.muted{color:#929c94}
+.node-image-actions{display:flex;align-items:center;gap:8px;margin-top:auto}
+.node-image-actions .catalog-install{margin-top:0}
+.node-image-actions .text-button{font-size:9px;padding:0}
+.status-pill.stopped{color:#9a722f;background:#fdf5e8;border-color:#f5e8cf}
+.status-pill.stopped i{background:#d6a34d}
+.button-spinner.dark{border-color:#b9c7bb;border-top-color:#52725a}
+@media(max-width:1080px){.node-image-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.node-image-grid{grid-template-columns:1fr}.node-image-card>p{min-height:0}}

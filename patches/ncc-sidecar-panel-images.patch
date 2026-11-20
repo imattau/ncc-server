@@ -1,0 +1,377 @@
+diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
+index 466f5be..c3991f1 100644
+--- a/src/routes/panel-services.js
++++ b/src/routes/panel-services.js
+@@ -331,6 +331,157 @@ function readLimit(value, fallback = 200) {
+   return Math.min(Math.max(parsed, 1), MAX_LOG_LINES);
+ }
+ 
++/**
++ * The images `compose.yaml` starts. The panel shows these next to the npack
++ * catalogue so the node's own apps are visible and updateable like any other,
++ * even though they are plain OCI images rather than signed service packages.
++ *
++ * `service` is the Compose service name; it is the only value the panel can
++ * send back, and the node-agent allowlists the same set.
++ */
++const BUNDLE_IMAGES = [
++  {
++    service: 'sidecar',
++    label: 'Node sidecar',
++    role: 'core',
++    description: 'Publishes this node\'s NCC records and serves the admin API.',
++  },
++  {
++    service: 'relay',
++    label: 'Nostr relay',
++    role: 'core',
++    description: 'Stores and serves the node\'s events over WSS.',
++  },
++  {
++    service: 'npanel',
++    label: 'npanel',
++    role: 'core',
++    description: 'Hosts community nsites and the npanel dashboard.',
++  },
++  {
++    service: 'ditto-web',
++    label: 'Ditto web',
++    role: 'core',
++    description: 'The public social web client served by this node.',
++  },
++  {
++    service: 'search',
++    label: 'Search indexer',
++    role: 'core',
++    description: 'Indexes relays into ncc-search and answers its API.',
++  },
++  {
++    service: 'search-ui',
++    label: 'Search interface',
++    role: 'core',
++    description: 'The ncc-search web and nsite editions.',
++  },
++  {
++    service: 'search-crawler',
++    label: 'Search crawler',
++    role: 'core',
++    description: 'Walked relays and queues events for the search index.',
++  },
++  {
++    service: 'opensearch',
++    label: 'Search storage',
++    role: 'infrastructure',
++    description: 'OpenSearch holds the search index and its settings.',
++  },
++  {
++    service: 'npack',
++    label: 'App catalogue',
++    role: 'infrastructure',
++    description: 'Read-only npack daemon behind the App catalogue.',
++  },
++  {
++    service: 'caddy',
++    label: 'Web server',
++    role: 'infrastructure',
++    description: 'TLS, reverse proxying and the admin panel assets.',
++  },
++  {
++    service: 'tor',
++    label: 'Tor',
++    role: 'infrastructure',
++    description: 'Publishes the onion endpoints for each service.',
++  },
++  {
++    service: 'node-agent',
++    label: 'Container control agent',
++    role: 'infrastructure',
++    description: 'The narrow Docker control plane used by this panel.',
++  },
++];
++
++const BUNDLE_SERVICES = new Set(BUNDLE_IMAGES.map((image) => image.service));
++const UPDATE_STATES = new Set([
++  'queued', 'pulling', 'current', 'recreating', 'recreated', 'pinned', 'failed',
++]);
++
++/** The tag part of an image reference, or null for a digest pin. */
++export function imageTag(ref) {
++  if (typeof ref !== 'string' || !ref) return null;
++  if (ref.includes('@')) return null;
++  const slash = ref.lastIndexOf('/');
++  const colon = ref.lastIndexOf(':');
++  return colon > slash ? ref.slice(colon + 1) : 'latest';
++}
++
++/**
++ * Merge the node-agent's project containers and update status into the Apps
++ * page's image list. Only bundle services with a container appear: a profile
++ * that is not running has nothing to update. Fields the agent did not report
++ * stay null so the panel can say "unknown" rather than invent a version.
++ */
++export function readNodeImages(containers, status) {
++  const list = Array.isArray(containers) ? containers : [];
++  const updates = new Map();
++  for (const entry of Array.isArray(status?.services) ? status.services : []) {
++    if (entry && typeof entry.service === 'string') updates.set(entry.service, entry);
++  }
++
++  return BUNDLE_IMAGES.flatMap((meta) => {
++    const matches = list.filter((container) => container && container.service === meta.service);
++    if (!matches.length) return [];
++
++    const primary = matches[0];
++    const image = typeof primary.image === 'string' ? primary.image : null;
++    const update = updates.get(meta.service) ?? null;
++    const stopped = matches.find((container) => container.state !== 'running');
++    const state = stopped
++      ? (typeof stopped.state === 'string' ? stopped.state : 'unknown')
++      : 'running';
++
++    return [{
++      service: meta.service,
++      label: meta.label,
++      description: meta.description,
++      role: meta.role,
++      image,
++      tag: imageTag(image),
++      imageId: typeof primary.imageId === 'string' ? primary.imageId : null,
++      imageCreatedAt: typeof primary.imageCreatedAt === 'string' ? primary.imageCreatedAt : null,
++      state,
++      health: matches.some((container) => container.health === 'unhealthy')
++        ? 'unhealthy'
++        : (matches.find((container) => container.health)?.health ?? null),
++      containers: matches.map((container) => ({
++        name: typeof container.name === 'string' ? container.name : '',
++        state: typeof container.state === 'string' ? container.state : 'unknown',
++        health: typeof container.health === 'string' ? container.health : null,
++      })),
++      updatable: Boolean(image && !image.includes('@')),
++      update: update ? {
++        state: UPDATE_STATES.has(update.state) ? update.state : 'unknown',
++        changed: update.changed === true,
++        imageId: typeof update.imageId === 'string' ? update.imageId : null,
++        error: typeof update.error === 'string' && update.error ? update.error : null,
++      } : null,
++    }];
++  });
++}
++
+ function numberOrNull(value, { min = null, max = null } = {}) {
+   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+   if (min !== null && value < min) return null;
+@@ -627,4 +778,99 @@ export default async function panelServicesRoutes(server) {
+       };
+     }
+   });
++
++  // The node's own images, from the node-agent. These are not npack packages:
++  // they are the OCI images compose.yaml starts, so the Apps page can show and
++  // update them alongside catalogue apps. Without the agent the list is empty
++  // and the page explains that updates need it.
++  server.get('/ncc-api/images', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    if (!AGENT_TOKEN) {
++      return {
++        agent: { available: false, error: 'Host control agent is not configured' },
++        updating: false,
++        startedAt: null,
++        finishedAt: null,
++        error: null,
++        images: [],
++      };
++    }
++
++    try {
++      const [containers, status] = await Promise.all([
++        agentRequest('/v1/containers'),
++        // A sidecar from before the update routes is a deployment mismatch,
++        // not a reason to hide the image list.
++        agentRequest('/v1/update/status').catch(() => null),
++      ]);
++      return {
++        agent: { available: true, error: null },
++        updating: status?.inProgress === true,
++        startedAt: Number.isFinite(status?.startedAt) ? status.startedAt : null,
++        finishedAt: Number.isFinite(status?.finishedAt) ? status.finishedAt : null,
++        error: typeof status?.error === 'string' && status.error ? status.error : null,
++        images: readNodeImages(containers?.containers, status),
++      };
++    } catch (error) {
++      return {
++        agent: {
++          available: false,
++          error: error instanceof Error && error.message !== 'fetch failed'
++            ? error.message
++            : 'The host control agent is unreachable',
++        },
++        updating: false,
++        startedAt: null,
++        finishedAt: null,
++        error: null,
++        images: [],
++      };
++    }
++  });
++
++  // Pull the image tag and, only when the digest changed, recreate the
++  // container. The agent answers before the pull, so this returns as soon as
++  // the work is accepted; the panel reloads /ncc-api/images for the result.
++  server.post('/ncc-api/images/:service/update', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const service = String(request.params.service || '').toLowerCase();
++    if (!BUNDLE_SERVICES.has(service)) {
++      return reply.code(404).send({ error: `No bundle image is named ${service}` });
++    }
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++
++    try {
++      const payload = await agentRequest('/v1/update', {
++        method: 'POST',
++        body: { services: [service] },
++        timeoutMs: 20_000,
++      });
++
++      addLog('info', `Image update started for ${service} from the NCC admin panel`, {
++        containers: [service],
++        changedBy: caller.pubkey,
++      });
++
++      return {
++        success: true,
++        service,
++        accepted: payload?.accepted === true,
++        status: payload?.status ?? null,
++      };
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The image update could not start';
++      addLog('error', `Image update failed to start for ${service} from the NCC admin panel`, {
++        containers: [service],
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      const status = /already in progress/i.test(message) ? 409 : 503;
++      return reply.code(status).send({ error: message });
++    }
++  });
+ }
+diff --git a/test/panel-images.test.js b/test/panel-images.test.js
+new file mode 100644
+index 0000000..93d8369
+--- /dev/null
++++ b/test/panel-images.test.js
+@@ -0,0 +1,109 @@
++import { test } from 'node:test';
++import assert from 'node:assert';
++
++import { imageTag, readNodeImages } from '../src/routes/panel-services.js';
++
++test('Images: tag parsing keeps registry ports out of the tag', () => {
++  assert.strictEqual(imageTag('ghcr.io/imattau/ncc-server-relay:latest'), 'latest');
++  assert.strictEqual(imageTag('ghcr.io/imattau/ncc-server-relay:0.2.8'), '0.2.8');
++  assert.strictEqual(imageTag('registry.example:5000/team/app'), 'latest');
++  assert.strictEqual(imageTag('registry.example:5000/team/app:1.2.3'), '1.2.3');
++  assert.strictEqual(imageTag('ghcr.io/imattau/ncc-server-relay@sha256:abc'), null);
++  assert.strictEqual(imageTag(null), null);
++});
++
++test('Images: only bundle services with a container are listed', () => {
++  const images = readNodeImages([
++    {
++      service: 'relay',
++      image: 'ghcr.io/imattau/ncc-server-relay:latest',
++      imageId: 'sha256:relay',
++      imageCreatedAt: '2026-01-01T00:00:00Z',
++      state: 'running',
++      health: null,
++      name: 'ncc-bundle-relay-1',
++    },
++    {
++      service: 'hello',
++      image: 'ghcr.io/acme/hello:1.0.0',
++      imageId: 'sha256:hello',
++      state: 'running',
++    },
++  ]);
++
++  assert.deepStrictEqual(images.map((image) => image.service), ['relay']);
++  assert.strictEqual(images[0].label, 'Nostr relay');
++  assert.strictEqual(images[0].tag, 'latest');
++  assert.strictEqual(images[0].imageId, 'sha256:relay');
++  assert.strictEqual(images[0].imageCreatedAt, '2026-01-01T00:00:00Z');
++  assert.strictEqual(images[0].updatable, true);
++  assert.deepStrictEqual(images[0].containers, [
++    { name: 'ncc-bundle-relay-1', state: 'running', health: null },
++  ]);
++});
++
++test('Images: order follows the bundle, not the agent response', () => {
++  const images = readNodeImages([
++    { service: 'tor', state: 'running' },
++    { service: 'sidecar', state: 'running' },
++    { service: 'relay', state: 'running' },
++  ]);
++  assert.deepStrictEqual(
++    images.map((image) => image.service),
++    ['sidecar', 'relay', 'tor'],
++  );
++});
++
++test('Images: a digest-pinned image is shown but not updateable', () => {
++  const [image] = readNodeImages([{
++    service: 'npanel',
++    image: 'ghcr.io/imattau/ncc-server-npanel@sha256:abcdef',
++    imageId: 'sha256:npanel',
++    state: 'running',
++  }]);
++
++  assert.strictEqual(image.tag, null);
++  assert.strictEqual(image.updatable, false);
++});
++
++test('Images: update status is merged and unknown states stay unknown', () => {
++  const [image] = readNodeImages(
++    [{ service: 'superseded', state: 'running' }],
++    { services: [] },
++  );
++  assert.strictEqual(image, undefined, 'unknown service names are ignored');
++
++  const [relay] = readNodeImages(
++    [
++      { service: 'relay', image: 'ghcr.io/imattau/ncc-server-relay:latest', state: 'running' },
++      { service: 'sidecar', image: 'ghcr.io/imattau/ncc-server-sidecar:latest', state: 'running' },
++    ],
++    {
++      inProgress: true,
++      services: [{ service: 'relay', state: 'mystery', changed: true, error: 'nope' }],
++    },
++  ).filter((image) => image.service === 'relay');
++  assert.deepStrictEqual(relay.update, {
++    state: 'unknown', changed: true, imageId: null, error: 'nope',
++  });
++});
++
++test('Images: a stopped or unhealthy container is reported as such', () => {
++  const [search] = readNodeImages([
++    { service: 'search', image: 'x:1', state: 'running', health: 'healthy', name: 'a' },
++    { service: 'search', image: 'x:1', state: 'exited', health: null, name: 'b' },
++  ]);
++
++  assert.strictEqual(search.state, 'exited');
++  assert.deepStrictEqual(search.containers.map((entry) => entry.name), ['a', 'b']);
++
++  const [searchUi] = readNodeImages([
++    { service: 'search-ui', image: 'x:1', state: 'running', health: 'unhealthy', name: 'c' },
++  ]);
++  assert.strictEqual(searchUi.health, 'unhealthy');
++});
++
++test('Images: an empty or malformed payload yields an empty list', () => {
++  assert.deepStrictEqual(readNodeImages(undefined, null), []);
++  assert.deepStrictEqual(readNodeImages([null, 3], { services: 'nope' }), []);
++});

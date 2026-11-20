@@ -169,6 +169,36 @@ state. `Unreachable` with a running container usually means the probe target
 in the service record is wrong; `Degraded` usually means a relay publish
 failed or the record is older than twice the publish interval.
 
+## An image update does not change the image
+
+The **Apps** page lists the bundle's own images with **Update**. It pulls the
+tag the container currently runs and recreates the container only when the
+pulled digest differs. A pinned tag therefore stays where it is: `0.2.8`
+will not turn into `0.2.9`. Change the image variable in `.env` on the host
+(`SIDECAR_IMAGE`, `RELAY_IMAGE`, and so on), then recreate the pair as
+described in the deployment guide. `latest` is the only tag that follows new
+releases by itself.
+
+Other messages:
+
+- `Host control agent is not configured` or `Image updates need the
+  node-agent` means the companion container is missing or has no token. Add
+  `NODE_AGENT_TOKEN` and recreate `sidecar node-agent`.
+- `No bundle image is named …` means the panel and sidecar images do not
+  match; deploy the Caddy and sidecar images from the same release.
+- `An image update is already in progress` is the agent refusing a second
+  pull. Wait for the first one and press **Check images**.
+- A card stuck on `Recreating the container…` usually means the container
+  failed to start and was rolled back to the previous image. Read the failed
+  result, then check its logs on the **Installed** page or with `docker
+  logs`.
+- A pull denied by the registry fails before anything is recreated. The agent
+  pulls anonymously; for a private registry, update the image on the host
+  with `docker-compose -p ncc-bundle pull <service>` instead.
+
+Updating `caddy`, `sidecar` or `node-agent` briefly interrupts this panel.
+Wait a few seconds and reload; the new container is already being started.
+
 ## Admin changes do not reach npanel
 
 Adding a key from the panel writes the node admin list first, then grants

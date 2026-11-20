@@ -65,7 +65,7 @@ hello-1.0.0.npk
   "probe_path": "/",
   "env": { "LOG_LEVEL": "info" },
   "volumes": { "hello-data": "/data" },
-  "min_bundle_version": "0.2.8"
+  "min_bundle_version": "0.2.9"
 }
 ```
 
@@ -123,7 +123,7 @@ repository, installs the pinned npack release, builds and (when
 ```yaml
 publish-package:
   needs: build-image
-  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.8
+  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.9
   with:
     version: 1.0.0
     publisher: npub1...
@@ -225,8 +225,11 @@ sandbox described above, but the publisher's code still runs on your host.
 - npack's catalogue hides revoked releases, so an **already-installed**
   service is not flagged as revoked yet. `make service-install` refuses a
   revoked release because resolution fails.
-- No automatic updates. Re-run `service-install` with a newer version; the
-  staged package keeps its previous release for rollback.
+- No automatic updates for installed service packages. Re-run
+  `service-install` with a newer version; the staged package keeps its
+  previous release for rollback. The bundle's own images are updated from the
+  panel's **Apps** page instead, because they ship with the node and are not
+  npack packages.
 
 These are deliberate limits for the first release and match the existing
 custom-service scope.

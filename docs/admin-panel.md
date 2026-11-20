@@ -28,11 +28,12 @@ management, the editable **Settings**
 service controls and the **Apps** catalogue's publisher trust list are the
 write actions in the panel; all are authorized server-side by a NIP-98
 signature from the connected key (see below). The panel asks the sidecar to
-republish a record or restart a container; it never changes containers
-itself, and package installation stays a host command. Host CPU load, memory
-and disk are read from the node-agent and shown in the sidebar and on the
-overview; anything the agent cannot measure is shown as `unknown` rather than
-invented.
+republish a record, restart a container or pull and recreate one of the
+bundle's images; the sidecar forwards container work to the node-agent and
+never touches Docker itself, and package installation stays a host command.
+Host CPU load, memory and disk are read from the node-agent and shown in the
+sidebar and on the overview; anything the agent cannot measure is shown as
+`unknown` rather than invented.
 
 NCC records are public, so gating the panel is a usability and honesty
 measure, not a confidentiality boundary. Every management action must go
@@ -55,6 +56,9 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/services` — health, probe, container and publication state
 - `GET /ncc-api/services/<id>/logs?limit=200` — node events and container output
 - `GET /ncc-api/metrics` — host CPU, memory, disk and Docker usage
+- `GET /ncc-api/images` — the bundle's own images, tags and last update result
+- `POST /ncc-api/images/<service>/update` — pull the image tag and recreate the
+  container when the digest changed
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
@@ -203,13 +207,13 @@ which briefly interrupts all three.
 
 The Docker socket is not mounted into the sidecar. A small **node-agent**
 companion container reuses the sidecar image, mounts the socket, and exposes
-container state, recent logs and restart for containers labelled
+container state, recent logs, restart and image pulls for containers labelled
 `com.docker.compose.project=ncc-bundle`, plus host CPU, memory and disk
 metrics. The sidecar calls it on host loopback with `NODE_AGENT_TOKEN`. The
 agent replies before restarting, so restarting Caddy cannot cut the response
 that is proxied through it. Without the agent, the page still shows probe and
-publication health and node logs; restart, container logs and host metrics
-are disabled with an explanation.
+publication health and node logs; restart, container logs, image updates and
+host metrics are disabled with an explanation.
 
 ### Node metrics
 
@@ -231,6 +235,44 @@ pressed, not on a timer: every read needs a fresh signature, and polling
 would make a NIP-46 signer prompt over and over. A host without the agent, or
 one where the agent cannot read a source, reports that field as `unknown`;
 the panel never fills in a number it did not receive.
+
+### Node images
+
+The **Apps** page starts with the images this bundle runs, not just the npack
+catalogue. `compose.yaml` starts plain OCI images (sidecar, relay, npanel,
+Ditto web, search, OpenSearch, Caddy, Tor and the node-agent); they are not
+signed service packages, so before this list they appeared nowhere in the
+panel and could only be updated on the host.
+
+Each card shows the Compose service, its image reference and tag, the image
+digest's date and the last update result. **Update** pulls the tag the
+container runs and recreates the container only when the pulled digest
+differs from the running one:
+
+- the pull and the recreate happen on the node, through the node-agent;
+- only the bundle's own Compose service names are accepted, and every create
+  option (volumes, ports, environment, security settings) comes from the
+  running container's own Docker configuration;
+- if create or start fails, the previous container is renamed back and
+  started, so a bad image cannot leave the service down;
+- updating Caddy, the sidecar or the node-agent briefly interrupts this
+  panel; the node answers before it starts the work.
+
+The tag is the one in `.env`. `latest` follows new releases, but a pinned
+release tag does not move: change `SIDECAR_IMAGE`, `RELAY_IMAGE` and the other
+image variables on the host to switch releases. The panel shows the pin rather
+than pretending an update exists. A digest-pinned image is marked as such and
+has no Update action.
+
+The update runs in a one-shot helper container built from the node-agent's
+image. That is what lets it replace the node-agent itself: the helper survives
+the container it is recreating. The helper gets the Docker socket and a list
+of container IDs the agent already selected; it is not a general Docker
+proxy.
+
+A pull can take a few minutes. The page does not poll: every read needs a new
+NIP-98 event, which would make a NIP-46 signer prompt repeatedly. Press
+**Check images** after a short wait to see the new digest and the result.
 
 ### App catalogue
 
@@ -297,7 +339,8 @@ rejects), and forwards the original `Host` so the sidecar can rebuild the
 signed URL. The routes come from
 `patches/ncc-sidecar-panel-admin-api.patch`,
 `patches/ncc-sidecar-npanel-sync.patch`,
-`patches/ncc-sidecar-panel-services.patch` and
+`patches/ncc-sidecar-panel-services.patch`,
+`patches/ncc-sidecar-panel-images.patch` and
 `patches/ncc-sidecar-npack.patch`, applied when the sidecar image is
 built. A sidecar image without the patches answers 401/404, and the panel
 falls back to operator-only access with the Admins, Settings, service controls

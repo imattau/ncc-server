@@ -23,7 +23,7 @@ on:
           - caddy-panel
           - npack
       version:
-        description: Image tag, for example 0.2.8 or sidecar-2026-11-16
+        description: Image tag, for example 0.2.9 or sidecar-2026-11-16
         type: string
         required: true
 

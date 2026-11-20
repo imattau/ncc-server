@@ -3,13 +3,17 @@
  *
  * The sidecar is deliberately hardened and has no Docker access. This small
  * companion process runs with the sidecar image, mounts the Docker socket,
- * and exposes only four operations: read container state, read recent logs,
- * restart a named service, and read host resource metrics. Container
- * operations are limited to this Compose project.
+ * and exposes only five operations: read container state, read recent logs,
+ * restart a named service, read host resource metrics, and pull the image of
+ * a bundle service and recreate its container when the digest changed.
+ * Container operations are limited to this Compose project.
  *
  * It is not a general Docker proxy. Every request names Compose services,
  * and the agent resolves them through the `com.docker.compose.project` label,
  * so a caller cannot address another project or an arbitrary container.
+ * Image updates accept only the bundle's own service names, derive every
+ * create option from the running container, and run the recreate in a
+ * one-shot helper container so the agent can replace itself.
  *
  * Transport is host loopback plus a bearer token. The sidecar is the only
  * caller. `GET /health` is unauthenticated so Compose can probe the process.
@@ -21,6 +25,9 @@ import os from 'node:os';
 import { timingSafeEqual } from 'node:crypto';
 
 const DOCKER_SOCKET = process.env.NCC_DOCKER_SOCKET || '/var/run/docker.sock';
+// Path of the same socket on the host, used as the bind source when the
+// one-shot recreate helper mounts it. Compose mounts it at the same path.
+const HOST_DOCKER_SOCKET = process.env.NCC_UPDATE_DOCKER_SOCKET || '/var/run/docker.sock';
 const PROJECT = process.env.NCC_COMPOSE_PROJECT || 'ncc-bundle';
 const HOST = process.env.NCC_AGENT_HOST || '127.0.0.1';
 const PORT = Number(process.env.NCC_AGENT_PORT || 3010);
@@ -30,8 +37,22 @@ const MAX_LOG_LINES = 500;
 const MAX_CONTAINERS = 50;
 const METRICS_CACHE_MS = 5_000;
 const DOCKER_USAGE_CACHE_MS = 60_000;
+const IMAGE_DATE_CACHE_MS = 300_000;
 const CPU_SAMPLE_MS = 200;
+const PULL_TIMEOUT_MS = 15 * 60_000;
+const HELPER_TIMEOUT_MS = 5 * 60_000;
 const SERVICE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/**
+ * The images this bundle ships. A caller cannot name an arbitrary image or
+ * Compose service: updates are limited to this list, which is the set
+ * `compose.yaml` defines. Custom services installed later keep using
+ * `make service-install`.
+ */
+const UPDATEABLE_SERVICES = new Set([
+  'caddy', 'ditto-web', 'node-agent', 'npanel', 'npack', 'opensearch',
+  'relay', 'search', 'search-crawler', 'search-ui', 'sidecar', 'tor',
+]);
 
 if (!TOKEN) {
   console.warn('[node-agent] NCC_AGENT_TOKEN is not set; container controls are disabled');
@@ -86,10 +107,15 @@ function readBody(request) {
   });
 }
 
-function dockerRequest(path, { method = 'GET' } = {}) {
+function dockerRequest(path, { method = 'GET', body, headers = {}, timeoutMs = 15_000 } = {}) {
   return new Promise((resolve, reject) => {
     const request = http.request(
-      { socketPath: DOCKER_SOCKET, path, method, headers: { Host: 'docker' } },
+      {
+        socketPath: DOCKER_SOCKET,
+        path,
+        method,
+        headers: { Host: 'docker', ...headers },
+      },
       (response) => {
         const chunks = [];
         let size = 0;
@@ -112,25 +138,36 @@ function dockerRequest(path, { method = 'GET' } = {}) {
         response.on('error', reject);
       },
     );
-    request.setTimeout(15_000, () => {
+    request.setTimeout(timeoutMs, () => {
       request.destroy(new Error('Docker request timed out'));
     });
     request.on('error', reject);
-    request.end();
+    if (body !== undefined) request.end(body);
+    else request.end();
   });
 }
 
-async function dockerJson(path, options) {
+async function dockerJson(path, options = {}) {
   const response = await dockerRequest(path, options);
   if (response.status >= 400) {
     const detail = response.body.toString('utf8').slice(0, 300);
     throw new Error(`Docker returned HTTP ${response.status}: ${detail}`);
   }
+  const text = response.body.toString('utf8');
+  if (!text) return null;
   try {
-    return JSON.parse(response.body.toString('utf8') || 'null');
+    return JSON.parse(text);
   } catch {
     throw new Error('Docker returned a non-JSON response');
   }
+}
+
+function postJson(path, payload) {
+  return dockerJson(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
 }
 
 // --- host metrics ---------------------------------------------------------
@@ -363,6 +400,27 @@ function composeService(container) {
   return typeof name === 'string' && SERVICE_PATTERN.test(name) ? name : null;
 }
 
+let imageDates = { at: 0, byId: new Map() };
+
+/** Creation time of an image ID, cached for a few minutes. */
+async function imageCreatedAt(imageId) {
+  if (!imageId) return null;
+  if (Date.now() - imageDates.at > IMAGE_DATE_CACHE_MS) {
+    imageDates = { at: Date.now(), byId: new Map() };
+  }
+  if (imageDates.byId.has(imageId)) return imageDates.byId.get(imageId);
+
+  let createdAt = null;
+  try {
+    const info = await dockerJson(`/images/${encodeURIComponent(imageId)}/json`);
+    createdAt = typeof info?.Created === 'string' ? info.Created : null;
+  } catch {
+    // The image may have been pruned; the panel just shows no date.
+  }
+  imageDates.byId.set(imageId, createdAt);
+  return createdAt;
+}
+
 async function projectContainers() {
   const filters = encodeURIComponent(JSON.stringify({
     label: [`com.docker.compose.project=${PROJECT}`],
@@ -383,6 +441,9 @@ async function projectContainers() {
       health: null,
       restartCount: 0,
       startedAt: null,
+      image: typeof entry.Image === 'string' ? entry.Image : null,
+      imageId: typeof entry.ImageID === 'string' ? entry.ImageID : null,
+      imageCreatedAt: null,
     });
   }
 
@@ -394,6 +455,11 @@ async function projectContainers() {
       container.health = state.Health?.Status || null;
       container.restartCount = Number.isInteger(detail?.RestartCount) ? detail.RestartCount : 0;
       container.startedAt = state.StartedAt || null;
+      // Config.Image is the tag the container was created from; Image is the
+      // resolved image ID, which is what an update compares against.
+      if (typeof detail?.Config?.Image === 'string') container.image = detail.Config.Image;
+      if (typeof detail?.Image === 'string') container.imageId = detail.Image;
+      container.imageCreatedAt = await imageCreatedAt(container.imageId);
     } catch {
       // The list view is enough when inspect fails; do not fail the request.
     }
@@ -590,6 +656,412 @@ async function handleMetrics(response) {
   sendJson(response, 200, metrics);
 }
 
+// --- image updates --------------------------------------------------------
+//
+// The panel's Apps page lists the bundle's own images. Updating one means
+// pulling the tag and, only when the digest changed, recreating the container
+// with the options it already has. The recreate runs in a one-shot helper
+// container built from this agent's image, because updating `node-agent`
+// itself would otherwise stop the process halfway through.
+
+let updateState = {
+  inProgress: false,
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  services: [],
+};
+// The state above is set only after the container list is read. This guard
+// closes the await window so two clicks cannot start two pulls.
+let updateLock = false;
+
+function updateSnapshot() {
+  return {
+    inProgress: updateState.inProgress,
+    startedAt: updateState.startedAt,
+    finishedAt: updateState.finishedAt,
+    error: updateState.error,
+    services: updateState.services.map((service) => ({ ...service })),
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Split image:tag or image@sha256:… without confusing a registry port. */
+function splitImageRef(ref) {
+  if (typeof ref !== 'string' || !ref) return null;
+  const at = ref.indexOf('@');
+  if (at !== -1) {
+    return { name: ref.slice(0, at), tag: null, digest: ref.slice(at + 1) };
+  }
+  const slash = ref.lastIndexOf('/');
+  const colon = ref.lastIndexOf(':');
+  if (colon > slash) return { name: ref.slice(0, colon), tag: ref.slice(colon + 1) };
+  return { name: ref, tag: 'latest' };
+}
+
+/**
+ * Pull one image reference. Docker streams newline-delimited JSON progress;
+ * this consumes it without buffering the whole stream and reports the first
+ * error the daemon sent, which arrives with HTTP 200 in some cases.
+ */
+function pullImage(ref) {
+  const parsed = splitImageRef(ref);
+  if (!parsed || !parsed.name || !parsed.tag) {
+    return Promise.reject(new Error(`Cannot pull ${ref}: it is pinned by digest`));
+  }
+
+  const query = new URLSearchParams({ fromImage: parsed.name, tag: parsed.tag });
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let buffer = '';
+    let failure = null;
+    let timer = null;
+    let request = null;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      request?.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    request = http.request(
+      { socketPath: DOCKER_SOCKET, path: `/images/create?${query}`, method: 'POST', headers: { Host: 'docker' } },
+      (response) => {
+        response.on('data', (chunk) => {
+          buffer += chunk.toString('utf8');
+          // Progress lines are small; keep only an unfinished tail.
+          if (buffer.length > 256 * 1024) buffer = buffer.slice(-64 * 1024);
+          let newline;
+          while ((newline = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            if (!line.trim()) continue;
+            try {
+              const message = JSON.parse(line);
+              if (message?.error) {
+                failure = message.errorDetail?.message || message.error;
+              }
+            } catch {
+              // Non-JSON progress text is harmless.
+            }
+          }
+        });
+        response.on('end', () => {
+          if (response.statusCode >= 400) {
+            finish(new Error(`Docker returned HTTP ${response.statusCode} while pulling ${ref}`));
+          } else if (failure) {
+            finish(new Error(failure));
+          } else {
+            finish(null);
+          }
+        });
+        response.on('error', (error) => finish(error));
+      },
+    );
+
+    timer = setTimeout(
+      () => finish(new Error(`Pulling ${ref} timed out`)),
+      PULL_TIMEOUT_MS,
+    );
+    request.on('error', (error) => finish(error));
+    request.end();
+  });
+}
+
+/** The image this process runs from, used for the recreate helper. */
+async function selfImageId() {
+  try {
+    const detail = await dockerJson(`/containers/${encodeURIComponent(os.hostname())}/json`);
+    return typeof detail?.Image === 'string' ? detail.Image : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove exited helper containers left by an update that replaced this agent. */
+async function cleanupUpdateHelpers() {
+  try {
+    const filters = encodeURIComponent(JSON.stringify({ label: ['org.ncc.update-helper'] }));
+    const list = await dockerJson(`/containers/json?all=1&filters=${filters}`);
+    for (const entry of Array.isArray(list) ? list : []) {
+      if (!entry?.Id || entry.State === 'running') continue;
+      await dockerJson(`/containers/${entry.Id}?force=1&v=0`, { method: 'DELETE' }).catch(() => {});
+    }
+  } catch {
+    // Best effort: a leftover helper is harmless and the next start retries.
+  }
+}
+
+/** Run recreate.mjs from the agent image and return its exit code and output. */
+async function runRecreateHelper(plans, helperImage) {
+  const name = `ncc-update-${Date.now().toString(36)}`;
+  const created = await postJson(`/containers/create?name=${encodeURIComponent(name)}`, {
+    Image: helperImage,
+    Cmd: ['node', '/app/recreate.mjs'],
+    // Clear any image entrypoint so the command above runs as written.
+    Entrypoint: [],
+    Env: [`NCC_RECREATE_PLAN=${Buffer.from(JSON.stringify({ services: plans })).toString('base64')}`],
+    User: '0:0',
+    WorkingDir: '/app',
+    Labels: { 'org.ncc.update-helper': String(Date.now()) },
+    HostConfig: {
+      Binds: [`${HOST_DOCKER_SOCKET}:/var/run/docker.sock`],
+      NetworkMode: 'none',
+      AutoRemove: false,
+      ReadonlyRootfs: true,
+      CapDrop: ['ALL'],
+      SecurityOpt: ['no-new-privileges'],
+      Tmpfs: { '/tmp': 'rw,noexec,nosuid,size=16m' },
+    },
+  });
+
+  const id = typeof created?.Id === 'string' ? created.Id : null;
+  if (!id) throw new Error('Docker did not create the recreate helper');
+
+  try {
+    await dockerRequest(`/containers/${id}/start`, { method: 'POST' });
+    const deadline = Date.now() + HELPER_TIMEOUT_MS;
+    let state = null;
+    while (Date.now() < deadline) {
+      await sleep(1000);
+      try {
+        const info = await dockerJson(`/containers/${id}/json`);
+        state = info?.State ?? null;
+        if (state && state.Running !== true) break;
+      } catch {
+        // The container is gone; treat it as finished without an exit code.
+        state = null;
+        break;
+      }
+    }
+
+    let logs = '';
+    try {
+      const response = await dockerRequest(`/containers/${id}/logs?stdout=1&stderr=1&tail=400`);
+      logs = decodeDockerLogs(response.body).map((line) => line.message).join('\n');
+    } catch {
+      // Output is for diagnosis only.
+    }
+
+    return { code: Number.isInteger(state?.ExitCode) ? state.ExitCode : null, logs };
+  } finally {
+    await dockerJson(`/containers/${id}?force=1&v=0`, { method: 'DELETE' }).catch(() => {});
+  }
+}
+
+/** The helper's machine-readable result line, if it finished. */
+function recreateResults(logs) {
+  const marker = 'NCC_RECREATE_RESULT ';
+  const line = logs.split('\n').reverse().find((entry) => entry.startsWith(marker));
+  if (!line) return null;
+  try {
+    const parsed = JSON.parse(line.slice(marker.length));
+    return Array.isArray(parsed?.services) ? parsed.services : null;
+  } catch {
+    return null;
+  }
+}
+
+async function performUpdate(plans, helperImage) {
+  const entries = new Map(updateState.services.map((entry) => [entry.service, entry]));
+  let firstError = null;
+
+  const pulled = new Map();
+  for (const plan of plans) {
+    const entry = entries.get(plan.service);
+    const ref = plan.container.image;
+
+    if (!ref) {
+      entry.state = 'failed';
+      entry.error = 'The container has no image reference';
+      firstError ??= entry.error;
+      continue;
+    }
+    if (!splitImageRef(ref)?.tag) {
+      entry.state = 'pinned';
+      entry.error = null;
+      continue;
+    }
+
+    if (!pulled.has(ref)) {
+      try {
+        await pullImage(ref);
+        const info = await dockerJson(`/images/${encodeURIComponent(ref)}/json`);
+        pulled.set(ref, { imageId: typeof info?.Id === 'string' ? info.Id : null, error: null });
+      } catch (error) {
+        pulled.set(ref, { imageId: null, error: error instanceof Error ? error.message : 'pull failed' });
+      }
+    }
+
+    const result = pulled.get(ref);
+    if (result.error) {
+      entry.state = 'failed';
+      entry.error = result.error;
+      firstError ??= result.error;
+      continue;
+    }
+
+    entry.imageId = result.imageId ?? plan.container.imageId;
+    entry.changed = Boolean(result.imageId && plan.container.imageId && result.imageId !== plan.container.imageId);
+    entry.state = entry.changed ? 'queued' : 'current';
+  }
+
+  const queued = updateState.services.filter((entry) => entry.state === 'queued');
+  if (queued.length) {
+    for (const entry of queued) entry.state = 'recreating';
+
+    try {
+      const helperPlans = queued.map((entry) => ({
+        service: entry.service,
+        id: plans.find((plan) => plan.service === entry.service).container.id,
+      }));
+      const { code, logs } = await runRecreateHelper(helperPlans, helperImage);
+      const results = recreateResults(logs);
+
+      if (results) {
+        for (const entry of queued) {
+          const result = results.find((item) => item?.service === entry.service);
+          if (result?.ok === true) {
+            entry.state = 'recreated';
+          } else {
+            entry.state = 'failed';
+            entry.error = typeof result?.error === 'string' ? result.error : 'The recreate helper failed';
+            firstError ??= entry.error;
+          }
+        }
+      } else {
+        const detail = logs.trim().split('\n').filter(Boolean).slice(-1)[0] || null;
+        for (const entry of queued) {
+          entry.state = 'failed';
+          entry.error = code === 0
+            ? 'The recreate helper finished without a result'
+            : (detail || `The recreate helper exited with code ${code ?? 'unknown'}`);
+          firstError ??= entry.error;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The recreate helper failed';
+      for (const entry of queued) {
+        entry.state = 'failed';
+        entry.error = message;
+      }
+      firstError ??= message;
+    }
+  }
+
+  updateState.error = firstError;
+}
+
+async function handleUpdate(request, response) {
+  let body;
+  try {
+    body = await readBody(request);
+  } catch (error) {
+    sendJson(response, 400, { error: error.message });
+    return;
+  }
+
+  const services = Array.isArray(body.services) ? body.services : null;
+  const unique = services ? [...new Set(services)] : [];
+  if (!unique.length || unique.length > 8
+      || unique.some((service) => typeof service !== 'string'
+        || !SERVICE_PATTERN.test(service)
+        || !UPDATEABLE_SERVICES.has(service))) {
+    sendJson(response, 400, {
+      error: `services must name up to 8 bundle services (${[...UPDATEABLE_SERVICES].join(', ')})`,
+    });
+    return;
+  }
+
+  if (updateState.inProgress || updateLock) {
+    sendJson(response, 409, { error: 'An image update is already in progress' });
+    return;
+  }
+  updateLock = true;
+
+  let containers;
+  let helperImage;
+  const plans = [];
+  try {
+    containers = await projectContainers();
+    for (const service of unique) {
+      const matches = containers.filter((container) => container.service === service);
+      if (!matches.length) {
+        updateLock = false;
+        sendJson(response, 404, { error: `No container for: ${service}` });
+        return;
+      }
+      if (matches.length > 1) {
+        updateLock = false;
+        sendJson(response, 409, { error: `Service ${service} has more than one container` });
+        return;
+      }
+      plans.push({ service, container: matches[0] });
+    }
+
+    helperImage = containers.find((container) => container.service === 'node-agent')?.imageId
+      || await selfImageId();
+  } catch (error) {
+    updateLock = false;
+    sendJson(response, 503, {
+      error: error instanceof Error ? error.message : 'Could not read the bundle containers',
+    });
+    return;
+  }
+  updateLock = false;
+
+  if (!helperImage) {
+    sendJson(response, 503, { error: 'Could not resolve the node-agent image for the recreate helper' });
+    return;
+  }
+
+  updateState = {
+    inProgress: true,
+    startedAt: Date.now(),
+    finishedAt: null,
+    error: null,
+    services: plans.map((plan) => ({
+      service: plan.service,
+      image: plan.container.image,
+      imageId: plan.container.imageId,
+      state: 'queued',
+      changed: null,
+      error: null,
+    })),
+  };
+
+  // Answer before the pull: a slow registry can take minutes, and recreating
+  // sidecar or caddy would cut this response anyway.
+  sendJson(response, 202, { accepted: true, status: updateSnapshot() });
+
+  performUpdate(plans, helperImage)
+    .catch((error) => {
+      updateState.error = error instanceof Error ? error.message : 'The image update failed';
+    })
+    .finally(() => {
+      updateState.inProgress = false;
+      updateState.finishedAt = Date.now();
+      const summary = updateState.services
+        .map((entry) => `${entry.service}=${entry.state}`)
+        .join(', ');
+      if (updateState.error) {
+        console.warn(`[node-agent] image update finished with errors: ${summary} (${updateState.error})`);
+      } else {
+        console.log(`[node-agent] image update finished: ${summary}`);
+      }
+    });
+}
+
+function handleUpdateStatus(response) {
+  sendJson(response, 200, updateSnapshot());
+}
+
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
@@ -620,6 +1092,14 @@ const server = http.createServer(async (request, response) => {
       await handleMetrics(response);
       return;
     }
+    if (request.method === 'POST' && url.pathname === '/v1/update') {
+      await handleUpdate(request, response);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/update/status') {
+      handleUpdateStatus(response);
+      return;
+    }
     sendJson(response, 404, { error: 'Not found' });
   } catch (error) {
     sendJson(response, 503, { error: error instanceof Error ? error.message : 'Docker is unavailable' });
@@ -628,4 +1108,5 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[node-agent] listening on http://${HOST}:${PORT} for project ${PROJECT}`);
+  cleanupUpdateHelpers();
 });

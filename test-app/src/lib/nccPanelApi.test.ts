@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cadenceProblem,
+  readNodeImages,
   readResult,
   relayInputToUrl,
   resolvePanelApiBase,
@@ -126,5 +127,67 @@ describe('readResult npanel status', () => {
 
   it('omits npanel when an older sidecar did not report it', () => {
     expect(readResult({ admins: [] })).not.toHaveProperty('npanel');
+  });
+});
+
+describe('readNodeImages', () => {
+  const image = (extra: Record<string, unknown> = {}) => ({
+    service: 'relay',
+    label: 'Nostr relay',
+    description: 'Stores events.',
+    role: 'core',
+    image: 'ghcr.io/imattau/ncc-server-relay:latest',
+    tag: 'latest',
+    imageId: 'sha256:abc',
+    imageCreatedAt: '2026-01-01T00:00:00Z',
+    state: 'running',
+    health: null,
+    containers: [{ name: 'ncc-bundle-relay-1', state: 'running', health: null }],
+    updatable: true,
+    update: { state: 'current', changed: false, imageId: 'sha256:abc', error: null },
+    ...extra,
+  });
+
+  it('reads images, their containers and the last update result', () => {
+    const result = readNodeImages({
+      agent: { available: true, error: null },
+      updating: false,
+      startedAt: 10,
+      finishedAt: 20,
+      error: null,
+      images: [image(), image({ service: 'tor', role: 'infrastructure', update: null })],
+    });
+
+    expect(result.agent.available).toBe(true);
+    expect(result.images).toHaveLength(2);
+    expect(result.images[0].containers[0].name).toBe('ncc-bundle-relay-1');
+    expect(result.images[0].update?.state).toBe('current');
+    expect(result.images[1].role).toBe('infrastructure');
+    expect(result.images[1].update).toBeNull();
+  });
+
+  it('defaults missing fields instead of inventing a version', () => {
+    const result = readNodeImages({
+      agent: {},
+      images: [{
+        service: 'search-ui',
+        containers: 'nope',
+        update: { state: 'failed', error: 'registry refused the pull' },
+      }],
+    });
+
+    expect(result.agent.available).toBe(false);
+    expect(result.images[0].label).toBe('search-ui');
+    expect(result.images[0].image).toBeNull();
+    expect(result.images[0].tag).toBeNull();
+    expect(result.images[0].state).toBe('unknown');
+    expect(result.images[0].containers).toEqual([]);
+    expect(result.images[0].updatable).toBe(false);
+    expect(result.images[0].update?.state).toBe('failed');
+    expect(result.images[0].update?.error).toBe('registry refused the pull');
+  });
+
+  it('rejects a response without an image list', () => {
+    expect(() => readNodeImages({ agent: { available: true } })).toThrow(/unexpected image list/);
   });
 });

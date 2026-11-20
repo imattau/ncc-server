@@ -37,6 +37,7 @@ import {
   loadPanelCatalogue,
   loadPanelCatalogueIcon,
   loadPanelCatalogueService,
+  loadPanelImages,
   loadPanelMetrics,
   loadPanelRecords,
   loadPanelServiceLogs,
@@ -51,12 +52,15 @@ import {
   savePanelIdentity,
   savePanelRelays,
   setPanelCatalogueTrust,
+  updatePanelImage,
   type PanelAdmin,
   type PanelCadence,
   type PanelCatalogue,
   type PanelCatalogueEntry,
   type PanelCatalogueService,
   type PanelMetrics,
+  type PanelNodeImage,
+  type PanelNodeImages,
   type PanelNpanelStatus,
   type PanelServiceHealth,
   type PanelServiceLogs,
@@ -354,6 +358,47 @@ function catalogueAge(catalogue: PanelCatalogue | null): string {
 function installCommand(entry: PanelCatalogueEntry): string {
   const publisher = entry.npub ?? entry.publisher;
   return `sudo make service-install REF=${publisher}/${entry.name}@${entry.version}`;
+}
+
+function shortImageId(value: string | null): string {
+  if (!value) return 'unknown';
+  return (value.startsWith('sha256:') ? value.slice(7) : value).slice(0, 12);
+}
+
+function imageBuiltLabel(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function imageUpdateCopy(image: PanelNodeImage): { text: string; tone: 'good' | 'warn' | 'error' | 'muted' } {
+  const update = image.update;
+  if (!update) {
+    return {
+      text: image.imageId ? `Image ${shortImageId(image.imageId)}` : 'Image digest unknown',
+      tone: 'muted',
+    };
+  }
+
+  switch (update.state) {
+    case 'pulling':
+      return { text: 'Pulling the image…', tone: 'warn' };
+    case 'queued':
+      return { text: 'Pulled; waiting to recreate…', tone: 'warn' };
+    case 'recreating':
+      return { text: 'Recreating the container…', tone: 'warn' };
+    case 'recreated':
+      return { text: `Updated; now running ${shortImageId(update.imageId)}`, tone: 'good' };
+    case 'current':
+      return { text: 'Already up to date', tone: 'good' };
+    case 'pinned':
+      return { text: 'Pinned by digest; nothing to pull', tone: 'muted' };
+    case 'failed':
+      return { text: update.error ?? 'The update failed', tone: 'error' };
+    default:
+      return { text: 'Update state unknown', tone: 'muted' };
+  }
 }
 
 function safeLink(value: string | null): string | null {
@@ -674,6 +719,14 @@ export default function AdminPanel() {
   const [catalogueWarning, setCatalogueWarning] = useState('');
   const [catalogueToken, setCatalogueToken] = useState(0);
   const catalogueRefresh = useRef(false);
+  const [nodeImages, setNodeImages] = useState<PanelNodeImages | null>(null);
+  const [nodeImagesState, setNodeImagesState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [nodeImagesError, setNodeImagesError] = useState('');
+  const [imagesToken, setImagesToken] = useState(0);
+  const [imageBusy, setImageBusy] = useState<string | null>(null);
+  const [imageError, setImageError] = useState('');
+  const [imageDone, setImageDone] = useState('');
+  const [confirmUpdate, setConfirmUpdate] = useState<string | null>(null);
   const [selectedRelease, setSelectedRelease] = useState<PanelCatalogueEntry | null>(null);
   const [releaseDetails, setReleaseDetails] = useState<PanelCatalogueService | null>(null);
   const [releaseState, setReleaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -986,6 +1039,30 @@ export default function AdminPanel() {
       if (timer) window.clearTimeout(timer);
     };
   }, [section, authorized, apiBase, user, catalogueToken]);
+
+  // Node images come from the node-agent, also only while Apps is open. The
+  // list is loaded once per visit (and on Check images), never polled: every
+  // read asks the signer for a fresh NIP-98 event.
+  useEffect(() => {
+    if (section !== 'Apps' || !authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadPanelImages(apiBase, user.signer, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setNodeImages(loaded);
+        setNodeImagesError('');
+        setNodeImagesState('ready');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setNodeImagesState('error');
+        setNodeImagesError(error instanceof Error ? error.message : 'Could not read the node images');
+      });
+
+    return () => controller.abort();
+  }, [section, authorized, apiBase, user, imagesToken]);
 
   // Host metrics are not section-bound: the sidebar Storage card is on every
   // page. They load once per session and on Refresh, not on a timer, because
@@ -1578,6 +1655,41 @@ export default function AdminPanel() {
     setCatalogueToken((value) => value + 1);
   };
 
+  const refreshImages = () => {
+    setImageError('');
+    setImageDone('');
+    setNodeImagesState('loading');
+    setImagesToken((value) => value + 1);
+  };
+
+  const handleUpdateImage = async (image: PanelNodeImage) => {
+    if (!apiBase || !user) return;
+
+    if (confirmUpdate !== image.service) {
+      setConfirmUpdate(image.service);
+      notify(`Click Update again to pull ${image.label}`);
+      return;
+    }
+
+    setConfirmUpdate(null);
+    setImageError('');
+    setImageDone('');
+    setImageBusy(image.service);
+    try {
+      await updatePanelImage(apiBase, user.signer, image.service);
+      setImageDone(
+        `${image.label}: update started. Reload the list in a moment to see the new digest.`,
+      );
+      // The node rebuilds the container in the background. Do not reload on a
+      // timer: every read needs a new NIP-98 event, which prompts a NIP-46
+      // signer again.
+    } catch (error) {
+      setImageError(error instanceof Error ? error.message : `Could not update ${image.label}`);
+    } finally {
+      setImageBusy(null);
+    }
+  };
+
   const openRelease = (entry: PanelCatalogueEntry) => {
     setReleaseDetails(null);
     setReleaseError('');
@@ -2070,6 +2182,161 @@ export default function AdminPanel() {
 
           {section === 'Apps' && (
             <>
+              <div className="content-section node-images-section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Node images</h2>
+                    <p>
+                      The bundle&apos;s own containers. Updating pulls the image tag and recreates
+                      the container only when the digest changed.
+                    </p>
+                  </div>
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={refreshImages}
+                    disabled={nodeImagesState === 'loading' || !apiBase}
+                    title="Read the current image and last update result from the node"
+                  >
+                    <RefreshCw size={13} className={nodeImagesState === 'loading' ? 'spin' : undefined} />
+                    Check images
+                  </button>
+                </div>
+
+                {imageError && (
+                  <div className="panel-banner error" role="alert">
+                    <CircleAlert size={14} />
+                    <span>{imageError}</span>
+                    <button className="text-button" onClick={() => setImageError('')}>Dismiss</button>
+                  </div>
+                )}
+
+                {imageDone && (
+                  <div className="settings-saved" role="status"><Check size={13} /> {imageDone}</div>
+                )}
+
+                {nodeImagesState === 'error' && (
+                  <div className="panel-banner error" role="alert">
+                    <CircleAlert size={14} />
+                    <span>Could not read the node images: {nodeImagesError}</span>
+                    <button className="text-button" onClick={refreshImages}>Try again</button>
+                  </div>
+                )}
+
+                {nodeImages && !nodeImages.agent.available && nodeImagesState !== 'error' && (
+                  <div className="panel-banner" role="status">
+                    <CircleAlert size={14} />
+                    <span>
+                      Image updates need the node-agent on this host
+                      {nodeImages.agent.error ? `: ${nodeImages.agent.error}` : ''}.
+                    </span>
+                  </div>
+                )}
+
+                {nodeImages?.error && (
+                  <div className="panel-banner error" role="alert">
+                    <CircleAlert size={14} />
+                    <span>The last image update reported: {nodeImages.error}</span>
+                  </div>
+                )}
+
+                {nodeImages?.updating && (
+                  <div className="panel-banner" role="status">
+                    <CircleAlert size={14} />
+                    <span>
+                      An image update is running on the node. Pulling can take a few minutes;
+                      check the list again when it finishes.
+                    </span>
+                  </div>
+                )}
+
+                {nodeImagesState === 'loading' && !nodeImages ? (
+                  <div className="empty-state">Reading the node&apos;s images…</div>
+                ) : !nodeImages || nodeImages.images.length === 0 ? (
+                  <div className="empty-state">
+                    No bundle containers were found. Start the node-agent to list and update
+                    this server&apos;s images.
+                  </div>
+                ) : (
+                  <div className="node-image-grid">
+                    {nodeImages.images.map((image) => {
+                      const status = imageUpdateCopy(image);
+                      const busy = imageBusy === image.service;
+                      const canUpdate = Boolean(
+                        authorized && apiBase && user && image.updatable
+                        && imageBusy === null && !nodeImages.updating,
+                      );
+
+                      return (
+                        <article className="node-image-card" key={image.service}>
+                          <div className="node-image-head">
+                            <div className="node-image-title">
+                              <strong>{image.label}</strong>
+                              <small>{image.role === 'core' ? 'NCC service' : 'Infrastructure'}</small>
+                            </div>
+                            <span className={`status-pill ${image.state === 'running' ? '' : 'stopped'}`}>
+                              <i />{image.state === 'running' ? 'Running' : image.state}
+                            </span>
+                          </div>
+
+                          <p>{image.description}</p>
+
+                          <code className="node-image-ref" title={image.image ?? undefined}>
+                            {image.image ?? 'No image reported'}
+                          </code>
+
+                          <div className="node-image-meta">
+                            <span>{image.tag ? `tag ${image.tag}` : 'digest pin'}</span>
+                            <span>{image.imageId ? `image ${shortImageId(image.imageId)}` : 'image unknown'}</span>
+                            {imageBuiltLabel(image.imageCreatedAt) && (
+                              <span>built {imageBuiltLabel(image.imageCreatedAt)}</span>
+                            )}
+                          </div>
+
+                          <div className={`node-image-status ${status.tone}`} title={image.update?.error ?? undefined}>
+                            {status.text}
+                          </div>
+
+                          <div className="node-image-actions">
+                            <button
+                              className="catalog-install"
+                              type="button"
+                              onClick={() => handleUpdateImage(image)}
+                              disabled={!canUpdate || busy}
+                              title={image.updatable
+                                ? 'Pull this image tag and recreate the container when the digest changed'
+                                : 'This image is pinned by digest; change the image on the host'}
+                            >
+                              {busy ? <span className="button-spinner dark" /> : <ArrowDownToLine size={14} />}
+                              {busy ? 'Starting…' : confirmUpdate === image.service ? 'Confirm update' : 'Update'}
+                            </button>
+                            {confirmUpdate === image.service && (
+                              <button
+                                className="text-button"
+                                type="button"
+                                onClick={() => setConfirmUpdate(null)}
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="catalog-note">
+                  <Shield size={17} />
+                  <span>
+                    <strong>Pinned tags stay pinned.</strong> An update pulls the tag the container
+                    runs, so <code>latest</code> follows new releases but a pinned version only
+                    moves when you change it on the host. Updating Caddy, the sidecar or the
+                    node-agent briefly interrupts this panel.
+                  </span>
+                </div>
+              </div>
+
               <div className="page-heading">
                 <div>
                   <div className="eyebrow">APP CATALOGUE <span>·</span> NOSTR PACKAGES</div>

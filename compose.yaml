@@ -78,9 +78,10 @@ services:
 
   # Companion process for the admin panel's container controls. It reuses the
   # sidecar image and runs a small, project-scoped Docker API instead of
-  # giving the sidecar itself root-equivalent socket access. Only restart,
-  # container state and recent logs are exposed, and only for containers
-  # labelled com.docker.compose.project=ncc-bundle.
+  # giving the sidecar itself root-equivalent socket access. Restart, logs,
+  # container state and image updates are exposed, and only for containers
+  # labelled com.docker.compose.project=ncc-bundle. An image update may only
+  # name one of the bundle's own service names.
   node-agent:
     image: "${SIDECAR_IMAGE:-ghcr.io/imattau/ncc-server-sidecar:latest}"
     network_mode: host
@@ -91,6 +92,9 @@ services:
       NCC_AGENT_PORT: "${NODE_AGENT_PORT:-3010}"
       NCC_AGENT_TOKEN: "${NODE_AGENT_TOKEN:-}"
       NCC_COMPOSE_PROJECT: ncc-bundle
+      # Host path of the Docker socket, mounted into the one-shot recreate
+      # helper. Compose mounts it at the same path, so the default is right.
+      NCC_UPDATE_DOCKER_SOCKET: "${NCC_UPDATE_DOCKER_SOCKET:-/var/run/docker.sock}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

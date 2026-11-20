@@ -351,10 +351,11 @@ profiles, publication relays or cadence, reuses the web onion for `addr`, and
 republishes. Fresh installs do this automatically. Adding a custom service
 with `make service-add` also creates its onion automatically.
 
-The admin panel's Restart and container-log tabs, and the sidebar Storage
-card and Overview resource metrics, use the `node-agent` companion container,
-which is the only process with the Docker socket. Add a token to `.env` if the
-installer did not create one, then recreate both containers:
+The admin panel's Restart and container-log tabs, the Apps page's **Node
+images** list, and the sidebar Storage card and Overview resource metrics,
+use the `node-agent` companion container, which is the only process with the
+Docker socket. Add a token to `.env` if the installer did not create one, then
+recreate both containers:
 
 ~~~sh
 grep -q '^NODE_AGENT_TOKEN=..*' .env \
@@ -362,12 +363,22 @@ grep -q '^NODE_AGENT_TOKEN=..*' .env \
 sudo docker-compose -p ncc-bundle up -d sidecar node-agent
 ~~~
 
-The agent binds `127.0.0.1:3010` and only accepts restarts and log reads for
-containers labelled `com.docker.compose.project=ncc-bundle`. If it is absent,
-the panel still shows probe and record health and the node-event log tab, and
-the host resource cards say the values are unavailable. The agent runs from
-`SIDECAR_IMAGE`, so pin that image to a release that includes
-`node-agent.mjs` before starting it.
+The agent binds `127.0.0.1:3010` and only accepts restarts, log reads and
+image updates for containers labelled `com.docker.compose.project=ncc-bundle`.
+An update may only name the bundle's own Compose services; it pulls their
+image tags and recreates a container only when the digest changed, copying the
+container's existing create options. The recreate runs in a one-shot helper
+container from the node-agent image, because updating `node-agent` would
+otherwise stop the process doing the work. If the agent is absent, the panel
+still shows probe and record health and the node-event log tab, the Apps page
+lists no images, and the host resource cards say the values are unavailable.
+The agent runs from `SIDECAR_IMAGE`, so pin that image to a release that
+includes `node-agent.mjs` and `recreate.mjs` before starting it.
+
+Image updates pull the tag in `.env`. `latest` follows new releases; a pinned
+tag stays put until you change the variable on the host. Updating Caddy, the
+sidecar or the node-agent briefly interrupts the panel, so reload after the
+container is back.
 
 The App catalogue uses the `npack` container, which runs npackd read-only and
 answers the sidecar over `/run/npack/npackd.sock`. It has no Docker access and
@@ -376,7 +387,7 @@ registry, and `NCC_NPACK_OFFICIAL_PUBLISHER` to the publisher key you want
 marked as official:
 
 ~~~sh
-NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.8
+NPACK_IMAGE=ghcr.io/imattau/ncc-server-npack:0.2.9
 NCC_NPACK_OFFICIAL_PUBLISHER=npub1...
 ~~~
 
