@@ -279,6 +279,31 @@ ssh -L 3000:127.0.0.1:3000 operator@192.168.1.50
 Then open http://127.0.0.1:3000 on the workstation. Never expose sidecar
 admin directly to the internet.
 
+### Edge timeouts and response headers
+
+The Caddy configuration applies baseline protections on every browser-facing
+listener, including the onion listeners and the system-install Caddyfiles:
+
+- `read_header 10s` bounds the TLS/HTTP header phase, which is the practical
+  Slowloris defence for a node that is not behind Cloudflare;
+- `read_body 5m` and `idle 5m` bound a slow request body and inactive
+  keep-alive connections; the five-minute body window still leaves room for
+  large uploads on a slow link;
+- request bodies are capped at **5MB** on the static pages, the admin API and
+  the relay, and **50MB** on npanel and Ditto web. Custom services generated
+  by `make service-add` get the same 50MB cap;
+- every response carries `Referrer-Policy: strict-origin-when-cross-origin`
+  and `X-Content-Type-Options: nosniff`. The referrer policy still exposes the
+  per-service `ncc://<npub>.<service>` origin that NCC Browser's subresource
+  routing relies on; it only drops the path.
+
+Caddy reloads its configuration when the bundle recreates the `caddy`
+container. For a system install, reinstall the repository's `caddy/Caddyfile`
+(or `Caddyfile.tls`) and re-run `sudo make enable-relay-proxy` so the generated
+relay snippet gets the same headers. Existing custom `*.caddy` files keep
+their old headers until the service is reinstalled; no listener breaks if
+they are not regenerated.
+
 ## Manage administrators
 
 Open `ncc://<npub>/admin/` or `https://<PUBLIC_IPV4>:8448/admin`, sign in with

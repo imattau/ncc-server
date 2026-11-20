@@ -36,6 +36,13 @@ trap restore ERR
 cat > "$RELAY_SNIPPET" <<EOF
 :8444 {
 	tls $CERT_DIR/server.crt $CERT_DIR/server.key
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+	}
+	request_body {
+		max_size 5MB
+	}
 	reverse_proxy 127.0.0.1:13131 {
 		header_up X-Real-IP {remote_host}
 	}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cadenceProblem,
+  readImageProgress,
   readNodeImages,
   readResult,
   relayInputToUrl,
@@ -217,5 +218,46 @@ describe('readNodeImages', () => {
 
   it('rejects a response without an image list', () => {
     expect(() => readNodeImages({ agent: { available: true } })).toThrow(/unexpected image list/);
+  });
+});
+
+
+describe('readImageProgress', () => {
+  it('counts terminal states and keeps the tracked service order', () => {
+    const progress = readImageProgress({
+      inProgress: true,
+      startedAt: 10,
+      finishedAt: null,
+      error: null,
+      total: 3,
+      done: 2,
+      percent: 67,
+      services: [
+        { service: 'relay', state: 'recreated', changed: true, error: null },
+        { service: 'npanel', state: 'pulling', changed: false, error: null },
+        { service: 'search', state: 'failed', changed: false, error: 'registry refused' },
+      ],
+    });
+
+    expect(progress.inProgress).toBe(true);
+    expect(progress.done).toBe(2);
+    expect(progress.total).toBe(3);
+    expect(progress.percent).toBe(67);
+    expect(progress.services.map((entry) => entry.state)).toEqual(['recreated', 'pulling', 'failed']);
+    expect(progress.services[2].error).toBe('registry refused');
+  });
+
+  it('defaults a missing total and percent from the service list', () => {
+    const progress = readImageProgress({
+      inProgress: false,
+      services: [{ service: 'relay', state: 'unknown' }],
+    });
+
+    expect(progress.total).toBe(1);
+    expect(progress.done).toBe(0);
+    expect(progress.percent).toBe(0);
+    expect(progress.services[0]).toEqual({
+      service: 'relay', state: 'unknown', changed: false, imageId: null, error: null,
+    });
   });
 });

@@ -1,8 +1,16 @@
 diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
-index 466f5be..b602dfc 100644
+index 466f5be..f8d806e 100644
 --- a/src/routes/panel-services.js
 +++ b/src/routes/panel-services.js
-@@ -331,6 +331,171 @@ function readLimit(value, fallback = 200) {
+@@ -15,6 +15,7 @@
+  * state, and the panel keeps container actions disabled.
+  */
+ 
++import { randomBytes } from 'node:crypto';
+ import http from 'node:http';
+ import https from 'node:https';
+ import net from 'node:net';
+@@ -331,6 +332,241 @@ function readLimit(value, fallback = 200) {
    return Math.min(Math.max(parsed, 1), MAX_LOG_LINES);
  }
  
@@ -94,6 +102,76 @@ index 466f5be..b602dfc 100644
 +  'queued', 'pulling', 'current', 'recreating', 'recreated', 'pinned', 'failed',
 +]);
 +
++// Update progress is read with a short-lived bearer token instead of a new
++// NIP-98 event every few seconds. The token is minted only after an
++// authenticated update starts and exposes states, not registry or config data.
++const PROGRESS_TOKEN_TTL_MS = 60 * 60 * 1000;
++const PROGRESS_DONE = new Set(['current', 'recreated', 'failed', 'pinned']);
++const progressTokens = new Map();
++
++function issueProgressToken(services) {
++  const now = Date.now();
++  for (const [token, entry] of progressTokens) {
++    if (entry.expiresAt <= now) progressTokens.delete(token);
++  }
++  const token = randomBytes(24).toString('base64url');
++  progressTokens.set(token, {
++    services: [...services],
++    expiresAt: now + PROGRESS_TOKEN_TTL_MS,
++  });
++  return token;
++}
++
++/** The tracked services for a live token, or null when it is unknown/expired. */
++function progressTokenServices(token) {
++  if (typeof token !== 'string' || !token) return null;
++  const entry = progressTokens.get(token);
++  if (!entry) return null;
++  if (entry.expiresAt <= Date.now()) {
++    progressTokens.delete(token);
++    return null;
++  }
++  // Sliding expiry: a long update keeps being readable while it is polled.
++  entry.expiresAt = Date.now() + PROGRESS_TOKEN_TTL_MS;
++  return entry.services;
++}
++
++/**
++ * Shape the node-agent's update status for the progress bar. Only the services
++ * this update started are counted, so a later update or an unrelated failure
++ * cannot move the bar.
++ */
++export function progressSnapshot(status, tracked) {
++  const wanted = Array.isArray(tracked) ? tracked : [];
++  const entries = new Map();
++  for (const entry of Array.isArray(status?.services) ? status.services : []) {
++    if (entry && typeof entry.service === 'string') entries.set(entry.service, entry);
++  }
++
++  const services = wanted.map((service) => {
++    const entry = entries.get(service) ?? null;
++    return {
++      service,
++      state: UPDATE_STATES.has(entry?.state) ? entry.state : 'unknown',
++      changed: entry?.changed === true,
++      imageId: typeof entry?.imageId === 'string' ? entry.imageId : null,
++      error: typeof entry?.error === 'string' && entry.error ? entry.error : null,
++    };
++  });
++  const done = services.filter((entry) => PROGRESS_DONE.has(entry.state)).length;
++
++  return {
++    inProgress: status?.inProgress === true,
++    startedAt: Number.isFinite(status?.startedAt) ? status.startedAt : null,
++    finishedAt: Number.isFinite(status?.finishedAt) ? status.finishedAt : null,
++    error: typeof status?.error === 'string' && status.error ? status.error : null,
++    total: services.length,
++    done,
++    percent: services.length ? Math.round((done / services.length) * 100) : 0,
++    services,
++  };
++}
++
 +/** The tag part of an image reference, or null for a digest pin. */
 +export function imageTag(ref) {
 +  if (typeof ref !== 'string' || !ref) return null;
@@ -174,7 +252,7 @@ index 466f5be..b602dfc 100644
  function numberOrNull(value, { min = null, max = null } = {}) {
    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
    if (min !== null && value < min) return null;
-@@ -627,4 +792,104 @@ export default async function panelServicesRoutes(server) {
+@@ -627,4 +863,181 @@ export default async function panelServicesRoutes(server) {
        };
      }
    });
@@ -234,6 +312,83 @@ index 466f5be..b602dfc 100644
 +    }
 +  });
 +
++  // Start one pull/recreate run for every image the panel says has a newer
++  // digest. The node-agent works through them in order and this route returns
++  // a progress token so the panel can show a bar without asking the signer for
++  // a new NIP-98 event on every poll.
++  server.post('/ncc-api/images/update', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const requested = Array.isArray(request.body?.services) ? request.body.services : [];
++    const services = [...new Set(requested.map((service) => String(service).toLowerCase()))];
++    if (!services.length || services.length > BUNDLE_SERVICES.size
++        || services.some((service) => !BUNDLE_SERVICES.has(service))) {
++      return reply.code(400).send({
++        error: `services must name between 1 and ${BUNDLE_SERVICES.size} bundle images`,
++      });
++    }
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++
++    try {
++      const payload = await agentRequest('/v1/update', {
++        method: 'POST',
++        body: { services },
++        timeoutMs: 20_000,
++      });
++      const progressToken = issueProgressToken(services);
++
++      addLog('info', `Image update started for ${services.join(', ')} from the NCC admin panel`, {
++        containers: services,
++        changedBy: caller.pubkey,
++      });
++
++      return {
++        success: true,
++        services,
++        accepted: payload?.accepted === true,
++        status: payload?.status ?? null,
++        progressToken,
++      };
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The image update could not start';
++      addLog('error', `Image update failed to start for ${services.join(', ')} from the NCC admin panel`, {
++        containers: services,
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      const status = /already in progress/i.test(message) ? 409 : 503;
++      return reply.code(status).send({ error: message });
++    }
++  });
++
++  // Progress for a running update. The token is the authorization: it was
++  // handed to an admin over the NIP-98-authorized start call, expires, and
++  // reveals only service states.
++  server.get('/ncc-api/images/progress', async (request, reply) => {
++    const header = request.headers.authorization;
++    const token = typeof header === 'string' && header.startsWith('Bearer ')
++      ? header.slice('Bearer '.length).trim()
++      : '';
++    const tracked = progressTokenServices(token);
++    if (!tracked) {
++      return reply.code(401).send({ error: 'This update progress token is invalid or expired' });
++    }
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++
++    try {
++      const status = await agentRequest('/v1/update/status', { timeoutMs: 10_000 });
++      return progressSnapshot(status, tracked);
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The update status is unavailable';
++      return reply.code(503).send({ error: message });
++    }
++  });
++
 +  // Pull the image tag and, only when the digest changed, recreate the
 +  // container. The agent answers before the pull, so this returns as soon as
 +  // the work is accepted; the panel reloads /ncc-api/images for the result.
@@ -281,14 +436,14 @@ index 466f5be..b602dfc 100644
  }
 diff --git a/test/panel-images.test.js b/test/panel-images.test.js
 new file mode 100644
-index 0000000..cbf4cb0
+index 0000000..8e387d1
 --- /dev/null
 +++ b/test/panel-images.test.js
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,190 @@
 +import { test } from 'node:test';
 +import assert from 'node:assert';
 +
-+import { imageTag, readNodeImages } from '../src/routes/panel-services.js';
++import { imageTag, progressSnapshot, readNodeImages } from '../src/routes/panel-services.js';
 +
 +test('Images: tag parsing keeps registry ports out of the tag', () => {
 +  assert.strictEqual(imageTag('ghcr.io/imattau/ncc-server-relay:latest'), 'latest');
@@ -433,4 +588,45 @@ index 0000000..cbf4cb0
 +  const [missing] = readNodeImages([base], null, null);
 +  assert.strictEqual(missing.updateAvailable, null);
 +  assert.strictEqual(missing.checkError, null);
++});
++
++
++test('Images: progress counts only tracked services and finishes on terminal states', () => {
++  const progress = progressSnapshot({
++    inProgress: true,
++    startedAt: 10,
++    finishedAt: null,
++    error: null,
++    services: [
++      { service: 'relay', state: 'recreated', changed: true, imageId: 'sha256:new', error: null },
++      { service: 'npanel', state: 'pulling', changed: null, error: null },
++      { service: 'search', state: 'failed', changed: null, error: 'registry refused' },
++      { service: 'caddy', state: 'recreated', changed: true, error: null },
++    ],
++  }, ['relay', 'npanel', 'search']);
++
++  assert.strictEqual(progress.total, 3);
++  assert.strictEqual(progress.done, 2);
++  assert.strictEqual(progress.percent, 67);
++  assert.strictEqual(progress.inProgress, true);
++  assert.deepStrictEqual(progress.services.map((entry) => entry.state), ['recreated', 'pulling', 'failed']);
++  assert.strictEqual(progress.services[0].imageId, 'sha256:new');
++  assert.strictEqual(progress.services[1].imageId, null);
++  assert.strictEqual(progress.services[2].error, 'registry refused');
++});
++
++test('Images: progress reports unknown states without inventing completion', () => {
++  const progress = progressSnapshot(null, ['relay', 'npanel']);
++  assert.strictEqual(progress.inProgress, false);
++  assert.strictEqual(progress.total, 2);
++  assert.strictEqual(progress.done, 0);
++  assert.strictEqual(progress.percent, 0);
++  assert.deepStrictEqual(progress.services.map((entry) => entry.state), ['unknown', 'unknown']);
++});
++
++test('Images: progress handles an empty tracked list', () => {
++  const progress = progressSnapshot({ inProgress: false, services: [] }, []);
++  assert.strictEqual(progress.total, 0);
++  assert.strictEqual(progress.percent, 0);
++  assert.deepStrictEqual(progress.services, []);
 +});

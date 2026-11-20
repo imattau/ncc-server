@@ -65,8 +65,10 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/services/<id>/logs?limit=200` — node events and container output
 - `GET /ncc-api/metrics` — host CPU, memory, disk and Docker usage
 - `GET /ncc-api/images` — the bundle's own images, tags, registry availability and last update result; `?refresh=1` bypasses the registry check cache
+- `POST /ncc-api/images/update` — pull several images and return a short-lived progress token
+- `GET /ncc-api/images/progress` — update states for the `Authorization: Bearer <progress-token>` returned by the start call (no NIP-98; the token is the authorization)
 - `POST /ncc-api/images/<service>/update` — pull the image tag and recreate the
-  container when the digest changed
+  container when the digest changed (single-service compatibility route)
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
@@ -280,6 +282,15 @@ when the pulled digest differs from the running one:
   started, so a bad image cannot leave the service down;
 - updating Caddy, the sidecar or the node-agent briefly interrupts this
   panel; the node answers before it starts the work.
+
+**Update all (N)** starts the same run for every image whose registry digest
+differs, where N is that count. It asks for a second click before starting.
+The progress bar counts services through `queued`, `pulling`, `recreating`
+and their terminal states, so it shows both how many images are done and
+which one is being worked on. Progress is read with a short-lived bearer token
+returned by the start call, so following it does not ask a NIP-46 signer for
+a new NIP-98 event every couple of seconds. The node still works through the
+images in order; a failed image does not stop the rest.
 
 The tag is the one in `.env`. `latest` follows new releases, but a pinned
 release tag does not move: change `SIDECAR_IMAGE`, `RELAY_IMAGE` and the other

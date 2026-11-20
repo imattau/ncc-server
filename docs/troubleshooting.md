@@ -197,6 +197,12 @@ Other messages:
   match; deploy the Caddy and sidecar images from the same release.
 - `An image update is already in progress` is the agent refusing a second
   pull. Wait for the first one and press **Check images**.
+- **Update all** works through the images one at a time. A failed image does
+  not stop the remaining ones; the progress bar shows how many failed, and a
+  card keeps the registry or container error.
+- The progress bar stops moving if the sidecar or node-agent restarts while
+  it is updating them. The work may still have completed: press **Check
+  images**.
 - A card stuck on `Recreating the container…` usually means the container
   failed to start and was rolled back to the previous image. Read the failed
   result, then check its logs on the **Installed** page or with `docker

@@ -386,6 +386,11 @@ def install(source):
 :{public_port} {{
 \ttls /opt/ncc-sidecar/certs/2/server.crt /opt/ncc-sidecar/certs/2/server.key
 \theader Access-Control-Allow-Origin "*"
+\theader Referrer-Policy "strict-origin-when-cross-origin"
+\theader X-Content-Type-Options "nosniff"
+\trequest_body {{
+\t\tmax_size 50MB
+\t}}
 \treverse_proxy 127.0.0.1:{backend_port}
 }}
 '''

@@ -41,6 +41,7 @@ import {
   loadPanelCatalogueIcon,
   loadPanelCatalogueService,
   loadPanelImages,
+  loadPanelImageProgress,
   loadPanelMetrics,
   loadPanelRecords,
   loadPanelServiceLogs,
@@ -55,7 +56,7 @@ import {
   savePanelIdentity,
   savePanelRelays,
   setPanelCatalogueTrust,
-  updatePanelImage,
+  updatePanelImages,
   type PanelAdmin,
   type PanelCadence,
   type PanelCatalogue,
@@ -64,6 +65,7 @@ import {
   type PanelMetrics,
   type PanelNodeImage,
   type PanelNodeImages,
+  type PanelImageProgress,
   type PanelNpanelStatus,
   type PanelServiceHealth,
   type PanelServiceLogs,
@@ -490,7 +492,7 @@ function imageUpdateCopy(image: PanelNodeImage): { text: string; tone: 'good' | 
     case 'pulling':
       return { text: 'Pulling the image…', tone: 'warn' };
     case 'queued':
-      return { text: 'Pulled; waiting to recreate…', tone: 'warn' };
+      return { text: 'Waiting to update…', tone: 'warn' };
     case 'recreating':
       return { text: 'Recreating the container…', tone: 'warn' };
     case 'recreated':
@@ -511,6 +513,25 @@ function imageCheckedLabel(value: string | null): string {
   const checked = new Date(value);
   if (Number.isNaN(checked.getTime())) return '';
   return checked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Apply the progress endpoint's per-service states to the image cards. */
+function mergeImageProgress(images: PanelNodeImage[], progress: PanelImageProgress): PanelNodeImage[] {
+  const byService = new Map(progress.services.map((entry) => [entry.service, entry]));
+  return images.map((image) => {
+    const entry = byService.get(image.service);
+    if (!entry) return image;
+    return {
+      ...image,
+      updateAvailable: false,
+      update: {
+        state: entry.state,
+        changed: entry.changed,
+        imageId: entry.imageId,
+        error: entry.error,
+      },
+    };
+  });
 }
 
 function safeLink(value: string | null): string | null {
@@ -839,9 +860,13 @@ export default function AdminPanel() {
   const [imagesToken, setImagesToken] = useState(0);
   const imagesForce = useRef(false);
   const [imageBusy, setImageBusy] = useState<string | null>(null);
+  const [imageStarting, setImageStarting] = useState(false);
   const [imageError, setImageError] = useState('');
   const [imageDone, setImageDone] = useState('');
+  const [imageProgress, setImageProgress] = useState<PanelImageProgress | null>(null);
+  const [progressToken, setProgressToken] = useState<string | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<string | null>(null);
+  const [confirmUpdateAll, setConfirmUpdateAll] = useState(false);
   const [selectedRelease, setSelectedRelease] = useState<PanelCatalogueEntry | null>(null);
   const [releaseDetails, setReleaseDetails] = useState<PanelCatalogueService | null>(null);
   const [releaseState, setReleaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -1180,6 +1205,59 @@ export default function AdminPanel() {
 
     return () => controller.abort();
   }, [section, authorized, apiBase, user, imagesToken]);
+
+  // Follow a started image update through the token returned by the start
+  // call. Polling this route does not need a new NIP-98 event, so a NIP-46
+  // signer is not prompted every couple of seconds.
+  useEffect(() => {
+    if (!progressToken || section !== 'Apps') return;
+
+    const controller = new AbortController();
+    let stopped = false;
+    let timer: number | undefined;
+    let failures = 0;
+
+    const poll = async () => {
+      try {
+        const next = await loadPanelImageProgress(progressToken, controller.signal);
+        if (stopped) return;
+        failures = 0;
+        setImageProgress(next);
+        setNodeImages((current) => current ? {
+          ...current,
+          updating: next.inProgress,
+          images: mergeImageProgress(current.images, next),
+        } : current);
+        if (next.inProgress) {
+          timer = window.setTimeout(poll, 1500);
+        } else {
+          setProgressToken(null);
+        }
+      } catch (error) {
+        if (stopped) return;
+        failures += 1;
+        const expired = error instanceof PanelApiError && error.status === 401;
+        if (expired || failures >= 5) {
+          setImageProgress((current) => current ? {
+            ...current,
+            inProgress: false,
+            error: error instanceof Error ? error.message : 'Update progress is unavailable',
+          } : current);
+          setNodeImages((current) => current ? { ...current, updating: false } : current);
+          setProgressToken(null);
+          return;
+        }
+        timer = window.setTimeout(poll, 2500);
+      }
+    };
+
+    poll();
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [progressToken, section]);
 
   // Host metrics are not section-bound: the sidebar Storage card is on every
   // page. They load once per session and on Refresh, not on a timer, because
@@ -1780,45 +1858,78 @@ export default function AdminPanel() {
     setImagesToken((value) => value + 1);
   };
 
+  const startImageUpdate = async (services: string[], label: string) => {
+    if (!apiBase || !user || services.length === 0) return;
+
+    setConfirmUpdate(null);
+    setConfirmUpdateAll(false);
+    setImageError('');
+    setImageDone('');
+    setImageStarting(true);
+    setImageBusy(services.length === 1 ? services[0] : null);
+
+    try {
+      const started = await updatePanelImages(apiBase, user.signer, services);
+      const startedServices = started.services.length ? started.services : services;
+
+      // Reflect the accepted work locally so no card invites the same pull
+      // again. A token means the panel can follow the real states; without one
+      // (older sidecar) the list waits for Check images.
+      setNodeImages((current) => current ? {
+        ...current,
+        updating: true,
+        images: current.images.map((entry) => startedServices.includes(entry.service)
+          ? {
+            ...entry,
+            updateAvailable: false,
+            update: { state: 'queued', changed: false, imageId: null, error: null },
+          }
+          : entry),
+      } : current);
+
+      if (started.progressToken) {
+        setImageProgress(null);
+        setProgressToken(started.progressToken);
+      } else {
+        setImageDone(`${label}: update started. Reload the list in a moment to see the new digest.`);
+      }
+    } catch (error) {
+      setImageError(error instanceof Error ? error.message : `Could not update ${label}`);
+    } finally {
+      setImageStarting(false);
+      setImageBusy(null);
+    }
+  };
+
   const handleUpdateImage = async (image: PanelNodeImage) => {
     if (!apiBase || !user) return;
 
     if (confirmUpdate !== image.service) {
       setConfirmUpdate(image.service);
+      setConfirmUpdateAll(false);
       notify(`Click Update again to pull ${image.label}`);
       return;
     }
 
-    setConfirmUpdate(null);
-    setImageError('');
-    setImageDone('');
-    setImageBusy(image.service);
-    try {
-      await updatePanelImage(apiBase, user.signer, image.service);
-      // The agent has accepted the work. Reflect it locally so the button does
-      // not invite the same pull again; the next Check images reads the truth.
-      setNodeImages((current) => current ? {
-        ...current,
-        updating: true,
-        images: current.images.map((entry) => entry.service === image.service
-          ? {
-            ...entry,
-            updateAvailable: false,
-            update: { state: 'pulling', changed: false, imageId: null, error: null },
-          }
-          : entry),
-      } : current);
-      setImageDone(
-        `${image.label}: update started. Reload the list in a moment to see the new digest.`,
-      );
-      // The node rebuilds the container in the background. Do not reload on a
-      // timer: every read needs a new NIP-98 event, which prompts a NIP-46
-      // signer again.
-    } catch (error) {
-      setImageError(error instanceof Error ? error.message : `Could not update ${image.label}`);
-    } finally {
-      setImageBusy(null);
+    await startImageUpdate([image.service], image.label);
+  };
+
+  const handleUpdateAll = async () => {
+    if (!apiBase || !user || !nodeImages) return;
+
+    const services = nodeImages.images
+      .filter((image) => image.updatable && image.updateAvailable === true)
+      .map((image) => image.service);
+    if (!services.length) return;
+
+    if (!confirmUpdateAll) {
+      setConfirmUpdateAll(true);
+      setConfirmUpdate(null);
+      notify(`Click Update all again to pull ${services.length} images`);
+      return;
     }
+
+    await startImageUpdate(services, `${services.length} image${services.length === 1 ? '' : 's'}`);
   };
 
   const openRelease = (entry: PanelCatalogueEntry) => {
@@ -2000,6 +2111,28 @@ export default function AdminPanel() {
 
   const groups = activityGroups(snapshot?.activity ?? []);
   const recentActivity = snapshot?.activity.slice(0, 3) ?? [];
+
+  const imageUpdateCount = nodeImages?.images
+    .filter((image) => image.updatable && image.updateAvailable === true)
+    .length ?? 0;
+  const imagesUpdating = nodeImages?.updating === true || imageProgress?.inProgress === true;
+  const imageLabels = new Map((nodeImages?.images ?? []).map((image) => [image.service, image.label]));
+  const progressActive = imageProgress?.services.find(
+    (entry) => entry.state === 'pulling' || entry.state === 'recreating',
+  );
+  const progressFailed = imageProgress?.services.filter((entry) => entry.state === 'failed') ?? [];
+  const progressUnknown = imageProgress?.services.filter((entry) => entry.state === 'unknown').length ?? 0;
+  const imageProgressLabel = imageProgress?.error
+    ? imageProgress.error
+    : imageProgress?.inProgress
+      ? progressActive
+        ? `${progressActive.state === 'pulling' ? 'Pulling' : 'Recreating'} ${imageLabels.get(progressActive.service) ?? progressActive.service}`
+        : 'Waiting for the node-agent…'
+      : progressUnknown
+        ? 'The node-agent did not report these images. Press Check images.'
+        : progressFailed.length
+          ? `Finished with ${progressFailed.length} failed. Press Check images to refresh.`
+          : 'Finished. Press Check images to refresh the digests.';
 
   return (
     <div className="ncc-panel">
@@ -2326,10 +2459,31 @@ export default function AdminPanel() {
                   <div className="heading-actions">
                     <AppsViewToggle value={appsView} onChange={setAppsView} />
                     <button
+                      className="button-primary update-all"
+                      type="button"
+                      onClick={handleUpdateAll}
+                      disabled={
+                        !authorized || !apiBase || !user || imageUpdateCount === 0
+                        || imageStarting || imagesUpdating
+                      }
+                      title={imageUpdateCount === 0
+                        ? 'Every image is already up to date'
+                        : `Pull ${imageUpdateCount} image${imageUpdateCount === 1 ? '' : 's'} with a newer registry digest`}
+                    >
+                      {imageStarting ? <span className="button-spinner" /> : <ArrowDownToLine size={14} />}
+                      {imageProgress?.inProgress
+                        ? `Updating (${imageProgress.total})`
+                        : imageStarting
+                          ? 'Starting…'
+                          : confirmUpdateAll
+                            ? `Confirm all (${imageUpdateCount})`
+                            : `Update all (${imageUpdateCount})`}
+                    </button>
+                    <button
                       className="text-button"
                       type="button"
                       onClick={refreshImages}
-                      disabled={nodeImagesState === 'loading' || !apiBase}
+                      disabled={nodeImagesState === 'loading' || !apiBase || imagesUpdating}
                       title="Read the current image and last update result from the node"
                     >
                       <RefreshCw size={13} className={nodeImagesState === 'loading' ? 'spin' : undefined} />
@@ -2348,6 +2502,49 @@ export default function AdminPanel() {
 
                 {imageDone && (
                   <div className="settings-saved" role="status"><Check size={13} /> {imageDone}</div>
+                )}
+
+                {imageProgress && (
+                  <div className={`image-progress ${imageProgress.inProgress ? 'active' : ''}`} role="status">
+                    <div className="image-progress-head">
+                      <strong>
+                        {imageProgress.inProgress
+                          ? 'Updating images'
+                          : progressUnknown
+                            ? 'Update status unavailable'
+                            : 'Image update finished'}
+                      </strong>
+                      <span>{imageProgress.done} / {imageProgress.total}</span>
+                    </div>
+                    <div
+                      className="image-progress-track"
+                      role="progressbar"
+                      aria-label="Image update progress"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={imageProgress.percent}
+                      aria-valuetext={`${imageProgress.done} of ${imageProgress.total} images updated`}
+                    >
+                      <i style={{ width: `${Math.min(100, Math.max(0, imageProgress.percent))}%` }} />
+                    </div>
+                    <div className="image-progress-detail">
+                      <span className={imageProgress.error ? 'health-bad' : undefined}>{imageProgressLabel}</span>
+                      {progressFailed.length > 0 && (
+                        <span className="image-progress-failed">
+                          {progressFailed.length} failed
+                        </span>
+                      )}
+                      {!imageProgress.inProgress && (
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() => setImageProgress(null)}
+                        >
+                          Dismiss
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 )}
 
                 {nodeImagesState === 'error' && (
@@ -2375,7 +2572,7 @@ export default function AdminPanel() {
                   </div>
                 )}
 
-                {nodeImages?.updating && (
+                {nodeImages?.updating && !imageProgress && (
                   <div className="panel-banner" role="status">
                     <CircleAlert size={14} />
                     <span>
@@ -2409,7 +2606,7 @@ export default function AdminPanel() {
                       const offerUpdate = image.updatable && available !== false;
                       const canUpdate = Boolean(
                         authorized && apiBase && user && offerUpdate
-                        && imageBusy === null && !nodeImages.updating,
+                        && imageBusy === null && !imageStarting && !nodeImages.updating,
                       );
 
                       return (

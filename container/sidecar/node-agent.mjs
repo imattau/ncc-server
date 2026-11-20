@@ -1099,12 +1099,12 @@ async function handleUpdate(request, response) {
 
   const services = Array.isArray(body.services) ? body.services : null;
   const unique = services ? [...new Set(services)] : [];
-  if (!unique.length || unique.length > 8
+  if (!unique.length || unique.length > UPDATEABLE_SERVICES.size
       || unique.some((service) => typeof service !== 'string'
         || !SERVICE_PATTERN.test(service)
         || !UPDATEABLE_SERVICES.has(service))) {
     sendJson(response, 400, {
-      error: `services must name up to 8 bundle services (${[...UPDATEABLE_SERVICES].join(', ')})`,
+      error: `services must name up to ${UPDATEABLE_SERVICES.size} bundle services (${[...UPDATEABLE_SERVICES].join(', ')})`,
     });
     return;
   }

@@ -204,3 +204,22 @@
   .catalog-grid.view-list .catalog-install{width:100%;margin-top:13px}
   .theme-menu{right:-4px}
 }
+
+/* Update-all action and its progress bar. */
+.button-primary.update-all{height:32px;padding:0 12px;font-size:10px;white-space:nowrap}
+.image-progress{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:11px 12px;margin-bottom:14px}
+.image-progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--ink-2);font-size:11px}
+.image-progress-head strong{font-size:11px;font-weight:650}
+.image-progress-head span{font-variant-numeric:tabular-nums;color:var(--muted-2);font-size:10px}
+.image-progress-track{height:6px;background:var(--surface-3);border-radius:6px;margin:9px 0 7px;overflow:hidden}
+.image-progress-track i{display:block;height:100%;border-radius:6px;background:var(--progress);transition:width .35s ease}
+.image-progress.active .image-progress-track i{background-image:linear-gradient(90deg,var(--progress),var(--progress-soft),var(--progress));background-size:200% 100%;animation:image-progress-stripes 1.6s linear infinite}
+.image-progress-detail{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted-2);font-size:10px;line-height:1.5}
+.image-progress-detail .text-button{margin-left:auto}
+.image-progress-failed{color:var(--bad);font-weight:650}
+@keyframes image-progress-stripes{from{background-position:100% 0}to{background-position:-100% 0}}
+@media(max-width:760px){
+  .section-heading{flex-wrap:wrap;align-items:flex-start}
+  .section-heading>.heading-actions{width:100%;flex-wrap:wrap}
+  .heading-actions .update-all{flex:1;min-width:150px}
+}

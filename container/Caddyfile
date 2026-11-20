@@ -1,6 +1,16 @@
 {
 	admin 127.0.0.1:2019
 	auto_https disable_redirects
+	# Slowloris and slow-POST protection for a directly exposed node. The
+	# header timeout bounds the handshake; the body timeout bounds the whole
+	# body read; idle closes inactive keep-alive connections.
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 5m
+			idle 5m
+		}
+	}
 }
 
 # Every browser-facing service gets its own dedicated port rather than
@@ -34,6 +44,33 @@
 	# HTTP 200 while the browser's fetch rejects it and the NCC protocol
 	# reports its generic 502 endpoint-unreachable page.
 	header Access-Control-Allow-Origin "*"
+}
+
+# Baseline response headers for every browser-facing service. Referrer-Policy
+# keeps the origin (which carries the per-service ncc:// host) but not paths;
+# nosniff stops browsers from reinterpreting a proxied asset as a script or
+# stylesheet when an upstream labels it wrongly.
+(ncc_security_headers) {
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+	}
+}
+
+# Small limits are enough for the static pages, the admin API and the relay
+# handshake. Large-upload services get the wider cap below.
+(ncc_body_small) {
+	request_body {
+		max_size 5MB
+	}
+}
+
+# npanel and Ditto can receive nsite or media uploads. Keep a bound without
+# pretending every upload is tiny.
+(ncc_body_app) {
+	request_body {
+		max_size 50MB
+	}
 }
 
 # The welcome page and admin panel read the operator identity here. Compose
@@ -91,6 +128,8 @@
 }
 
 :{$CONTENT_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	import cors_response
 	import ncc_public_config
 	handle {
@@ -105,6 +144,8 @@
 }
 
 :{$CONTENT_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
 	import ncc_public_config
@@ -125,6 +166,8 @@
 }
 
 :{$RELAY_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	tls {$RELAY_CERT} {$RELAY_KEY}
 	# Its own cert (sidecar record id 3), not WEB_CERT -- the relay profile
 	# has always been provisioned with a separate certificate from web/
@@ -142,6 +185,8 @@
 }
 
 :{$DITTO_WEB_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_app
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
 	# A dedicated port, not X-NCC-Pubkey/X-NCC-Service header routing, for
@@ -164,6 +209,8 @@
 }
 
 :{$NPANEL_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_app
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
 	# A dedicated port, bypassing the X-NCC-Pubkey/X-NCC-Service header
@@ -182,6 +229,8 @@
 }
 
 :{$SEARCH_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	tls {$WEB_CERT} {$WEB_KEY}
 	# The UI and its API share this one origin on purpose -- a browser's
 	# own JS only gets the special NCC-02 "k"-pin trust an ncc:// client
@@ -228,6 +277,8 @@
 # endpoints with redirect: 'manual', which Electron reports as "Redirect was
 # cancelled". Return a tiny 200 document that navigates to /admin instead.
 :{$ADMIN_PANEL_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	tls {$WEB_CERT} {$WEB_KEY}
 	import cors_response
 	import ncc_public_config
@@ -251,6 +302,8 @@
 # loopback, for operators who reach it through an SSH tunnel. Admin writes use
 # the same NIP-98-authorized API as the public listener.
 http://127.0.0.1:{$ADMIN_PANEL_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	bind 127.0.0.1
 	import ncc_public_config
 	import ncc_admin_api
@@ -271,6 +324,8 @@ http://127.0.0.1:{$ADMIN_PANEL_PORT} {
 # Host-based routing. Onion clients use http:// and ws:// because the onion
 # address itself provides encryption; these ports are never published.
 http://:{$TOR_NPANEL_PORT} {
+	import ncc_security_headers
+	import ncc_body_app
 	bind 127.0.0.1
 	import cors_response
 	reverse_proxy 127.0.0.1:3200 {
@@ -282,6 +337,8 @@ http://:{$TOR_NPANEL_PORT} {
 }
 
 http://:{$TOR_DITTO_WEB_PORT} {
+	import ncc_security_headers
+	import ncc_body_app
 	bind 127.0.0.1
 	import cors_response
 	reverse_proxy 127.0.0.1:3210 {
@@ -293,6 +350,8 @@ http://:{$TOR_DITTO_WEB_PORT} {
 }
 
 http://:{$TOR_SEARCH_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	bind 127.0.0.1
 	handle /search* {
 		reverse_proxy 127.0.0.1:3230 {
@@ -316,6 +375,8 @@ http://:{$TOR_SEARCH_PORT} {
 }
 
 http://:{$TOR_ADMIN_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	bind 127.0.0.1
 	import cors_response
 	import ncc_onion_config

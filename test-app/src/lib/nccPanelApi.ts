@@ -926,6 +926,120 @@ export async function loadPanelImages(
   ));
 }
 
+export interface PanelImageUpdateStart {
+  services: string[];
+  accepted: boolean;
+  progressToken: string | null;
+}
+
+/**
+ * Start one pull/recreate run for several images. The response carries a
+ * short-lived token for reading progress without another NIP-98 signature.
+ */
+export async function updatePanelImages(
+  base: string,
+  signer: PanelSigner,
+  services: string[],
+  signal?: AbortSignal,
+): Promise<PanelImageUpdateStart> {
+  const payload = await requestJson(
+    base,
+    signer,
+    'POST',
+    '/images/update',
+    { services },
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || !Array.isArray(record.services)) {
+    throw new PanelApiError(0, 'The node did not confirm the image update');
+  }
+
+  return {
+    services: record.services.filter((service): service is string => typeof service === 'string'),
+    accepted: record.accepted === true,
+    progressToken: stringOrNull(record.progressToken),
+  };
+}
+
+export interface PanelImageProgressService {
+  service: string;
+  state: string;
+  changed: boolean;
+  imageId: string | null;
+  error: string | null;
+}
+
+export interface PanelImageProgress {
+  inProgress: boolean;
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+  total: number;
+  done: number;
+  percent: number;
+  services: PanelImageProgressService[];
+}
+
+export function readImageProgress(payload: unknown): PanelImageProgress {
+  const record = objectValue(payload);
+  if (!record) {
+    throw new PanelApiError(0, 'The node returned an unexpected update progress response');
+  }
+
+  const services = (Array.isArray(record.services) ? record.services : []).flatMap(
+    (entry): PanelImageProgressService[] => {
+      const service = objectValue(entry);
+      if (!service || typeof service.service !== 'string') return [];
+      return [{
+        service: service.service,
+        state: typeof service.state === 'string' ? service.state : 'unknown',
+        changed: service.changed === true,
+        imageId: stringOrNull(service.imageId),
+        error: stringOrNull(service.error),
+      }];
+    },
+  );
+  const total = numberOrNull(record.total) ?? services.length;
+  const done = numberOrNull(record.done) ?? 0;
+
+  return {
+    inProgress: record.inProgress === true,
+    startedAt: numberOrNull(record.startedAt),
+    finishedAt: numberOrNull(record.finishedAt),
+    error: stringOrNull(record.error),
+    total,
+    done,
+    percent: numberOrNull(record.percent) ?? (total ? Math.round((done / total) * 100) : 0),
+    services,
+  };
+}
+
+/** Read update progress with the token returned by updatePanelImages. */
+export async function loadPanelImageProgress(
+  token: string,
+  signal?: AbortSignal,
+): Promise<PanelImageProgress> {
+  const response = await fetch('/ncc-api/images/progress', {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+    signal,
+  });
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('json')) {
+    throw new PanelApiError(response.status, 'The node admin API is not served on this address');
+  }
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object'
+      && typeof (payload as { error?: unknown }).error === 'string'
+      ? (payload as { error: string }).error
+      : 'Could not read the image update progress';
+    throw new PanelApiError(response.status, message);
+  }
+  return readImageProgress(payload);
+}
+
 /**
  * Pull a bundle image's tag and recreate its container when the digest
  * changed. The node accepts the work before the pull; reload the list for

@@ -1,4 +1,29 @@
+{
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 5m
+			idle 5m
+		}
+	}
+}
+
+(ncc_security_headers) {
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+	}
+}
+
+(ncc_body_small) {
+	request_body {
+		max_size 5MB
+	}
+}
+
 :{$CONTENT_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	root * {$CONTENT_ROOT}
 	encode gzip
 	try_files {path} /index.html
@@ -9,6 +34,8 @@
 }
 
 :{$CONTENT_TLS_PORT} {
+	import ncc_security_headers
+	import ncc_body_small
 	tls {$TLS_CERT_PATH} {$TLS_KEY_PATH}
 	root * {$CONTENT_ROOT}
 	encode gzip
