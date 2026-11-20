@@ -1,8 +1,8 @@
 diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
-index 466f5be..c3991f1 100644
+index 466f5be..b602dfc 100644
 --- a/src/routes/panel-services.js
 +++ b/src/routes/panel-services.js
-@@ -331,6 +331,157 @@ function readLimit(value, fallback = 200) {
+@@ -331,6 +331,171 @@ function readLimit(value, fallback = 200) {
    return Math.min(Math.max(parsed, 1), MAX_LOG_LINES);
  }
  
@@ -109,11 +109,15 @@ index 466f5be..c3991f1 100644
 + * that is not running has nothing to update. Fields the agent did not report
 + * stay null so the panel can say "unknown" rather than invent a version.
 + */
-+export function readNodeImages(containers, status) {
++export function readNodeImages(containers, status, checks) {
 +  const list = Array.isArray(containers) ? containers : [];
 +  const updates = new Map();
 +  for (const entry of Array.isArray(status?.services) ? status.services : []) {
 +    if (entry && typeof entry.service === 'string') updates.set(entry.service, entry);
++  }
++  const availability = new Map();
++  for (const entry of Array.isArray(checks) ? checks : []) {
++    if (entry && typeof entry.service === 'string') availability.set(entry.service, entry);
 +  }
 +
 +  return BUNDLE_IMAGES.flatMap((meta) => {
@@ -123,6 +127,10 @@ index 466f5be..c3991f1 100644
 +    const primary = matches[0];
 +    const image = typeof primary.image === 'string' ? primary.image : null;
 +    const update = updates.get(meta.service) ?? null;
++    const check = availability.get(meta.service) ?? null;
++    const updateAvailable = typeof check?.updateAvailable === 'boolean'
++      ? check.updateAvailable
++      : null;
 +    const stopped = matches.find((container) => container.state !== 'running');
 +    const state = stopped
 +      ? (typeof stopped.state === 'string' ? stopped.state : 'unknown')
@@ -147,6 +155,12 @@ index 466f5be..c3991f1 100644
 +        health: typeof container.health === 'string' ? container.health : null,
 +      })),
 +      updatable: Boolean(image && !image.includes('@')),
++      remoteDigest: typeof check?.remoteDigest === 'string' ? check.remoteDigest : null,
++      updateAvailable,
++      checkError: typeof check?.checkError === 'string' && check.checkError
++        ? check.checkError
++        : null,
++      checkedAt: typeof check?.checkedAt === 'string' ? check.checkedAt : null,
 +      update: update ? {
 +        state: UPDATE_STATES.has(update.state) ? update.state : 'unknown',
 +        changed: update.changed === true,
@@ -160,7 +174,7 @@ index 466f5be..c3991f1 100644
  function numberOrNull(value, { min = null, max = null } = {}) {
    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
    if (min !== null && value < min) return null;
-@@ -627,4 +778,99 @@ export default async function panelServicesRoutes(server) {
+@@ -627,4 +792,104 @@ export default async function panelServicesRoutes(server) {
        };
      }
    });
@@ -183,12 +197,17 @@ index 466f5be..c3991f1 100644
 +      };
 +    }
 +
++    const refresh = request.query?.refresh === '1' || request.query?.refresh === 'true';
 +    try {
-+      const [containers, status] = await Promise.all([
++      const [containers, status, checks] = await Promise.all([
 +        agentRequest('/v1/containers'),
 +        // A sidecar from before the update routes is a deployment mismatch,
 +        // not a reason to hide the image list.
 +        agentRequest('/v1/update/status').catch(() => null),
++        // An agent from before registry checks answers 404. Availability then
++        // stays unknown and the panel keeps its manual pull fallback.
++        agentRequest(`/v1/images${refresh ? '?refresh=1' : ''}`, { timeoutMs: 20_000 })
++          .catch(() => null),
 +      ]);
 +      return {
 +        agent: { available: true, error: null },
@@ -196,7 +215,7 @@ index 466f5be..c3991f1 100644
 +        startedAt: Number.isFinite(status?.startedAt) ? status.startedAt : null,
 +        finishedAt: Number.isFinite(status?.finishedAt) ? status.finishedAt : null,
 +        error: typeof status?.error === 'string' && status.error ? status.error : null,
-+        images: readNodeImages(containers?.containers, status),
++        images: readNodeImages(containers?.containers, status, checks?.checks),
 +      };
 +    } catch (error) {
 +      return {
@@ -262,10 +281,10 @@ index 466f5be..c3991f1 100644
  }
 diff --git a/test/panel-images.test.js b/test/panel-images.test.js
 new file mode 100644
-index 0000000..93d8369
+index 0000000..cbf4cb0
 --- /dev/null
 +++ b/test/panel-images.test.js
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,149 @@
 +import { test } from 'node:test';
 +import assert from 'node:assert';
 +
@@ -374,4 +393,44 @@ index 0000000..93d8369
 +test('Images: an empty or malformed payload yields an empty list', () => {
 +  assert.deepStrictEqual(readNodeImages(undefined, null), []);
 +  assert.deepStrictEqual(readNodeImages([null, 3], { services: 'nope' }), []);
++});
++
++test('Images: registry checks mark a newer digest as updateable', () => {
++  const [relay] = readNodeImages(
++    [{ service: 'relay', image: 'ghcr.io/imattau/ncc-server-relay:latest', imageId: 'sha256:relay', state: 'running' }],
++    null,
++    [{
++      service: 'relay',
++      remoteDigest: 'sha256:new',
++      localDigests: ['sha256:old'],
++      updateAvailable: true,
++      checkError: null,
++      checkedAt: '2026-11-20T10:00:00.000Z',
++    }],
++  );
++
++  assert.strictEqual(relay.updateAvailable, true);
++  assert.strictEqual(relay.remoteDigest, 'sha256:new');
++  assert.strictEqual(relay.checkError, null);
++  assert.strictEqual(relay.checkedAt, '2026-11-20T10:00:00.000Z');
++});
++
++test('Images: an equal digest is up to date and an unknown check stays null', () => {
++  const base = { service: 'relay', image: 'ghcr.io/imattau/ncc-server-relay:latest', state: 'running' };
++  const [current] = readNodeImages([base], null, [{
++    service: 'relay', remoteDigest: 'sha256:same', localDigests: ['sha256:same'],
++    updateAvailable: false, checkError: null, checkedAt: '2026-11-20T10:00:00.000Z',
++  }]);
++  assert.strictEqual(current.updateAvailable, false);
++
++  const [unknown] = readNodeImages([base], null, [{
++    service: 'relay', remoteDigest: null, localDigests: [],
++    updateAvailable: null, checkError: 'Registry unreachable', checkedAt: null,
++  }]);
++  assert.strictEqual(unknown.updateAvailable, null);
++  assert.strictEqual(unknown.checkError, 'Registry unreachable');
++
++  const [missing] = readNodeImages([base], null, null);
++  assert.strictEqual(missing.updateAvailable, null);
++  assert.strictEqual(missing.checkError, null);
 +});

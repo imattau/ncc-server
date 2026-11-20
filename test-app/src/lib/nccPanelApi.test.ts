@@ -144,6 +144,10 @@ describe('readNodeImages', () => {
     health: null,
     containers: [{ name: 'ncc-bundle-relay-1', state: 'running', health: null }],
     updatable: true,
+    remoteDigest: 'sha256:abc',
+    updateAvailable: false,
+    checkError: null,
+    checkedAt: '2026-01-01T00:00:00Z',
     update: { state: 'current', changed: false, imageId: 'sha256:abc', error: null },
     ...extra,
   });
@@ -162,8 +166,32 @@ describe('readNodeImages', () => {
     expect(result.images).toHaveLength(2);
     expect(result.images[0].containers[0].name).toBe('ncc-bundle-relay-1');
     expect(result.images[0].update?.state).toBe('current');
+    expect(result.images[0].updateAvailable).toBe(false);
+    expect(result.images[0].checkedAt).toBe('2026-01-01T00:00:00Z');
     expect(result.images[1].role).toBe('infrastructure');
     expect(result.images[1].update).toBeNull();
+  });
+
+  it('keeps an unknown availability unknown and reports the registry error', () => {
+    const result = readNodeImages({
+      agent: { available: true, error: null },
+      images: [image({
+        update: null,
+        remoteDigest: null,
+        updateAvailable: null,
+        checkError: 'Registry unreachable',
+      })],
+    });
+
+    expect(result.images[0].updateAvailable).toBeNull();
+    expect(result.images[0].remoteDigest).toBeNull();
+    expect(result.images[0].checkError).toBe('Registry unreachable');
+
+    const available = readNodeImages({
+      agent: { available: true, error: null },
+      images: [image({ update: null, updateAvailable: true, checkError: null })],
+    });
+    expect(available.images[0].updateAvailable).toBe(true);
   });
 
   it('defaults missing fields instead of inventing a version', () => {

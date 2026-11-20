@@ -3,6 +3,14 @@
 The static MKStack admin panel is built from `test-app/`. It is the same
 single-page app as the public welcome page, with the panel at `/admin`.
 
+The panel and the welcome page follow a light, dark or system theme. The
+choice is made from the sun/moon menu in the panel topbar (or the sign-in
+gate) and persists with the app configuration, next to the relay list.
+`src/lib/theme.ts` applies the saved choice before React mounts so a dark-mode
+operator never sees a white flash. The **Apps** page can show its image and
+catalogue cards as a grid or a list; the choice is saved separately and is
+shared by both card groups.
+
 The panel resolves the operator npub from `/ncc-config.json` (Caddy serves
 it dynamically from `NCC_OPERATOR_PUBKEY`, so it survives a content deploy)
 or, under `ncc://`, from the address itself, then queries the publication
@@ -56,7 +64,7 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/services` — health, probe, container and publication state
 - `GET /ncc-api/services/<id>/logs?limit=200` — node events and container output
 - `GET /ncc-api/metrics` — host CPU, memory, disk and Docker usage
-- `GET /ncc-api/images` — the bundle's own images, tags and last update result
+- `GET /ncc-api/images` — the bundle's own images, tags, registry availability and last update result; `?refresh=1` bypasses the registry check cache
 - `POST /ncc-api/images/<service>/update` — pull the image tag and recreate the
   container when the digest changed
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
@@ -245,9 +253,24 @@ signed service packages, so before this list they appeared nowhere in the
 panel and could only be updated on the host.
 
 Each card shows the Compose service, its image reference and tag, the image
-digest's date and the last update result. **Update** pulls the tag the
-container runs and recreates the container only when the pulled digest
-differs from the running one:
+digest's date, when the registry was last checked and, when there is one,
+the result of the last update. The panel asks the node-agent which digest the
+registry currently has for the running tag. The Update action only appears
+when that digest differs from the image the container runs:
+
+- the check uses Docker's `GET /distribution/<ref>/json`, so the daemon's
+  own registry credentials apply;
+- results are cached for five minutes; **Check images** bypasses the cache,
+  while the page's own load uses it to avoid hammering the registry;
+- **Up to date** means the local and remote digests match and no action is
+  shown;
+- when the registry cannot be reached the card says so and offers a quieter
+  **Pull anyway** action rather than claiming an update exists;
+- a digest-pinned image is marked as pinned and has no action; a pinned
+  release tag still only moves on the host.
+
+**Update** pulls the tag the container runs and recreates the container only
+when the pulled digest differs from the running one:
 
 - the pull and the recreate happen on the node, through the node-agent;
 - only the bundle's own Compose service names are accepted, and every create

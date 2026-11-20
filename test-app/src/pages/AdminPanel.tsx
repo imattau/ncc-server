@@ -3,13 +3,16 @@ import { useNostrLogin } from '@nostrify/react/login';
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleAlert,
   CircleHelp, Copy, Cpu, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
-  LockKeyhole, LogOut, MemoryStick, Menu, MoreHorizontal, Plus, Radio, RefreshCw, Search,
-  Server, Settings2, Shield, ShieldCheck, Smartphone, TerminalSquare, Trash2,
+  LayoutGrid, LockKeyhole, LogOut, MemoryStick, Menu, Monitor, Moon, MoreHorizontal,
+  Plus, Radio, RefreshCw, Rows3, Search,
+  Server, Settings2, Shield, ShieldCheck, Smartphone, Sun, TerminalSquare, Trash2,
   Users, Waves, X,
   type LucideIcon,
 } from 'lucide-react';
 import { nip19 } from 'nostr-tools';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { useTheme } from '@/hooks/useTheme';
 import {
   generateNostrConnectParams,
   generateNostrConnectURI,
@@ -92,6 +95,97 @@ const EMPTY_CADENCE: PanelCadence = {
 };
 
 type CadenceText = Record<keyof PanelCadence, string>;
+type AppsView = 'grid' | 'list';
+
+const THEME_OPTIONS: Array<{ value: 'light' | 'dark' | 'system'; label: string; icon: LucideIcon }> = [
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+  { value: 'system', label: 'System', icon: Monitor },
+];
+
+/** Light / dark / system, persisted by AppProvider next to the relay list. */
+function ThemeControl({ className }: { className?: string }) {
+  const { theme, setTheme } = useTheme();
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const Icon = THEME_OPTIONS.find((option) => option.value === theme)?.icon ?? Monitor;
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!wrap.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+
+  return (
+    <div className={`theme-control ${className ?? ''}`} ref={wrap}>
+      <button
+        className="icon-quiet theme-button"
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Theme: ${theme}. Choose light, dark or system.`}
+        title={`Theme: ${theme}`}
+      >
+        <Icon size={15} />
+      </button>
+      {open && (
+        <div className="theme-menu" role="menu" aria-label="Theme">
+          {THEME_OPTIONS.map(({ value, label, icon: OptionIcon }) => (
+            <button
+              key={value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={theme === value}
+              onClick={() => {
+                setTheme(value);
+                setOpen(false);
+              }}
+            >
+              <OptionIcon size={14} /> {label}
+              {theme === value && <Check size={13} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AppsViewToggle({ value, onChange }: { value: AppsView; onChange: (value: AppsView) => void }) {
+  return (
+    <div className="view-toggle" role="group" aria-label="Apps layout">
+      <button
+        type="button"
+        aria-pressed={value === 'grid'}
+        aria-label="Grid view"
+        title="Grid view"
+        onClick={() => onChange('grid')}
+      >
+        <LayoutGrid size={14} />
+      </button>
+      <button
+        type="button"
+        aria-pressed={value === 'list'}
+        aria-label="List view"
+        title="List view"
+        onClick={() => onChange('list')}
+      >
+        <Rows3 size={14} />
+      </button>
+    </div>
+  );
+}
 
 function cadenceTextOf(cadence: PanelCadence): CadenceText {
   return {
@@ -375,8 +469,19 @@ function imageBuiltLabel(value: string | null): string | null {
 function imageUpdateCopy(image: PanelNodeImage): { text: string; tone: 'good' | 'warn' | 'error' | 'muted' } {
   const update = image.update;
   if (!update) {
+    if (!image.updatable) {
+      return { text: 'Pinned by digest; nothing to pull', tone: 'muted' };
+    }
+    if (image.updateAvailable === true) {
+      return { text: 'A newer image is available on the registry', tone: 'warn' };
+    }
+    if (image.updateAvailable === false) {
+      return { text: 'Up to date', tone: 'good' };
+    }
     return {
-      text: image.imageId ? `Image ${shortImageId(image.imageId)}` : 'Image digest unknown',
+      text: image.checkError
+        ? `Could not compare with the registry: ${image.checkError}`
+        : 'Update availability unknown; check again',
       tone: 'muted',
     };
   }
@@ -399,6 +504,13 @@ function imageUpdateCopy(image: PanelNodeImage): { text: string; tone: 'good' | 
     default:
       return { text: 'Update state unknown', tone: 'muted' };
   }
+}
+
+function imageCheckedLabel(value: string | null): string {
+  if (!value) return '';
+  const checked = new Date(value);
+  if (Number.isNaN(checked.getTime())) return '';
+  return checked.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function safeLink(value: string | null): string | null {
@@ -519,6 +631,7 @@ function OperatorGate({
     <div className="ncc-panel gate-shell">
       <main className="gate-main">
         <section className="gate-card" aria-labelledby="gate-title">
+          <div className="gate-theme"><ThemeControl /></div>
           <div className="gate-brand">
             <span className="panel-brand-mark"><Globe2 size={21} /></span>
             <span>NCC <i>/</i> SERVER</span>
@@ -710,6 +823,7 @@ export default function AdminPanel() {
 
   const [section, setSection] = useState<Section>('Overview');
   const [mobileNav, setMobileNav] = useState(false);
+  const [appsView, setAppsView] = useLocalStorage<AppsView>('ncc:panel-apps-layout', 'grid');
   const [notice, setNotice] = useState('');
   const [appQuery, setAppQuery] = useState('');
   const [appCategory, setAppCategory] = useState('all');
@@ -723,6 +837,7 @@ export default function AdminPanel() {
   const [nodeImagesState, setNodeImagesState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [nodeImagesError, setNodeImagesError] = useState('');
   const [imagesToken, setImagesToken] = useState(0);
+  const imagesForce = useRef(false);
   const [imageBusy, setImageBusy] = useState<string | null>(null);
   const [imageError, setImageError] = useState('');
   const [imageDone, setImageDone] = useState('');
@@ -1047,8 +1162,10 @@ export default function AdminPanel() {
     if (section !== 'Apps' || !authorized || !apiBase || !user) return;
 
     const controller = new AbortController();
+    const force = imagesForce.current;
+    imagesForce.current = false;
 
-    loadPanelImages(apiBase, user.signer, controller.signal)
+    loadPanelImages(apiBase, user.signer, controller.signal, force)
       .then((loaded) => {
         if (controller.signal.aborted) return;
         setNodeImages(loaded);
@@ -1659,6 +1776,7 @@ export default function AdminPanel() {
     setImageError('');
     setImageDone('');
     setNodeImagesState('loading');
+    imagesForce.current = true;
     setImagesToken((value) => value + 1);
   };
 
@@ -1952,6 +2070,7 @@ export default function AdminPanel() {
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle navigation"><Menu size={20} /></button>
           <div className="breadcrumbs"><span>NCC node</span><b>/</b><strong>{section}</strong></div>
           <div className="topbar-right">
+            <ThemeControl />
             <span className="prototype-tag"><i /> LIVE</span>
             <span className="operator-chip" title={`Signed in as ${signerLabel(signerType)}`}>
               <span className="operator-avatar">{initials(signerNpub ?? operatorNpub)}</span>
@@ -2191,16 +2310,19 @@ export default function AdminPanel() {
                       the container only when the digest changed.
                     </p>
                   </div>
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={refreshImages}
-                    disabled={nodeImagesState === 'loading' || !apiBase}
-                    title="Read the current image and last update result from the node"
-                  >
-                    <RefreshCw size={13} className={nodeImagesState === 'loading' ? 'spin' : undefined} />
-                    Check images
-                  </button>
+                  <div className="heading-actions">
+                    <AppsViewToggle value={appsView} onChange={setAppsView} />
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={refreshImages}
+                      disabled={nodeImagesState === 'loading' || !apiBase}
+                      title="Read the current image and last update result from the node"
+                    >
+                      <RefreshCw size={13} className={nodeImagesState === 'loading' ? 'spin' : undefined} />
+                      Check images
+                    </button>
+                  </div>
                 </div>
 
                 {imageError && (
@@ -2258,12 +2380,20 @@ export default function AdminPanel() {
                     this server&apos;s images.
                   </div>
                 ) : (
-                  <div className="node-image-grid">
+                  <div className={`node-image-grid view-${appsView}`}>
                     {nodeImages.images.map((image) => {
                       const status = imageUpdateCopy(image);
                       const busy = imageBusy === image.service;
+                      const checked = imageCheckedLabel(image.checkedAt);
+                      // A completed pull/recreate is newer than the digest check
+                      // that was read before it; hide the action until the panel
+                      // checks again instead of offering the same update twice.
+                      const settled = image.update?.state === 'recreated' || image.update?.state === 'current';
+                      const available = settled ? false : image.updateAvailable;
+                      const fallback = image.updatable && available === null;
+                      const offerUpdate = image.updatable && available !== false;
                       const canUpdate = Boolean(
-                        authorized && apiBase && user && image.updatable
+                        authorized && apiBase && user && offerUpdate
                         && imageBusy === null && !nodeImages.updating,
                       );
 
@@ -2291,35 +2421,42 @@ export default function AdminPanel() {
                             {imageBuiltLabel(image.imageCreatedAt) && (
                               <span>built {imageBuiltLabel(image.imageCreatedAt)}</span>
                             )}
+                            {checked && <span>checked {checked}</span>}
                           </div>
 
-                          <div className={`node-image-status ${status.tone}`} title={image.update?.error ?? undefined}>
+                          <div className={`node-image-status ${status.tone}`} title={image.checkError ?? image.update?.error ?? undefined}>
                             {status.text}
                           </div>
 
-                          <div className="node-image-actions">
-                            <button
-                              className="catalog-install"
-                              type="button"
-                              onClick={() => handleUpdateImage(image)}
-                              disabled={!canUpdate || busy}
-                              title={image.updatable
-                                ? 'Pull this image tag and recreate the container when the digest changed'
-                                : 'This image is pinned by digest; change the image on the host'}
-                            >
-                              {busy ? <span className="button-spinner dark" /> : <ArrowDownToLine size={14} />}
-                              {busy ? 'Starting…' : confirmUpdate === image.service ? 'Confirm update' : 'Update'}
-                            </button>
-                            {confirmUpdate === image.service && (
+                          {offerUpdate ? (
+                            <div className="node-image-actions">
                               <button
-                                className="text-button"
+                                className={fallback ? 'text-button' : 'catalog-install'}
                                 type="button"
-                                onClick={() => setConfirmUpdate(null)}
+                                onClick={() => handleUpdateImage(image)}
+                                disabled={!canUpdate || busy}
+                                title={fallback
+                                  ? 'The registry check did not answer; pull this tag anyway'
+                                  : 'Pull this image tag and recreate the container when the digest changed'}
                               >
-                                Cancel
+                                {busy ? <span className="button-spinner dark" /> : <ArrowDownToLine size={14} />}
+                                {busy
+                                  ? 'Starting…'
+                                  : confirmUpdate === image.service
+                                    ? 'Confirm update'
+                                    : fallback ? 'Pull anyway' : 'Update'}
                               </button>
-                            )}
-                          </div>
+                              {confirmUpdate === image.service && (
+                                <button
+                                  className="text-button"
+                                  type="button"
+                                  onClick={() => setConfirmUpdate(null)}
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                            </div>
+                          ) : null}
                         </article>
                       );
                     })}
@@ -2375,6 +2512,7 @@ export default function AdminPanel() {
                 >
                   <RefreshCw size={15} className={catalogueLoading ? 'spin' : undefined} /> Refresh catalogue
                 </button>
+                <AppsViewToggle value={appsView} onChange={setAppsView} />
               </div>
 
               {catalogueState === 'error' && (
@@ -2429,7 +2567,7 @@ export default function AdminPanel() {
                     : 'No service packages were found on the configured relays.'}
                 </div>
               ) : (
-                <div className="catalog-grid">
+                <div className={`catalog-grid view-${appsView}`}>
                   {filteredCatalog.map((entry) => (
                     <article className="catalog-card" key={entry.releaseEventId}>
                       <div className="catalog-card-top">

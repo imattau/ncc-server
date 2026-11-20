@@ -171,13 +171,22 @@ failed or the record is older than twice the publish interval.
 
 ## An image update does not change the image
 
-The **Apps** page lists the bundle's own images with **Update**. It pulls the
-tag the container currently runs and recreates the container only when the
-pulled digest differs. A pinned tag therefore stays where it is: `0.2.8`
-will not turn into `0.2.9`. Change the image variable in `.env` on the host
+The **Apps** page lists the bundle's own images and asks the node-agent which
+digest the registry has for the running tag. **Update** only appears when that
+digest differs from the image the container runs. It pulls the tag the
+container currently runs and recreates the container only when the pulled
+digest differs. A pinned tag therefore stays where it is: `0.2.8` will not
+turn into `0.2.9`. Change the image variable in `.env` on the host
 (`SIDECAR_IMAGE`, `RELAY_IMAGE`, and so on), then recreate the pair as
 described in the deployment guide. `latest` is the only tag that follows new
 releases by itself.
+
+A card that says **Up to date** has nothing to do, and there is no button.
+**Could not compare with the registry** means the daemon could not reach the
+registry (offline, rate-limited, a private image without host credentials, or
+a registry mirror). The card keeps a quieter **Pull anyway** action for that
+case. Press **Check images** to retry the comparison after the network or
+credentials are fixed.
 
 Other messages:
 

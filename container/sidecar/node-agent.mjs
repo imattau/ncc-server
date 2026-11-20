@@ -38,6 +38,10 @@ const MAX_CONTAINERS = 50;
 const METRICS_CACHE_MS = 5_000;
 const DOCKER_USAGE_CACHE_MS = 60_000;
 const IMAGE_DATE_CACHE_MS = 300_000;
+const IMAGE_CHECK_CACHE_MS = 300_000;
+const IMAGE_CHECK_ERROR_MS = 30_000;
+const IMAGE_CHECK_TIMEOUT_MS = 8_000;
+const IMAGE_CHECK_CONCURRENCY = 4;
 const CPU_SAMPLE_MS = 200;
 const PULL_TIMEOUT_MS = 15 * 60_000;
 const HELPER_TIMEOUT_MS = 5 * 60_000;
@@ -400,25 +404,30 @@ function composeService(container) {
   return typeof name === 'string' && SERVICE_PATTERN.test(name) ? name : null;
 }
 
-let imageDates = { at: 0, byId: new Map() };
+let imageInfoCache = { at: 0, byId: new Map() };
 
-/** Creation time of an image ID, cached for a few minutes. */
-async function imageCreatedAt(imageId) {
+/** Image inspect data, cached for a few minutes; null when it was pruned. */
+async function imageInfo(imageId) {
   if (!imageId) return null;
-  if (Date.now() - imageDates.at > IMAGE_DATE_CACHE_MS) {
-    imageDates = { at: Date.now(), byId: new Map() };
+  if (Date.now() - imageInfoCache.at > IMAGE_DATE_CACHE_MS) {
+    imageInfoCache = { at: Date.now(), byId: new Map() };
   }
-  if (imageDates.byId.has(imageId)) return imageDates.byId.get(imageId);
+  if (imageInfoCache.byId.has(imageId)) return imageInfoCache.byId.get(imageId);
 
-  let createdAt = null;
+  let info = null;
   try {
-    const info = await dockerJson(`/images/${encodeURIComponent(imageId)}/json`);
-    createdAt = typeof info?.Created === 'string' ? info.Created : null;
+    info = await dockerJson(`/images/${encodeURIComponent(imageId)}/json`);
   } catch {
     // The image may have been pruned; the panel just shows no date.
   }
-  imageDates.byId.set(imageId, createdAt);
-  return createdAt;
+  imageInfoCache.byId.set(imageId, info);
+  return info;
+}
+
+/** Creation time of an image ID, cached for a few minutes. */
+async function imageCreatedAt(imageId) {
+  const info = await imageInfo(imageId);
+  return typeof info?.Created === 'string' ? info.Created : null;
 }
 
 async function projectContainers() {
@@ -466,6 +475,98 @@ async function projectContainers() {
   }));
 
   return containers;
+}
+
+// --- registry update checks -------------------------------------------------
+//
+// Docker can ask the registry for the digest of a tag without pulling it.
+// `/distribution/<ref>/json` uses the daemon's own credentials and resolves
+// multi-platform images the same way a pull would. Comparing that digest with
+// the running image's RepoDigests tells the panel whether an Update would
+// actually change anything; when the comparison is not possible the answer is
+// null, never a guess.
+
+const remoteDigestCache = new Map();
+
+/** `registry/repo@sha256:…` or `sha256:…` -> `sha256:…`, else null. */
+function digestOf(value) {
+  if (typeof value !== 'string') return null;
+  const at = value.indexOf('@');
+  const raw = (at === -1 ? value : value.slice(at + 1)).trim();
+  return /^sha(?:256:[a-f0-9]{64}|512:[a-f0-9]{128})$/i.test(raw) ? raw.toLowerCase() : null;
+}
+
+async function remoteDigest(ref, force) {
+  const cached = remoteDigestCache.get(ref);
+  const ttl = cached?.error ? IMAGE_CHECK_ERROR_MS : IMAGE_CHECK_CACHE_MS;
+  if (!force && cached && Date.now() - cached.at < ttl) return cached;
+
+  const entry = { at: Date.now(), digest: null, error: null };
+  try {
+    const info = await dockerJson(
+      `/distribution/${encodeURIComponent(ref)}/json`,
+      { timeoutMs: IMAGE_CHECK_TIMEOUT_MS },
+    );
+    entry.digest = digestOf(info?.Descriptor?.digest);
+    if (!entry.digest) entry.error = 'The registry did not return a manifest digest';
+  } catch (error) {
+    entry.error = error instanceof Error ? error.message : 'The registry check failed';
+  }
+  remoteDigestCache.set(ref, entry);
+  return entry;
+}
+
+async function imageRepoDigests(imageId) {
+  const info = await imageInfo(imageId);
+  return Array.isArray(info?.RepoDigests)
+    ? info.RepoDigests.map(digestOf).filter(Boolean)
+    : [];
+}
+
+/** One Compose service: the tag it runs, the digest the registry has, and
+ * whether recreating it would change the image. */
+async function serviceImageCheck(service, group, force) {
+  const image = group.find((container) => typeof container.image === 'string')?.image;
+  if (!image) return null;
+
+  const remote = await remoteDigest(image, force);
+  const local = new Set();
+  for (const container of group) {
+    for (const digest of await imageRepoDigests(container.imageId)) local.add(digest);
+  }
+
+  let updateAvailable = null;
+  let checkError = remote.error;
+  if (remote.digest && local.size) {
+    updateAvailable = !local.has(remote.digest);
+  } else if (!checkError && !local.size) {
+    checkError = 'No local image digest is available for comparison';
+  }
+
+  return {
+    service,
+    image,
+    remoteDigest: remote.digest,
+    localDigests: [...local],
+    updateAvailable,
+    checkError,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+async function mapLimit(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 function selectContainers(containers, services) {
@@ -551,6 +652,33 @@ async function handleContainers(request, response, url) {
     ? containers.filter((container) => requested.includes(container.service))
     : containers;
   sendJson(response, 200, { project: PROJECT, containers: filtered });
+}
+
+/**
+ * Whether each bundle image's tag has a different digest at the registry.
+ * `refresh=1` bypasses the five-minute cache for the panel's Check images
+ * button; a failed check is retried after thirty seconds.
+ */
+async function handleImages(request, response, url) {
+  const force = url.searchParams.get('refresh') === '1';
+  const containers = await projectContainers();
+  const byService = new Map();
+  for (const container of containers) {
+    if (!container.image) continue;
+    const group = byService.get(container.service) ?? [];
+    group.push(container);
+    byService.set(container.service, group);
+  }
+
+  const checks = await mapLimit(
+    [...byService.entries()],
+    IMAGE_CHECK_CONCURRENCY,
+    ([service, group]) => serviceImageCheck(service, group, force),
+  );
+  sendJson(response, 200, {
+    project: PROJECT,
+    checks: checks.filter((check) => check !== null),
+  });
 }
 
 async function handleLogs(request, response, url) {
@@ -891,6 +1019,9 @@ async function performUpdate(plans, helperImage) {
     if (!pulled.has(ref)) {
       try {
         await pullImage(ref);
+        // The tag's remote digest is what we just pulled; do not keep a
+        // pre-pull answer around for the panel's next availability check.
+        remoteDigestCache.delete(ref);
         const info = await dockerJson(`/images/${encodeURIComponent(ref)}/json`);
         pulled.set(ref, { imageId: typeof info?.Id === 'string' ? info.Id : null, error: null });
       } catch (error) {
@@ -1078,6 +1209,10 @@ const server = http.createServer(async (request, response) => {
   try {
     if (request.method === 'GET' && url.pathname === '/v1/containers') {
       await handleContainers(request, response, url);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/images') {
+      await handleImages(request, response, url);
       return;
     }
     if (request.method === 'GET' && url.pathname === '/v1/logs') {

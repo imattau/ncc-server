@@ -112,14 +112,14 @@ const Index = () => {
   }, []);
 
   return (
-    <main className="welcome-page min-h-screen overflow-hidden text-[#18211d]">
+    <main className="welcome-page min-h-screen overflow-hidden text-[var(--welcome-ink)]">
       <div className="welcome-wrap mx-auto max-w-[1240px] px-5 sm:px-9 lg:px-14">
-        <header className="flex items-center justify-between border-b border-[#18211d]/15 py-6">
+        <header className="flex items-center justify-between border-b border-[var(--welcome-line)] py-6">
           <a href="#top" className="flex items-center gap-3" aria-label="NCC Server home">
-            <span className="brand-mark grid size-10 place-items-center rounded-full bg-[#d9f27e] text-[#18211d]"><Globe2 size={20} strokeWidth={1.8} /></span>
-            <span className="font-mono text-xs font-semibold tracking-[0.14em] sm:text-sm">NCC <span className="text-[#819b4b]">/</span> SERVER</span>
+            <span className="brand-mark grid size-10 place-items-center rounded-full bg-[var(--welcome-lime)] text-[var(--welcome-lime-ink)]"><Globe2 size={20} strokeWidth={1.8} /></span>
+            <span className="font-mono text-xs font-semibold tracking-[0.14em] sm:text-sm">NCC <span className="text-[var(--welcome-green)]">/</span> SERVER</span>
           </a>
-          <a href="#services" className="group flex items-center gap-2 rounded-full border border-[#18211d]/20 px-4 py-2.5 text-xs font-semibold transition-colors hover:bg-[#18211d] hover:text-[#f6f6ef] sm:text-sm">
+          <a href="#services" className="group flex items-center gap-2 rounded-full border border-[var(--welcome-line-strong)] px-4 py-2.5 text-xs font-semibold transition-colors hover:bg-[var(--welcome-ink)] hover:text-[var(--welcome-bg)] sm:text-sm">
             Explore services <ArrowDownRight size={15} className="transition-transform group-hover:translate-y-0.5" />
           </a>
         </header>
@@ -131,34 +131,34 @@ const Index = () => {
             <span className="orbit-dot dot-one" /><span className="orbit-dot dot-two" /><span className="orbit-dot dot-three" />
           </div>
           <div className="relative z-10">
-            <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-[#18211d]/15 bg-white/40 px-3.5 py-2 text-[10px] font-semibold tracking-[0.18em] text-[#596351] sm:text-xs">
-              <span className="size-2 rounded-full bg-[#91b64c]" /> A COMMUNITY NODE ON NOSTR
+            <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-[var(--welcome-line)] bg-[var(--welcome-chip)] px-3.5 py-2 text-[10px] font-semibold tracking-[0.18em] text-[var(--welcome-muted-2)] sm:text-xs">
+              <span className="size-2 rounded-full bg-[var(--welcome-green)]" /> A COMMUNITY NODE ON NOSTR
             </div>
             <h1 className="max-w-[780px] font-serif text-[clamp(3.4rem,9vw,7.6rem)] leading-[0.92] tracking-[-0.065em]">
               The web works<br />better <span className="hero-italic">together.</span>
             </h1>
-            <p className="mt-7 max-w-[520px] text-base leading-7 text-[#59635e] sm:text-lg sm:leading-8">
+            <p className="mt-7 max-w-[520px] text-base leading-7 text-[var(--welcome-muted)] sm:text-lg sm:leading-8">
               Welcome to this corner of the open web. Explore independent services, connected by Nostr and run for the community.
             </p>
           </div>
           <div className="relative z-10 max-w-[330px] md:ml-auto md:mb-1">
-            <div className="mb-4 flex items-center gap-2 font-mono text-[10px] font-semibold tracking-[0.16em] text-[#68746c] sm:text-xs">
-              <span className="size-1.5 rounded-full bg-[#91b64c]" /> OPEN PROTOCOLS, COMMUNITY RUN
+            <div className="mb-4 flex items-center gap-2 font-mono text-[10px] font-semibold tracking-[0.16em] text-[var(--welcome-muted-2)] sm:text-xs">
+              <span className="size-1.5 rounded-full bg-[var(--welcome-green)]" /> OPEN PROTOCOLS, COMMUNITY RUN
             </div>
-            <p className="text-sm leading-6 text-[#69736d] sm:text-base sm:leading-7">No single company in the middle. Your identity stays yours, and each service can be used from NCC Browser.</p>
-            <a href="#services" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold underline decoration-[#95ad65] decoration-2 underline-offset-4 hover:text-[#708a3c]">
+            <p className="text-sm leading-6 text-[var(--welcome-muted)] sm:text-base sm:leading-7">No single company in the middle. Your identity stays yours, and each service can be used from NCC Browser.</p>
+            <a href="#services" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold underline decoration-[var(--welcome-decoration)] decoration-2 underline-offset-4 hover:text-[var(--welcome-accent)]">
               Find your way around <ArrowDownRight size={16} />
             </a>
           </div>
         </section>
 
-        <section id="services" className="services-section border-t border-[#18211d]/15 pb-16 pt-8 sm:pb-24 sm:pt-11">
+        <section id="services" className="services-section border-t border-[var(--welcome-line)] pb-16 pt-8 sm:pb-24 sm:pt-11">
           <div className="mb-7 flex flex-wrap items-end justify-between gap-4 sm:mb-9">
             <div>
-              <p className="mb-2 font-mono text-[10px] font-semibold tracking-[0.2em] text-[#75816d] sm:text-xs">THE NEIGHBOURHOOD</p>
+              <p className="mb-2 font-mono text-[10px] font-semibold tracking-[0.2em] text-[var(--welcome-muted-2)] sm:text-xs">THE NEIGHBOURHOOD</p>
               <h2 className="font-serif text-3xl tracking-[-0.04em] sm:text-4xl">What’s here</h2>
             </div>
-            <span className="pb-1 text-xs text-[#788078] sm:text-sm">
+            <span className="pb-1 text-xs text-[var(--welcome-muted-3)] sm:text-sm">
               {identityState === 'ready' ? 'Choose a service to open it in NCC Browser' : identityState === 'loading' ? 'Preparing NCC links…' : 'Service links are temporarily unavailable.'}
             </span>
           </div>
@@ -169,11 +169,11 @@ const Index = () => {
                 key={id}
                 href={serviceHref(id, rootNpub)}
                 aria-disabled={!rootNpub && id !== 'admin'}
-                className={`service-card service-${theme} group relative flex min-h-[225px] flex-col justify-between rounded-[20px] border border-[#18211d]/10 p-5 transition duration-300 hover:-translate-y-1 hover:shadow-[0_16px_40px_rgba(26,39,28,0.10)] aria-disabled:cursor-wait aria-disabled:opacity-60 aria-disabled:hover:translate-y-0 aria-disabled:hover:shadow-none sm:min-h-[244px] sm:p-6`}
+                className={`service-card service-${theme} group relative flex min-h-[225px] flex-col justify-between rounded-[20px] border border-[var(--welcome-card-line)] p-5 transition duration-300 hover:-translate-y-1 hover:shadow-[0_16px_40px_var(--welcome-shadow)] aria-disabled:cursor-wait aria-disabled:opacity-60 aria-disabled:hover:translate-y-0 aria-disabled:hover:shadow-none sm:min-h-[244px] sm:p-6`}
                 aria-label={`Open ${name} in NCC Browser${restricted ? ' (administrator access required)' : ''}`}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <span className="service-icon grid size-11 place-items-center rounded-[14px] bg-white/65"><Icon size={20} strokeWidth={1.7} /></span>
+                  <span className="service-icon grid size-11 place-items-center rounded-[14px] bg-[var(--welcome-icon-bg)]"><Icon size={20} strokeWidth={1.7} /></span>
                   <div className="flex items-center gap-2">
                     {optional && <span className="rounded-full border border-current/15 px-2 py-1 text-[9px] font-semibold tracking-[0.12em] opacity-70">OPTIONAL</span>}
                     {restricted && <span className="rounded-full border border-current/15 px-2 py-1 text-[9px] font-semibold tracking-[0.12em] opacity-70">ADMIN</span>}
@@ -184,7 +184,7 @@ const Index = () => {
                   <p className="mb-2 font-mono text-[9px] font-semibold tracking-[0.16em] opacity-60 sm:text-[10px]">{type}</p>
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="font-serif text-2xl tracking-[-0.035em] sm:text-[1.7rem]">{name}</h3>
-                    <span className="grid size-9 shrink-0 place-items-center rounded-full border border-current/15 transition group-hover:border-[#18211d]/40 group-hover:bg-[#18211d] group-hover:text-[#f7f7f0]"><ArrowUpRight size={17} /></span>
+                    <span className="grid size-9 shrink-0 place-items-center rounded-full border border-current/15 transition group-hover:border-[var(--welcome-line-strong)] group-hover:bg-[var(--welcome-ink)] group-hover:text-[var(--welcome-bg)]"><ArrowUpRight size={17} /></span>
                   </div>
                   <p className="mt-2 max-w-[310px] text-xs leading-5 opacity-70 sm:text-sm sm:leading-6">{description}</p>
                 </div>
@@ -192,16 +192,16 @@ const Index = () => {
             ))}
           </div>
 
-          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[#18211d]/10 bg-white/45 px-4 py-4 text-xs leading-5 text-[#69736d] sm:items-center sm:px-5 sm:text-sm">
-            <LockKeyhole size={16} className="mt-0.5 shrink-0 text-[#75884e] sm:mt-0" />
-            <p><span className="font-semibold text-[#364039]">Private by design.</span> Npanel and the Admin Panel are visible in the directory, but managing this node requires an operator identity.</p>
+          <div className="mt-4 flex items-start gap-3 rounded-2xl border border-[var(--welcome-card-line)] bg-[var(--welcome-chip)] px-4 py-4 text-xs leading-5 text-[var(--welcome-muted)] sm:items-center sm:px-5 sm:text-sm">
+            <LockKeyhole size={16} className="mt-0.5 shrink-0 text-[var(--welcome-decoration)] sm:mt-0" />
+            <p><span className="font-semibold text-[var(--welcome-ink)]">Private by design.</span> Npanel and the Admin Panel are visible in the directory, but managing this node requires an operator identity.</p>
           </div>
-          <p className="mt-4 text-[11px] leading-5 text-[#858c82]">NCC Search is an optional service and may not be enabled on every installation.</p>
+          <p className="mt-4 text-[11px] leading-5 text-[var(--welcome-muted-3)]">NCC Search is an optional service and may not be enabled on every installation.</p>
         </section>
 
-        <footer className="flex flex-col gap-4 border-t border-[#18211d]/15 py-6 text-xs text-[#737c73] sm:flex-row sm:items-center sm:justify-between sm:py-7">
-          <div className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-[#d9f27e]"><Globe2 size={14} /></span><span>Independent services, connected by Nostr.</span></div>
-          <a href="https://github.com/imattau/ncc-server" target="_blank" rel="noreferrer" className="group inline-flex w-fit items-center gap-1.5 font-medium text-[#49544b] hover:text-[#718c3d]">Explore the project <ArrowUpRight size={13} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" /></a>
+        <footer className="flex flex-col gap-4 border-t border-[var(--welcome-line)] py-6 text-xs text-[var(--welcome-muted-3)] sm:flex-row sm:items-center sm:justify-between sm:py-7">
+          <div className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-full bg-[var(--welcome-lime)] text-[var(--welcome-lime-ink)]"><Globe2 size={14} /></span><span>Independent services, connected by Nostr.</span></div>
+          <a href="https://github.com/imattau/ncc-server" target="_blank" rel="noreferrer" className="group inline-flex w-fit items-center gap-1.5 font-medium text-[var(--welcome-muted)] hover:text-[var(--welcome-accent)]">Explore the project <ArrowUpRight size={13} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" /></a>
         </footer>
       </div>
     </main>

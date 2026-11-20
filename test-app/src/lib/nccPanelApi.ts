@@ -830,6 +830,10 @@ export interface PanelNodeImage {
   health: string | null;
   containers: PanelNodeImageContainer[];
   updatable: boolean;
+  remoteDigest: string | null;
+  updateAvailable: boolean | null;
+  checkError: string | null;
+  checkedAt: string | null;
   update: PanelNodeImageUpdate | null;
 }
 
@@ -870,6 +874,10 @@ function readNodeImage(value: unknown): PanelNodeImage | null {
       }];
     }),
     updatable: record.updatable === true,
+    remoteDigest: stringOrNull(record.remoteDigest),
+    updateAvailable: typeof record.updateAvailable === 'boolean' ? record.updateAvailable : null,
+    checkError: stringOrNull(record.checkError),
+    checkedAt: stringOrNull(record.checkedAt),
     update: update ? {
       state: typeof update.state === 'string' ? update.state : 'unknown',
       changed: update.changed === true,
@@ -906,8 +914,16 @@ export async function loadPanelImages(
   base: string,
   signer: PanelSigner,
   signal?: AbortSignal,
+  refresh = false,
 ): Promise<PanelNodeImages> {
-  return readNodeImages(await requestJson(base, signer, 'GET', '/images', undefined, signal));
+  return readNodeImages(await requestJson(
+    base,
+    signer,
+    'GET',
+    `/images${refresh ? '?refresh=1' : ''}`,
+    undefined,
+    signal,
+  ));
 }
 
 /**

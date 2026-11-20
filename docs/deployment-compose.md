@@ -376,9 +376,13 @@ The agent runs from `SIDECAR_IMAGE`, so pin that image to a release that
 includes `node-agent.mjs` and `recreate.mjs` before starting it.
 
 Image updates pull the tag in `.env`. `latest` follows new releases; a pinned
-tag stays put until you change the variable on the host. Updating Caddy, the
-sidecar or the node-agent briefly interrupts the panel, so reload after the
-container is back.
+tag stays put until you change the variable on the host. The Apps page asks the
+node-agent for the registry digest of each running tag and only shows **Update**
+when it differs, so the sidecar and node-agent images must both come from the
+same release as the panel; an older agent answers the registry check with
+"unknown" and the panel keeps its manual **Pull anyway** fallback. Updating
+Caddy, the sidecar or the node-agent briefly interrupts the panel, so reload
+after the container is back.
 
 The App catalogue uses the `npack` container, which runs npackd read-only and
 answers the sidecar over `/run/npack/npackd.sock`. It has no Docker access and
