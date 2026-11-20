@@ -94,7 +94,7 @@ export function MediaGridCard({
         </div>
       )}
 
-      {isVideo && (
+      {isVideo && src && (
         <span
           aria-hidden="true"
           className="absolute inset-0 flex items-center justify-center bg-black/10"
