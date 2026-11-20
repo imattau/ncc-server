@@ -1,9 +1,12 @@
-import { Play } from 'lucide-react';
+import { useState, type MouseEvent } from 'react';
+import { Play, Image as ImageIcon, Video as VideoIcon } from 'lucide-react';
 import type { SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useResizedImage } from '@/hooks/useResizedImage';
 import { useBlurhashPlaceholder } from '@/hooks/useBlurhashPlaceholder';
+import { mediaPreviewTarget } from '@/lib/mediaPreview';
 import { sanitizeHref } from '@/lib/sanitize';
+import { MediaPreviewDialog } from '@/components/MediaPreviewDialog';
 
 // The grid of square thumbnails every real search engine uses for its
 // dedicated Images/Videos tab -- see SearchPage.tsx, which renders this
@@ -12,16 +15,15 @@ import { sanitizeHref } from '@/lib/sanitize';
 // results (confirmed live: 33+ stacked video players was a lot of
 // scrolling); a grid is the actual point of a dedicated media tab.
 //
-// Deliberately no embedded <video> element: loading dozens of video
-// elements at once in a grid is wasteful, and a grid cell isn't where
-// playback belongs anyway (real search engines open the source on click
-// too). Each cell is a static, clickable thumbnail; same resize/blurhash
-// pipeline as the compact thumbnail (cached by URL, so switching between
-// "All" and "Images" never re-fetches).
+// Deliberately no embedded <video> element in the cell: loading dozens of
+// video elements at once in a grid is wasteful. Playback belongs in
+// MediaPreviewDialog, which opens on click and needs no popup -- NCC
+// Browser may host this app where `target="_blank"` has nowhere to go.
 //
-// No reachability status chip here, unlike ResultRow -- a grid of thumbnails
-// reads cleanest with nothing but the image and a caption, same as Google
-// Images/YouTube's own grids never show that kind of status per-cell.
+// A result without a poster is an honest empty tile with an icon and a
+// label, not an endless pulsing skeleton: "no preview exists" and "still
+// loading" must not look the same. The pulsing state is only used while an
+// image resize is genuinely in flight.
 export function MediaGridCard({
   result,
   isFollowed = false,
@@ -34,6 +36,9 @@ export function MediaGridCard({
   const isVideo = result.kind === 'video' || result.kind === 'short-video';
   const placeholder = useBlurhashPlaceholder(result.blurhash);
   const resized = useResizedImage(isImage ? sanitizeHref(result.mediaUrl) : null);
+  const preview = mediaPreviewTarget(result);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
 
   const href = sanitizeHref(result.mediaUrl);
   const displayName = author.data?.metadata?.name?.trim();
@@ -41,14 +46,26 @@ export function MediaGridCard({
   const title = result.title?.trim() || identity;
   const indexedLabel = result.indexedAt ? new Date(result.indexedAt).toLocaleDateString() : null;
 
-  let src: string | null;
-  if (isImage) {
-    if (resized.status === 'ready' && resized.blobUrl) src = resized.blobUrl;
-    else if (resized.status === 'error') src = href;
-    else src = placeholder;
-  } else {
-    src = sanitizeHref(result.thumbnailUrl) ?? placeholder;
+  let src: string | null = null;
+  if (!imageFailed) {
+    if (isImage) {
+      if (resized.status === 'ready' && resized.blobUrl) src = resized.blobUrl;
+      else if (resized.status === 'error') src = href;
+      else src = placeholder;
+    } else {
+      src = sanitizeHref(result.thumbnailUrl) ?? placeholder;
+    }
   }
+  const loading = !src && isImage && resized.status === 'loading';
+
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!preview) return;
+    // Leave modified and middle clicks to the browser: those are deliberate
+    // "open the raw file" gestures.
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    setPreviewOpen(true);
+  };
 
   const cell = (
     <div className="group relative aspect-square overflow-hidden rounded-md border border-border bg-accent">
@@ -58,10 +75,22 @@ export function MediaGridCard({
           alt={title}
           loading="lazy"
           decoding="async"
+          onError={() => setImageFailed(true)}
           className="size-full object-cover transition-transform duration-150 group-hover:scale-105"
         />
-      ) : (
+      ) : loading ? (
         <div aria-hidden="true" className="size-full animate-pulse" />
+      ) : (
+        <div className="flex size-full flex-col items-center justify-center gap-1.5 px-2 text-muted-foreground">
+          {isVideo ? (
+            <VideoIcon className="size-6" aria-hidden="true" />
+          ) : (
+            <ImageIcon className="size-6" aria-hidden="true" />
+          )}
+          <span className="text-center text-[10px] leading-tight font-medium">
+            {preview || href ? 'No preview' : 'Not indexed yet'}
+          </span>
+        </div>
       )}
 
       {isVideo && (
@@ -105,8 +134,24 @@ export function MediaGridCard({
 
   if (!href) return cell;
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="block">
-      {cell}
-    </a>
+    <>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        className="block"
+        onClick={handleClick}
+        aria-haspopup={preview ? 'dialog' : undefined}
+      >
+        {cell}
+      </a>
+      {preview && (
+        <MediaPreviewDialog
+          result={result}
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+        />
+      )}
+    </>
   );
 }

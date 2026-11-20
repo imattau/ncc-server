@@ -19,7 +19,7 @@ import { SERVICE_RECORD_KIND } from '../discovery.js';
 import { routeEventToCrawlers } from '../ingest.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from './nsite.js';
 import { KIND_ARTICLE_EVENT } from './article.js';
-import { MEDIA_KINDS, storeKindFor } from './media.js';
+import { MEDIA_KINDS, resolveMedia, storeKindFor } from './media.js';
 import { CALENDAR_KINDS } from './calendar.js';
 import { LIVE_STREAM_KINDS } from './live.js';
 import { stripMarkdown } from './markdown.js';
@@ -203,12 +203,30 @@ function toLiveHit(event) {
   // result on; same stance discovery.js/article.js/media.js already take.
   if (itemId == null) return null;
 
+  // A media hit must carry the same imeta fields a crawled row does, or the
+  // UI has no media URL to launch and no poster to show: it renders an
+  // anonymous empty tile. There is nothing to resolve or verify for media
+  // (this backend never fetches the bytes), so the event's own imeta tags are
+  // enough -- see resolveMedia().
+  const media = MEDIA_KINDS.includes(event.kind) ? resolveMedia(event) : null;
+
   return {
     pubkey: event.pubkey,
     kind,
     itemId,
     title,
     description: summaryOrDescription ?? fallbackDescription ?? null,
+    ...(media
+      ? {
+        mediaUrl: media.mediaUrl,
+        mediaType: media.mediaType,
+        thumbnailUrl: media.thumbnailUrl,
+        blurhash: media.blurhash,
+        thumbhash: media.thumbhash,
+        contentWarning: media.contentWarning,
+        hashtags: media.hashtags,
+      }
+      : {}),
     ...liveStructuredFields(event, kind),
     eventId: event.id,
     source: 'live', // never conflate with a verified, crawled result -- see server.js
@@ -246,6 +264,13 @@ function liveStructuredFields(event, kind) {
  * @property {string} itemId
  * @property {string|null} title
  * @property {string|null} description
+ * @property {string} [mediaUrl] - image/video: the imeta file URL, when present
+ * @property {string|null} [mediaType]
+ * @property {string|null} [thumbnailUrl]
+ * @property {string|null} [blurhash]
+ * @property {string|null} [thumbhash]
+ * @property {string|null} [contentWarning]
+ * @property {string[]|null} [hashtags]
  * @property {string} eventId
  * @property {'live'} source
  */

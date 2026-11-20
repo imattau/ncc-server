@@ -33,12 +33,14 @@ actually reads like a search engine result.
       since this page never publishes). `nip05`, when the backend already
       verified it, always takes priority over this display-only lookup — see
       `ResultRow.tsx`.
-    - For `image`/`video` results, the browser fetches and renders the media
-      directly from its original host — `ResultRow.tsx` renders a real
-      `<img>`/`<video>` with the backend-supplied `mediaUrl`, never proxied
-      through the backend (which never touches media bytes at all, see
-      `../src/adapters/media.js`). Reachability is checked client-side too,
-      off the main thread, by
+    - For `image`/`video` results, the browser loads the media directly
+      from its original host — never proxied through the backend (which
+      never touches media bytes at all, see `../src/adapters/media.js`).
+      A result shows a thumbnail (or an explicit empty tile when the
+      publisher supplied no poster); clicking it opens
+      [`MediaPreviewDialog`](src/components/MediaPreviewDialog.tsx) with the
+      real `<img>`/`<video>` and an "Open original" link. Reachability is
+      checked client-side too, off the main thread, by
       [`src/workers/mediaProbe.worker.ts`](src/workers/mediaProbe.worker.ts)
       via [`src/hooks/useMediaProbe.ts`](src/hooks/useMediaProbe.ts) — the
       "worker thread" role the backend's own `lastStatus` check plays for
@@ -245,6 +247,30 @@ preview is built from the article event itself, in the browser:
 - If the relays don't return the event, the dialog keeps the indexed
   title/summary/cover, shows the indexed excerpt, and offers "Try again"
   and an "Open in njump" link built from the article's `naddr`.
+
+## Media previews
+
+An `image`/`video`/`short-video` result links to the original file, not to a
+page — there is no article-like body to render. Clicking a tile or a row's
+thumbnail opens
+[`MediaPreviewDialog`](src/components/MediaPreviewDialog.tsx), which loads
+the file from its original host (never proxied) and keeps an "Open original"
+link for the raw URL. Modified clicks (Ctrl/Cmd/Shift) and middle clicks on
+the card still use the browser's own new-tab behaviour.
+
+This is deliberately an in-page dialog rather than a `target="_blank"` link:
+
+- NCC Browser hosts this app in a tab or an iframe where a popup may not be
+  possible, so a card click could look like it did nothing at all;
+- a video without a published `image` poster is just a grey tile, making
+  "clicked, nothing opened" indistinguishable from "there is no preview".
+
+The tile itself is honest about the three states: a poster/blurhash while one
+exists, a short pulse only while an image resize is genuinely in flight, and a
+stable icon plus "No preview" (or "Not indexed yet" for a live NIP-50 hit with
+no media URL yet) otherwise. A failed poster swaps to the same tile via
+`onError` rather than leaving a broken image. The dialog also names an
+unplayable format instead of failing silently.
 
 ## Resized-image cache: LRU, memory-bounded
 

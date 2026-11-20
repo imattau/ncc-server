@@ -184,6 +184,11 @@ test('search() routes a NIP-68 picture to the content crawler, keyed by event id
 
   assert.equal(hits[0].kind, 'image');
   assert.equal(hits[0].itemId, 'e5');
+  assert.equal(hits[0].mediaUrl, 'https://cdn.example.com/x.jpg');
+  assert.equal(hits[0].mediaType, 'image/jpeg');
+  // An image's own file is its thumbnail; the UI needs it to render the tile
+  // even before the crawler indexes the hit.
+  assert.equal(hits[0].thumbnailUrl, 'https://cdn.example.com/x.jpg');
   assert.equal(contentCrawler.ingestedMedia.length, 1);
   assert.equal(contentCrawler.ingestedArticles.length, 0);
 });
@@ -197,6 +202,34 @@ test('search() routes a NIP-71 video (kind 21) to the content crawler as kind "v
   const hits = await adapter.search('trip');
   assert.equal(hits[0].kind, 'video');
   assert.equal(hits[0].itemId, 'e6');
+  assert.equal(hits[0].mediaUrl, 'https://cdn.example.com/x.jpg');
+  assert.equal(hits[0].thumbnailUrl, null);
+});
+
+test('a live media hit keeps the imeta poster and blurhash the UI renders', async () => {
+  const event = {
+    id: 'e9',
+    kind: KIND_VIDEO_NORMAL,
+    pubkey: 'e'.repeat(64),
+    tags: [[
+      'imeta',
+      'url https://cdn.example.com/clip.mp4',
+      'm video/mp4',
+      'image https://cdn.example.com/poster.jpg',
+      'blurhash LEHV6nWB2yk8',
+    ]],
+    content: 'a clip',
+    created_at: 0,
+  };
+  const adapter = new Nip50Adapter(fakePool([event]), fakeConfig());
+  adapter.prober = { filterCapable: async (relays) => relays };
+
+  const hits = await adapter.search('clip');
+
+  assert.equal(hits[0].mediaUrl, 'https://cdn.example.com/clip.mp4');
+  assert.equal(hits[0].mediaType, 'video/mp4');
+  assert.equal(hits[0].thumbnailUrl, 'https://cdn.example.com/poster.jpg');
+  assert.equal(hits[0].blurhash, 'LEHV6nWB2yk8');
 });
 
 test('search() resolves to [] rather than hanging if querySync never returns within the timeout', async () => {

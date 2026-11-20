@@ -1,14 +1,16 @@
-import { useState } from 'react';
-import { BookOpenText, Play } from 'lucide-react';
+import { useState, type MouseEvent } from 'react';
+import { BookOpenText, Image as ImageIcon, Play, Video as VideoIcon } from 'lucide-react';
 import type { ResultKind, SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useMediaProbe } from '@/hooks/useMediaProbe';
 import { useResizedImage } from '@/hooks/useResizedImage';
 import { useBlurhashPlaceholder } from '@/hooks/useBlurhashPlaceholder';
+import { mediaPreviewTarget } from '@/lib/mediaPreview';
 import { nsiteHref, sanitizeHref } from '@/lib/sanitize';
 import { truncateIdentity } from '@/lib/identity';
 import { Snippet } from '@/components/Snippet';
 import { ArticlePreviewDialog } from '@/components/ArticlePreviewDialog';
+import { MediaPreviewDialog } from '@/components/MediaPreviewDialog';
 
 const KIND_LABEL: Record<ResultKind, string> = {
   'ncc-service': 'NCC service',
@@ -155,31 +157,56 @@ const COMPACT_THUMB_CLASS =
 // a mixed "All" list where most rows are plain text. Reuses the same
 // resize/blurhash pipeline as the full MediaPreview (cached by URL, so
 // switching tabs never re-fetches), just rendered small.
-function CompactThumbnail({ result }: { result: SearchResult }) {
+function CompactThumbnail({ result, onOpen }: { result: SearchResult; onOpen?: () => void }) {
   const isImage = result.kind === 'image';
+  const isVideo = VIDEO_KINDS.has(result.kind);
   const placeholder = useBlurhashPlaceholder(result.blurhash);
   const resized = useResizedImage(isImage ? sanitizeHref(result.mediaUrl) : null);
+  const [failed, setFailed] = useState(false);
 
-  let src: string | null;
-  if (isImage) {
-    if (resized.status === 'ready' && resized.blobUrl) src = resized.blobUrl;
-    else if (resized.status === 'error') src = sanitizeHref(result.mediaUrl);
-    else src = placeholder;
-  } else {
-    // video/article/nsite thumbnails are a plain poster/cover image -- no
-    // resize worker needed, they're not meant to be large to begin with.
-    src = sanitizeHref(result.thumbnailUrl) ?? placeholder;
+  let src: string | null = null;
+  if (!failed) {
+    if (isImage) {
+      if (resized.status === 'ready' && resized.blobUrl) src = resized.blobUrl;
+      else if (resized.status === 'error') src = sanitizeHref(result.mediaUrl);
+      else src = placeholder;
+    } else {
+      // video/article/nsite thumbnails are a plain poster/cover image -- no
+      // resize worker needed, they're not meant to be large to begin with.
+      src = sanitizeHref(result.thumbnailUrl) ?? placeholder;
+    }
   }
+  const loading = !src && isImage && resized.status === 'loading';
 
   if (!src) {
-    return <div aria-hidden="true" className={`${COMPACT_THUMB_CLASS} animate-pulse`} />;
+    return (
+      <div
+        aria-hidden="true"
+        className={`${COMPACT_THUMB_CLASS} flex flex-col items-center justify-center gap-1 text-muted-foreground ${
+          loading ? 'animate-pulse' : ''
+        }`}
+      >
+        {loading ? null : isVideo ? (
+          <VideoIcon className="size-5" />
+        ) : (
+          <ImageIcon className="size-5" />
+        )}
+      </div>
+    );
   }
 
   const alt = result.title || result.description || `${result.kind} thumbnail`;
-  return (
+  const thumb = (
     <div className="relative shrink-0">
-      <img src={src} alt={alt} loading="lazy" decoding="async" className={COMPACT_THUMB_CLASS} />
-      {VIDEO_KINDS.has(result.kind) && (
+      <img
+        src={src}
+        alt={onOpen ? '' : alt}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className={COMPACT_THUMB_CLASS}
+      />
+      {isVideo && (
         <span
           aria-hidden="true"
           className="absolute inset-0 flex items-center justify-center rounded-md bg-black/10"
@@ -190,6 +217,18 @@ function CompactThumbnail({ result }: { result: SearchResult }) {
         </span>
       )}
     </div>
+  );
+
+  if (!onOpen) return thumb;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`Preview ${result.kind === 'image' ? 'image' : 'video'}`}
+      className="shrink-0 cursor-pointer rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      {thumb}
+    </button>
   );
 }
 
@@ -247,6 +286,18 @@ export function ResultRow({
   // query stays disabled until this is true (see ArticlePreviewDialog), so
   // rendering a page of results never fetches article bodies.
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Media results open a real in-page viewer instead of a popup. NCC Browser
+  // may host this app where a `target="_blank"` has nowhere to open, which
+  // made a click look like it did nothing.
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const preview = mediaPreviewTarget(result);
+
+  const openMediaPreview = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!preview) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    setMediaOpen(true);
+  };
 
   const content = (
     <>
@@ -255,6 +306,8 @@ export function ResultRow({
           href={href}
           target="_blank"
           rel="noopener noreferrer nofollow"
+          onClick={openMediaPreview}
+          aria-haspopup={preview ? 'dialog' : undefined}
           className="block truncate text-lg text-blue-700 hover:underline visited:text-purple-700 dark:text-blue-400 dark:visited:text-purple-400"
         >
           {title}
@@ -406,13 +459,17 @@ export function ResultRow({
       {result.kind === 'article' && (
         <ArticlePreviewDialog result={result} open={previewOpen} onClose={() => setPreviewOpen(false)} />
       )}
+
+      {preview && (
+        <MediaPreviewDialog result={result} open={mediaOpen} onClose={() => setMediaOpen(false)} />
+      )}
     </>
   );
 
   if (useCompactThumbnail) {
     return (
       <article className="flex max-w-2xl gap-3 py-5 first:pt-0">
-        <CompactThumbnail result={result} />
+        <CompactThumbnail result={result} onOpen={preview ? () => setMediaOpen(true) : undefined} />
         <div className="min-w-0 flex-1">{content}</div>
       </article>
     );
