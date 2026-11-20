@@ -14,6 +14,8 @@
 //   2. an immediate, clearly-marked "live, unverified" hit for responsiveness
 //      (see server.js), never presented as equivalent to a verified result.
 
+import { nip19 } from 'nostr-tools';
+
 import { Nip11Prober } from '../nip11.js';
 import { SERVICE_RECORD_KIND } from '../discovery.js';
 import { routeEventToCrawlers } from '../ingest.js';
@@ -151,6 +153,16 @@ export class Nip50Adapter {
   }
 }
 
+function safeNpub(hexPubkey) {
+  try {
+    return nip19.npubEncode(hexPubkey);
+  } catch {
+    // An event with a malformed pubkey is already unusable as an address;
+    // omit the npub rather than failing the whole search response.
+    return null;
+  }
+}
+
 function toLiveHit(event) {
   const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? null;
   const title = event.tags.find((t) => t[0] === 'title')?.[1] ?? null;
@@ -212,6 +224,13 @@ function toLiveHit(event) {
 
   return {
     pubkey: event.pubkey,
+    // The index and the nsite edition's local rows always carry this (see
+    // store.js's safeNpub), and the UI builds nsite links from it. A live
+    // hit without it is not equivalent to an indexed row: a hex host is 64
+    // characters and cannot be a DNS label, so ncc-browser's Android shell
+    // cannot load `<hex>.<site>.nsite.localhost`. Keep the payload's shape the
+    // same here rather than making every client compensate.
+    npub: safeNpub(event.pubkey),
     kind,
     itemId,
     title,
@@ -260,6 +279,7 @@ function liveStructuredFields(event, kind) {
 /**
  * @typedef {Object} LiveHit
  * @property {string} pubkey
+ * @property {string|null} npub - the same pubkey as an npub, when encodable
  * @property {'ncc-service'|'nsite-root'|'nsite-named'|'article'|'image'|'video'|'short-video'|'event'|'live-stream'} kind
  * @property {string} itemId
  * @property {string|null} title

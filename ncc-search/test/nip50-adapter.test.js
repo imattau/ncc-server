@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { nip19 } from 'nostr-tools';
 import { Nip50Adapter } from '../src/adapters/nip50.js';
 import { SERVICE_RECORD_KIND } from '../src/discovery.js';
 import { KIND_ROOT_SITE, KIND_NAMED_SITE } from '../src/adapters/nsite.js';
@@ -94,6 +95,7 @@ test('search() maps an NCC-02 service record to a live hit and ingests it into t
   assert.equal(hits.length, 1);
   assert.deepEqual(hits[0], {
     pubkey: event.pubkey,
+    npub: nip19.npubEncode(event.pubkey),
     kind: 'ncc-service',
     itemId: 'web',
     title: 'My Wallet',
@@ -129,6 +131,9 @@ test('search() maps a named nsite to its d-tag itemId', async () => {
   const hits = await adapter.search('blog');
   assert.equal(hits[0].kind, 'nsite-named');
   assert.equal(hits[0].itemId, 'blog');
+  // The UI builds nsite:// links from npub; a 64-character hex host is not
+  // a valid DNS label on ncc-browser's Android shell.
+  assert.equal(hits[0].npub, nip19.npubEncode(event.pubkey));
 });
 
 test('search() discards events of kinds outside the NCC/nsite set, even if a lenient relay returns them', async () => {

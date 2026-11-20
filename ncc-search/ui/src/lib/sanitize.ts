@@ -1,3 +1,5 @@
+import { nip19 } from 'nostr-tools';
+
 // Only http(s) links are ever rendered as a clickable href. NCC-02/NCC-05
 // endpoints can legitimately be wss://, onion://, tcp:// too, but those
 // aren't things a browser can navigate to directly, and this never trusts
@@ -29,13 +31,31 @@ function isValidNsiteSiteId(value: string): boolean {
 }
 
 /**
- * Builds an `nsite://` link (canonical form `nsite://<npub-or-pubkey>/<d>`,
- * see ncc-browser's nsite-url.ts) for a root or named NIP-5A site.
+ * Builds an `nsite://` link for a root or named NIP-5A site.
  * `itemId` is `'_root'` for a root site (see src/adapters/nsite.js's
  * `resolveSite`), everything else a named site's `d` tag.
+ *
+ * The host is always an npub, never a 64-character hex pubkey. Both parse
+ * as an nsite address, but ncc-browser's shells turn the host into a
+ * virtual hostname: Android loads `<host>.<site>.nsite.localhost`. A DNS
+ * label is limited to 63 characters, and an npub is 63 while a hex pubkey
+ * is 64 -- so a hex host is an address that can never resolve there. Live
+ * NIP-50 nsite hits arrive without `npub` (see src/adapters/nip50.js), which
+ * made this fallback reachable; encode one instead of emitting it.
  */
 export function nsiteHref(pubkey: string, npub: string | null | undefined, itemId: string): string | null {
-  const host = npub || pubkey;
+  const host = npub || safeNpub(pubkey);
+  if (!host) return null;
   if (itemId === '_root') return `nsite://${host}`;
   return isValidNsiteSiteId(itemId) ? `nsite://${host}/${itemId}` : null;
+}
+
+function safeNpub(pubkey: string): string | null {
+  try {
+    return nip19.npubEncode(pubkey);
+  } catch {
+    // Not a hex pubkey and no npub supplied: no link rather than a hostname
+    // that cannot work.
+    return null;
+  }
 }
