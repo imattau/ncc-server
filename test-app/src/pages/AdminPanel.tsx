@@ -1795,6 +1795,19 @@ export default function AdminPanel() {
     setImageBusy(image.service);
     try {
       await updatePanelImage(apiBase, user.signer, image.service);
+      // The agent has accepted the work. Reflect it locally so the button does
+      // not invite the same pull again; the next Check images reads the truth.
+      setNodeImages((current) => current ? {
+        ...current,
+        updating: true,
+        images: current.images.map((entry) => entry.service === image.service
+          ? {
+            ...entry,
+            updateAvailable: false,
+            update: { state: 'pulling', changed: false, imageId: null, error: null },
+          }
+          : entry),
+      } : current);
       setImageDone(
         `${image.label}: update started. Reload the list in a moment to see the new digest.`,
       );
@@ -2387,8 +2400,10 @@ export default function AdminPanel() {
                       const checked = imageCheckedLabel(image.checkedAt);
                       // A completed pull/recreate is newer than the digest check
                       // that was read before it; hide the action until the panel
-                      // checks again instead of offering the same update twice.
-                      const settled = image.update?.state === 'recreated' || image.update?.state === 'current';
+                      // checks again. A fresh "available" answer always wins, so
+                      // a release published after the last pull is not hidden.
+                      const settled = (image.update?.state === 'recreated' || image.update?.state === 'current')
+                        && image.updateAvailable !== true;
                       const available = settled ? false : image.updateAvailable;
                       const fallback = image.updatable && available === null;
                       const offerUpdate = image.updatable && available !== false;
