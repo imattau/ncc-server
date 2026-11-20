@@ -1,0 +1,14 @@
+[Unit]
+Description=NCC Server Docker Compose upgrade
+Documentation=https://github.com/imattau/ncc-server/blob/main/docs/deployment-compose.md
+After=docker.service network-online.target
+Wants=network-online.target
+# The path unit only starts this while a request exists. The runner removes
+# the request before doing any work, so a failure cannot loop the unit.
+ConditionPathExists=/var/lib/ncc-server-upgrade/request.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ncc-server-upgrade --request /var/lib/ncc-server-upgrade/request.json --status /var/lib/ncc-server-upgrade/status.json --release-file /var/lib/ncc-server-release/release.json --log-file /var/lib/ncc-server-upgrade/upgrade.log
+TimeoutStartSec=45min
+Nice=5

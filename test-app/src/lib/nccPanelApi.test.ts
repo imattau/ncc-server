@@ -5,6 +5,9 @@ import {
   readImageProgress,
   readNodeImages,
   readResult,
+  readServerUpgrade,
+  readUpgradeJob,
+  readUpgradeHelper,
   relayInputToUrl,
   resolvePanelApiBase,
   type PanelCadence,
@@ -259,5 +262,97 @@ describe('readImageProgress', () => {
     expect(progress.services[0]).toEqual({
       service: 'relay', state: 'unknown', changed: false, imageId: null, error: null,
     });
+  });
+});
+
+describe('readServerUpgrade', () => {
+  it('reads availability, helper state and the current release', () => {
+    const upgrade = readServerUpgrade({
+      current: { version: '0.2.12', tag: 'v0.2.12', commit: 'abc', source: 'host' },
+      latest: { tag: 'v0.2.13', version: '0.2.13', url: 'https://example/release', publishedAt: '2026-11-20T00:00:00Z' },
+      upgradeAvailable: true,
+      reason: null,
+      helper: { available: true, installed: true, installedAt: '2026-11-19T00:00:00Z', error: null },
+      job: null,
+      progressToken: null,
+      checkedAt: 10,
+      error: null,
+    });
+
+    expect(upgrade.upgradeAvailable).toBe(true);
+    expect(upgrade.current?.tag).toBe('v0.2.12');
+    expect(upgrade.latest?.tag).toBe('v0.2.13');
+    expect(upgrade.helper.available).toBe(true);
+    expect(upgrade.job).toBeNull();
+  });
+
+  it('keeps an unknown availability unknown instead of guessing', () => {
+    const upgrade = readServerUpgrade({
+      current: null,
+      latest: null,
+      upgradeAvailable: null,
+      reason: 'The GitHub release check timed out',
+      helper: {},
+      job: null,
+    });
+
+    expect(upgrade.upgradeAvailable).toBeNull();
+    expect(upgrade.reason).toBe('The GitHub release check timed out');
+    expect(upgrade.helper.available).toBe(false);
+    expect(upgrade.helper.error).toBeNull();
+  });
+
+  it('rejects a response that is not an object', () => {
+    expect(() => readServerUpgrade(null)).toThrow(/unexpected upgrade/);
+  });
+});
+
+describe('readUpgradeJob', () => {
+  it('reads steps, progress and pins', () => {
+    const job = readUpgradeJob({
+      jobId: 'job-1',
+      state: 'running',
+      step: 'install',
+      stepIndex: 4,
+      totalSteps: 6,
+      steps: [
+        { id: 'prepare', label: 'Preparing' },
+        { id: 'install', label: 'Installing' },
+      ],
+      target: 'v0.2.13',
+      from: 'v0.2.12',
+      startedAt: 10,
+      finishedAt: null,
+      error: null,
+      warning: 'Tor reconcile exited with code 1',
+      logTail: ['line'],
+      pins: { updated: ['SIDECAR_IMAGE'], skipped: ['RELAY_IMAGE'] },
+      dryRun: false,
+    });
+
+    expect(job?.state).toBe('running');
+    expect(job?.stepIndex).toBe(4);
+    expect(job?.totalSteps).toBe(6);
+    expect(job?.warning).toContain('Tor reconcile');
+    expect(job?.pins.updated).toEqual(['SIDECAR_IMAGE']);
+  });
+
+  it('rejects an unknown state and clamps a bad index', () => {
+    expect(readUpgradeJob({ state: 'sideways' })).toBeNull();
+    const job = readUpgradeJob({ state: 'failed', stepIndex: 99, totalSteps: 3 });
+    expect(job?.stepIndex).toBe(3);
+    expect(job?.steps).toEqual([]);
+  });
+});
+
+describe('readUpgradeHelper', () => {
+  it('reports an unavailable helper with its reason', () => {
+    expect(readUpgradeHelper({ available: false, installed: false, error: 'not installed' })).toEqual({
+      available: false,
+      installed: false,
+      installedAt: null,
+      error: 'not installed',
+    });
+    expect(readUpgradeHelper(null).error).toBe('The host upgrade helper is not available');
   });
 });

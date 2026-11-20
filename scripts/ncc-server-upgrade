@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Stable launcher for the NCC Server compose upgrade.
+#
+# systemd runs this from /usr/local/sbin, outside the checkout. It resolves the
+# project directory from the root-owned config written by the installer, copies
+# the runner and its release helper to /run, then executes the copy. The copy
+# keeps running even if the checkout changes underneath it.
+set -Eeuo pipefail
+
+PROJECT_DIR="$(cat /etc/ncc-server/compose-project 2>/dev/null || printf '/opt/ncc-server')"
+PROJECT_DIR="$(cd -- "$PROJECT_DIR" 2>/dev/null && pwd || printf '%s' "$PROJECT_DIR")"
+
+if [[ ! -f "$PROJECT_DIR/scripts/upgrade-compose-host.py" ]]; then
+  echo "Error: $PROJECT_DIR/scripts/upgrade-compose-host.py is missing" >&2
+  exit 1
+fi
+if [[ ! -f "$PROJECT_DIR/scripts/publish-server-release.py" ]]; then
+  echo "Error: $PROJECT_DIR/scripts/publish-server-release.py is missing" >&2
+  exit 1
+fi
+
+install -d -m 0755 /run/ncc-server-upgrade-bin
+install -m 0700 "$PROJECT_DIR/scripts/upgrade-compose-host.py" /run/ncc-server-upgrade-bin/upgrade-compose-host.py
+install -m 0700 "$PROJECT_DIR/scripts/publish-server-release.py" /run/ncc-server-upgrade-bin/publish-server-release.py
+
+exec python3 /run/ncc-server-upgrade-bin/upgrade-compose-host.py --project-dir "$PROJECT_DIR" "$@"

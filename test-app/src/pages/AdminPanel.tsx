@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useNostrLogin } from '@nostrify/react/login';
 import {
-  Activity, ArrowDownToLine, ArrowUpRight, Check, ChevronDown, CircleAlert,
+  Activity, ArrowDownToLine, ArrowUpCircle, ArrowUpRight, Check, ChevronDown, CircleAlert,
   CircleHelp, Copy, Cpu, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
   LayoutGrid, LockKeyhole, LogOut, MemoryStick, Menu, Monitor, Moon, MoreHorizontal,
   Plus, Radio, RefreshCw, Rows3, Search,
@@ -47,6 +47,8 @@ import {
   loadPanelServiceLogs,
   loadPanelServices,
   loadPanelSettings,
+  loadServerUpgrade,
+  loadServerUpgradeProgress,
   relayInputToUrl,
   removePanelAdmin,
   republishPanelService,
@@ -56,6 +58,7 @@ import {
   savePanelIdentity,
   savePanelRelays,
   setPanelCatalogueTrust,
+  startServerUpgrade,
   updatePanelImages,
   type PanelAdmin,
   type PanelCadence,
@@ -67,6 +70,8 @@ import {
   type PanelNodeImages,
   type PanelImageProgress,
   type PanelNpanelStatus,
+  type PanelServerUpgrade,
+  type PanelUpgradeJob,
   type PanelServiceHealth,
   type PanelServiceLogs,
   type PanelServiceStatus,
@@ -867,6 +872,15 @@ export default function AdminPanel() {
   const [progressToken, setProgressToken] = useState<string | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<string | null>(null);
   const [confirmUpdateAll, setConfirmUpdateAll] = useState(false);
+  const [serverUpgrade, setServerUpgrade] = useState<PanelServerUpgrade | null>(null);
+  const [serverUpgradeToken, setServerUpgradeToken] = useState(0);
+  const [upgradeToken, setUpgradeToken] = useState<string | null>(null);
+  const [upgradeJob, setUpgradeJob] = useState<PanelUpgradeJob | null>(null);
+  const [upgradeStarting, setUpgradeStarting] = useState(false);
+  const [confirmUpgrade, setConfirmUpgrade] = useState(false);
+  const [upgradeError, setUpgradeError] = useState('');
+  const [upgradeDone, setUpgradeDone] = useState('');
+  const [upgradeClock, setUpgradeClock] = useState(Date.now());
   const [selectedRelease, setSelectedRelease] = useState<PanelCatalogueEntry | null>(null);
   const [releaseDetails, setReleaseDetails] = useState<PanelCatalogueService | null>(null);
   const [releaseState, setReleaseState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -1258,6 +1272,107 @@ export default function AdminPanel() {
       if (timer) window.clearTimeout(timer);
     };
   }, [progressToken, section]);
+
+  // Server release availability. The sidecar caches the GitHub check, but the
+  // read still needs NIP-98; load once per session and after an upgrade.
+  useEffect(() => {
+    if (!authorized || !apiBase || !user) return;
+
+    const controller = new AbortController();
+
+    loadServerUpgrade(apiBase, user.signer, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        setServerUpgrade(loaded);
+        // A running job is always shown. A finished one is useful after a
+        // reload, but the status file persists; do not resurrect last week's
+        // result on every visit.
+        const recent = loaded.job?.finishedAt
+          && Date.now() - loaded.job.finishedAt < 24 * 60 * 60 * 1000;
+        if (loaded.job && (loaded.job.state === 'running' || recent)) {
+          setUpgradeJob(loaded.job);
+        }
+        if (loaded.progressToken) setUpgradeToken(loaded.progressToken);
+      })
+      .catch(() => {
+        // An older sidecar without the route, or an offline host, simply has
+        // no Server Upgrade action. The Apps image update path still works.
+      });
+
+    return () => controller.abort();
+  }, [authorized, apiBase, user, serverUpgradeToken]);
+
+  // Follow a running server upgrade. The token is persisted on the node, so
+  // this survives the sidecar restart the upgrade itself causes. Connection
+  // failures while Caddy and the sidecar are recreated are expected; keep
+  // waiting instead of declaring the upgrade failed.
+  useEffect(() => {
+    if (!upgradeToken || !apiBase || !user) return;
+
+    const controller = new AbortController();
+    let stopped = false;
+    let timer: number | undefined;
+    let failures = 0;
+
+    const poll = async () => {
+      try {
+        const status = await loadServerUpgradeProgress(upgradeToken, controller.signal);
+        if (stopped) return;
+        failures = 0;
+        setUpgradeJob(status.job);
+
+        if (status.job?.state === 'running' || !status.job) {
+          timer = window.setTimeout(poll, 2000);
+          return;
+        }
+
+        setUpgradeToken(null);
+        if (status.job.state === 'success') {
+          setUpgradeError('');
+          setUpgradeDone(
+            `Upgraded to ${status.job.target ?? 'the new release'}. Reload the panel to use it.`,
+          );
+          setServerUpgradeToken((value) => value + 1);
+        } else {
+          setUpgradeError(status.job.error ?? 'The server upgrade failed');
+        }
+      } catch (error) {
+        if (stopped) return;
+        failures += 1;
+        if (error instanceof PanelApiError && error.status === 401) {
+          // A reloaded panel or an expired token: ask for a fresh one once.
+          try {
+            const check = await loadServerUpgrade(apiBase, user.signer, controller.signal, true);
+            if (!stopped && check.progressToken) {
+              setUpgradeToken(check.progressToken);
+              return;
+            }
+          } catch {
+            // The node may still be restarting; fall through to the message.
+          }
+          setUpgradeToken(null);
+          setUpgradeError('The upgrade progress token expired. Reopen the panel to resume.');
+          return;
+        }
+        if (failures === 1) setUpgradeError('');
+        timer = window.setTimeout(poll, 2500);
+      }
+    };
+
+    poll();
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [upgradeToken, apiBase, user]);
+
+  // Keep the elapsed time moving while the installer runs.
+  useEffect(() => {
+    if (upgradeJob?.state !== 'running' && !upgradeToken) return;
+    const timer = window.setInterval(() => setUpgradeClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [upgradeJob?.state, upgradeToken]);
 
   // Host metrics are not section-bound: the sidebar Storage card is on every
   // page. They load once per session and on Refresh, not on a timer, because
@@ -1932,6 +2047,45 @@ export default function AdminPanel() {
     await startImageUpdate(services, `${services.length} image${services.length === 1 ? '' : 's'}`);
   };
 
+  const handleUpgrade = async () => {
+    if (!apiBase || !user || !serverUpgrade?.latest || serverUpgrade.upgradeAvailable !== true) return;
+    if (!serverUpgrade.helper.available) {
+      notify(serverUpgrade.helper.error ?? 'The host upgrade helper is not installed');
+      return;
+    }
+    if (!confirmUpgrade) {
+      setConfirmUpgrade(true);
+      notify(`Click Upgrade again to install ${serverUpgrade.latest.tag}`);
+      return;
+    }
+
+    setConfirmUpgrade(false);
+    setUpgradeError('');
+    setUpgradeDone('');
+    setUpgradeStarting(true);
+    setUpgradeJob(null);
+    try {
+      const started = await startServerUpgrade(apiBase, user.signer, serverUpgrade.latest.tag);
+      if (started.progressToken) {
+        setUpgradeToken(started.progressToken);
+      } else {
+        setUpgradeDone('Upgrade started. Reload the panel in a few minutes.');
+      }
+    } catch (error) {
+      setUpgradeError(error instanceof Error ? error.message : 'The server upgrade could not start');
+    } finally {
+      setUpgradeStarting(false);
+    }
+  };
+
+  const dismissUpgrade = () => {
+    setUpgradeJob(null);
+    setUpgradeError('');
+    setUpgradeDone('');
+    setConfirmUpgrade(false);
+    setUpgradeToken(null);
+  };
+
   const openRelease = (entry: PanelCatalogueEntry) => {
     setReleaseDetails(null);
     setReleaseError('');
@@ -2134,6 +2288,22 @@ export default function AdminPanel() {
           ? `Finished with ${progressFailed.length} failed. Press Check images to refresh.`
           : 'Finished. Press Check images to refresh the digests.';
 
+  const serverVersion = serverUpgrade?.current?.version ?? null;
+  const upgradeTarget = serverUpgrade?.latest?.tag ?? null;
+  const upgradeAvailable = serverUpgrade?.upgradeAvailable === true && Boolean(upgradeTarget);
+  const upgradeHelperReady = serverUpgrade?.helper.available === true;
+  const upgradeRunning = upgradeJob?.state === 'running' || upgradeToken !== null;
+  const upgradeBusy = upgradeStarting || upgradeRunning;
+  const upgradeStep = upgradeJob?.steps.find((entry) => entry.id === upgradeJob.step) ?? null;
+  const upgradePercent = upgradeJob && upgradeJob.totalSteps > 0
+    ? Math.round((upgradeJob.stepIndex / upgradeJob.totalSteps) * 100)
+    : 0;
+  const upgradeElapsed = upgradeJob?.startedAt
+    ? Math.max(0, Math.floor((upgradeClock - upgradeJob.startedAt) / 1000))
+    : null;
+  const upgradeFailed = Boolean(upgradeError) || upgradeJob?.state === 'failed';
+  const upgradeFinished = upgradeJob?.state === 'success' || Boolean(upgradeDone);
+
   return (
     <div className="ncc-panel">
       <aside className={`panel-sidebar ${mobileNav ? 'mobile-open' : ''}`}>
@@ -2207,7 +2377,9 @@ export default function AdminPanel() {
           >
             <CircleHelp size={16} /> Operator guide <ArrowUpRight size={13} />
           </a>
-          <div className="sidebar-version">NCC SERVER <span>LIVE</span></div>
+          <div className="sidebar-version">
+            NCC SERVER <span>{serverVersion ? `v${serverVersion}` : 'LIVE'}</span>
+          </div>
         </div>
       </aside>
 
@@ -2251,9 +2423,131 @@ export default function AdminPanel() {
                   <button className="button-secondary" onClick={refresh} disabled={loadingRecords}>
                     <RefreshCw size={15} className={loadingRecords ? 'spin' : undefined} /> Refresh
                   </button>
+                  {upgradeAvailable && (
+                    <button
+                      className={`button-secondary upgrade-button ${confirmUpgrade ? 'confirming' : ''}`}
+                      type="button"
+                      onClick={handleUpgrade}
+                      disabled={
+                        !authorized || !apiBase || !user || upgradeBusy || !upgradeHelperReady
+                        || imageBusy !== null || imageStarting || imagesUpdating
+                      }
+                      title={!upgradeHelperReady
+                        ? (serverUpgrade?.helper.error ?? 'The host upgrade helper is not installed')
+                        : `Upgrade this node to ${upgradeTarget}`}
+                    >
+                      {upgradeBusy ? <span className="button-spinner" /> : <ArrowUpCircle size={16} />}
+                      {upgradeStarting
+                        ? 'Starting…'
+                        : upgradeRunning
+                          ? 'Upgrading…'
+                          : confirmUpgrade
+                            ? 'Confirm upgrade'
+                            : `Upgrade to ${upgradeTarget}`}
+                    </button>
+                  )}
                   <button className="button-primary" onClick={() => setSection('Apps')}><Plus size={16} /> Add a service</button>
                 </div>
               </div>
+
+              {upgradeAvailable && !upgradeHelperReady && (
+                <div className="panel-banner" role="status">
+                  <CircleAlert size={14} />
+                  <span>
+                    {upgradeTarget} is available, but the host upgrade helper is not installed.
+                    {serverUpgrade?.helper.error
+                      && serverUpgrade.helper.error !== 'The host upgrade helper is not installed'
+                      ? ` ${serverUpgrade.helper.error}.`
+                      : ''} Run
+                    <code> sudo make install-compose-host </code> once on the host.
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={() => setServerUpgradeToken((value) => value + 1)}
+                    >
+                      Check again
+                    </button>
+                  </span>
+                </div>
+              )}
+
+              {(upgradeJob || upgradeToken || upgradeDone || upgradeError) && (
+                <div
+                  className={`upgrade-progress ${upgradeRunning ? 'active' : ''} ${upgradeFailed ? 'failed' : ''}`}
+                  role="status"
+                >
+                  <div className="upgrade-progress-head">
+                    <strong>
+                      {upgradeRunning
+                        ? `Upgrading to ${upgradeJob?.target ?? upgradeTarget ?? 'the new release'}`
+                        : upgradeFinished
+                          ? 'Server upgraded'
+                          : 'Server upgrade failed'}
+                    </strong>
+                    <span>
+                      {upgradeJob
+                        ? `${upgradeJob.stepIndex} / ${upgradeJob.totalSteps}`
+                        : 'Starting…'}
+                    </span>
+                  </div>
+                  <div
+                    className="upgrade-progress-track"
+                    role="progressbar"
+                    aria-label="Server upgrade progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={upgradePercent}
+                    aria-valuetext={upgradeJob
+                      ? `Step ${upgradeJob.stepIndex} of ${upgradeJob.totalSteps}`
+                      : 'Waiting for the host runner'}
+                  >
+                    <i style={{ width: `${Math.min(100, Math.max(0, upgradePercent))}%` }} />
+                  </div>
+                  <div className="upgrade-progress-detail">
+                    {upgradeError || upgradeJob?.error ? (
+                      <span className="health-bad">
+                        {upgradeError || upgradeJob?.error}
+                      </span>
+                    ) : upgradeFinished ? (
+                      <span>
+                        {upgradeDone
+                          || (upgradeJob?.state === 'success' && upgradeJob.target
+                            ? `Upgraded to ${upgradeJob.target}. Reload the panel to use it.`
+                            : 'The upgrade finished.')}
+                      </span>
+                    ) : (
+                      <span>
+                        {upgradeStep?.label ?? 'Waiting for the host runner…'}
+                        {upgradeElapsed !== null ? ` · ${durationLabel(upgradeElapsed)}` : ''}
+                      </span>
+                    )}
+                    {upgradeJob?.warning && (
+                      <span className="upgrade-progress-warning">{upgradeJob.warning}</span>
+                    )}
+                    {upgradeRunning && (
+                      <span className="upgrade-progress-note">
+                        The panel may disconnect while the node restarts.
+                      </span>
+                    )}
+                    {upgradeFinished && (
+                      <button className="text-button" type="button" onClick={() => window.location.reload()}>
+                        Reload panel
+                      </button>
+                    )}
+                    {!upgradeRunning && (upgradeFailed || upgradeFinished) && (
+                      <button className="text-button" type="button" onClick={dismissUpgrade}>
+                        Dismiss
+                      </button>
+                    )}
+                  </div>
+                  {upgradeJob && upgradeJob.logTail.length > 0 && (
+                    <details className="upgrade-progress-log">
+                      <summary>Last lines from the host runner</summary>
+                      <pre>{upgradeJob.logTail.join('\n')}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
 
               <div className="metric-grid">
                 <div className="metric-card">
@@ -2464,7 +2758,7 @@ export default function AdminPanel() {
                       onClick={handleUpdateAll}
                       disabled={
                         !authorized || !apiBase || !user || imageUpdateCount === 0
-                        || imageStarting || imagesUpdating
+                        || imageStarting || imagesUpdating || upgradeRunning
                       }
                       title={imageUpdateCount === 0
                         ? 'Every image is already up to date'
@@ -2606,7 +2900,8 @@ export default function AdminPanel() {
                       const offerUpdate = image.updatable && available !== false;
                       const canUpdate = Boolean(
                         authorized && apiBase && user && offerUpdate
-                        && imageBusy === null && !imageStarting && !nodeImages.updating,
+                        && imageBusy === null && !imageStarting && !nodeImages.updating
+                        && !upgradeRunning,
                       );
 
                       return (

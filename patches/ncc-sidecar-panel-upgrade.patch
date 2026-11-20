@@ -1,0 +1,414 @@
+diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
+index f8d806e..770493c 100644
+--- a/src/routes/panel-services.js
++++ b/src/routes/panel-services.js
+@@ -206,7 +206,7 @@ function probe(target, timeoutMs = PROBE_TIMEOUT_MS) {
+   });
+ }
+ 
+-async function agentRequest(path, { method = 'GET', body, timeoutMs = AGENT_TIMEOUT_MS } = {}) {
++export async function agentRequest(path, { method = 'GET', body, timeoutMs = AGENT_TIMEOUT_MS } = {}) {
+   if (!AGENT_TOKEN) throw new Error('Host control agent is not configured');
+ 
+   const controller = new AbortController();
+diff --git a/src/routes/panel-upgrade.js b/src/routes/panel-upgrade.js
+new file mode 100644
+index 0000000..221a600
+--- /dev/null
++++ b/src/routes/panel-upgrade.js
+@@ -0,0 +1,315 @@
++/* global fetch */
++/**
++ * Server Upgrade controls for the NCC admin panel.
++ *
++ * The panel asks this route whether the host checkout is behind the latest
++ * GitHub release and, when it is, starts the root-side upgrade runner through
++ * the node-agent. The sidecar never checks out code, runs the installer or
++ * touches Docker: it compares versions, authorizes the caller with NIP-98 and
++ * forwards a validated release tag.
++ *
++ * Progress is read with a short-lived bearer token. The token is stored hashed
++ * in the sidecar config so it survives the sidecar restart that the upgrade
++ * itself causes; following a run therefore does not ask a NIP-46 signer for a
++ * new NIP-98 event every couple of seconds.
++ */
++
++import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
++
++import { authorizePanelRequest } from '../panel-auth.js';
++import { addLog, getConfig, setConfig } from '../db.js';
++import { agentRequest } from './panel-services.js';
++
++const TOKEN_KEY = 'ncc-upgrade-progress';
++const TOKEN_TTL_MS = 60 * 60 * 1000;
++const RELEASE_CACHE_MS = 15 * 60 * 1000;
++const RELEASE_ERROR_CACHE_MS = 60 * 1000;
++const RELEASE_TIMEOUT_MS = 6000;
++const RELEASE_API = (process.env.NCC_SERVER_RELEASE_API || 'https://api.github.com').replace(/\/+$/, '');
++const DEFAULT_REPO = process.env.NCC_SERVER_RELEASE_REPO || 'imattau/ncc-server';
++const TARGET_RE = /^v?\d+\.\d+\.\d+$/;
++const SEMVER_RE = /^v?(\d+)\.(\d+)\.(\d+)$/;
++
++const ORIGIN_PATTERNS = [
++  /^https?:\/\/(?:[^@/]+@)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
++  /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i,
++  /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i,
++];
++
++let releaseCache = { key: '', at: 0, value: null, error: null };
++
++/** The GitHub owner/repo a checkout came from, or null for another forge. */
++export function parseOrigin(value) {
++  if (typeof value !== 'string') return null;
++  for (const pattern of ORIGIN_PATTERNS) {
++    const match = pattern.exec(value.trim());
++    if (match) return { owner: match[1], repo: match[2] };
++  }
++  return null;
++}
++
++/** `0.2.13`, `v0.2.13`, or null. */
++export function normalizeTarget(value) {
++  if (typeof value !== 'string') return null;
++  const target = value.trim();
++  if (!TARGET_RE.test(target)) return null;
++  return target.startsWith('v') ? target : `v${target}`;
++}
++
++/** `0.2.13` for a version tag, or null. */
++export function versionFromTag(tag) {
++  if (typeof tag !== 'string') return null;
++  const match = SEMVER_RE.exec(tag.trim());
++  return match ? match.slice(1).join('.') : null;
++}
++
++/** Negative, zero or positive when both values are release versions. */
++export function compareVersions(left, right) {
++  const a = SEMVER_RE.exec(typeof left === 'string' ? left.trim() : '');
++  const b = SEMVER_RE.exec(typeof right === 'string' ? right.trim() : '');
++  if (!a || !b) return null;
++  for (let index = 1; index <= 3; index += 1) {
++    const one = Number(a[index]);
++    const two = Number(b[index]);
++    if (one !== two) return one > two ? 1 : -1;
++  }
++  return 0;
++}
++
++/**
++ * The running server's release tag. The host release file is authoritative;
++ * an older install without one falls back to the sidecar image tag, and a
++ * mutable `latest` tag is honestly unknown.
++ */
++export function currentTag(release, image) {
++  if (release && typeof release.tag === 'string' && SEMVER_RE.test(release.tag.trim())) {
++    return release.tag.trim().startsWith('v') ? release.tag.trim() : `v${release.tag.trim()}`;
++  }
++  if (release && typeof release.version === 'string' && SEMVER_RE.test(release.version.trim())) {
++    const version = release.version.trim();
++    return version.startsWith('v') ? version : `v${version}`;
++  }
++  if (image && typeof image.tag === 'string' && SEMVER_RE.test(image.tag.trim())) {
++    const tag = image.tag.trim();
++    return tag.startsWith('v') ? tag : `v${tag}`;
++  }
++  return null;
++}
++
++async function latestRelease(repo, force) {
++  const age = Date.now() - releaseCache.at;
++  const ttl = releaseCache.error ? RELEASE_ERROR_CACHE_MS : RELEASE_CACHE_MS;
++  if (!force && releaseCache.key === repo && age < ttl) return releaseCache;
++
++  const entry = { key: repo, at: Date.now(), value: null, error: null };
++  try {
++    const response = await fetch(`${RELEASE_API}/repos/${repo}/releases/latest`, {
++      headers: {
++        Accept: 'application/vnd.github+json',
++        'User-Agent': 'ncc-server',
++      },
++      signal: AbortSignal.timeout(RELEASE_TIMEOUT_MS),
++    });
++    if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
++    const data = await response.json();
++    const tag = typeof data?.tag_name === 'string' ? data.tag_name : null;
++    if (!tag || !SEMVER_RE.test(tag)) throw new Error('The latest GitHub release is not a version tag');
++    entry.value = {
++      tag,
++      version: versionFromTag(tag),
++      url: typeof data.html_url === 'string' ? data.html_url : null,
++      publishedAt: typeof data.published_at === 'string' ? data.published_at : null,
++    };
++  } catch (error) {
++    entry.error = error?.name === 'TimeoutError'
++      ? 'The GitHub release check timed out'
++      : (error instanceof Error ? error.message : 'The GitHub release check failed');
++  }
++  releaseCache = entry;
++  return entry;
++}
++
++function tokenHash(token) {
++  return createHash('sha256').update(token).digest('hex');
++}
++
++/** Mint a token for one job, replacing any previous upgrade token. */
++function issueToken(jobId) {
++  const token = randomBytes(24).toString('base64url');
++  setConfig(TOKEN_KEY, {
++    hash: tokenHash(token),
++    jobId,
++    expiresAt: Date.now() + TOKEN_TTL_MS,
++  });
++  return token;
++}
++
++/** Validate a bearer token and slide its expiry. */
++function verifyToken(token) {
++  if (typeof token !== 'string' || !token) return null;
++  const entry = getConfig(TOKEN_KEY);
++  if (!entry || typeof entry !== 'object' || typeof entry.hash !== 'string') return null;
++  if (!Number.isFinite(entry.expiresAt) || entry.expiresAt <= Date.now()) return null;
++  const provided = Buffer.from(tokenHash(token));
++  const expected = Buffer.from(entry.hash);
++  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return null;
++  setConfig(TOKEN_KEY, { ...entry, expiresAt: Date.now() + TOKEN_TTL_MS });
++  return entry;
++}
++
++function bearerToken(request) {
++  const header = request.headers.authorization;
++  if (typeof header !== 'string' || !header.startsWith('Bearer ')) return '';
++  return header.slice('Bearer '.length).trim();
++}
++
++function unavailable(error) {
++  return {
++    current: null,
++    latest: null,
++    upgradeAvailable: null,
++    reason: error,
++    helper: { available: false, installed: false, installedAt: null, error },
++    job: null,
++    progressToken: null,
++    checkedAt: Date.now(),
++    error,
++  };
++}
++
++export default async function panelUpgradeRoutes(server) {
++  // Version check plus the current upgrade state. This is the only endpoint
++  // that needs NIP-98 for reading; the progress token is minted here when a
++  // run is already in progress so a reloaded panel can resume polling.
++  server.get('/ncc-api/upgrade', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    const refresh = request.query?.refresh === '1' || request.query?.refresh === 'true';
++    try {
++      const [version, status] = await Promise.all([
++        agentRequest('/v1/version', { timeoutMs: 8_000 }),
++        agentRequest('/v1/upgrade/status', { timeoutMs: 8_000 }),
++      ]);
++
++      const release = version?.release ?? null;
++      const image = version?.image ?? null;
++      const helper = status?.helper ?? version?.helper ?? {
++        available: false,
++        installed: false,
++        installedAt: null,
++        error: 'The host upgrade helper is not available',
++      };
++      const job = status?.job ?? null;
++      const origin = parseOrigin(release?.origin);
++      const repo = origin ? `${origin.owner}/${origin.repo}` : DEFAULT_REPO;
++      const latest = await latestRelease(repo, refresh);
++      const current = currentTag(release, image);
++
++      let upgradeAvailable = null;
++      let reason = null;
++      if (!current) {
++        reason = release
++          ? 'The host checkout is not on a release tag'
++          : 'The host release file is missing and the running image tag is not a version';
++      } else if (!latest.value) {
++        reason = latest.error;
++      } else {
++        const comparison = compareVersions(current, latest.value.tag);
++        if (comparison === null) reason = 'The release versions could not be compared';
++        else upgradeAvailable = comparison < 0;
++      }
++
++      return {
++        current: current
++          ? {
++            version: versionFromTag(current),
++            tag: current,
++            commit: typeof release?.commit === 'string' ? release.commit : null,
++            source: release ? 'host' : 'image',
++          }
++          : null,
++        latest: latest.value,
++        upgradeAvailable,
++        reason,
++        helper,
++        job,
++        // A live job needs a token for its status polls. A reloaded panel has
++        // no token in memory, so mint a fresh one for the same job here.
++        progressToken: job?.state === 'running' && typeof job.jobId === 'string'
++          ? issueToken(job.jobId)
++          : null,
++        checkedAt: Date.now(),
++        error: latest.error,
++      };
++    } catch (error) {
++      return unavailable(error instanceof Error ? error.message : 'The upgrade status is unavailable');
++    }
++  });
++
++  // Start one full upgrade. The target is only a release tag; the host runner
++  // re-validates it against the configured origin. NIP-98 proves the caller
++  // is an admin for this node.
++  server.post('/ncc-api/upgrade', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const target = normalizeTarget(request.body?.target);
++    if (!target) {
++      return reply.code(400).send({ error: 'target must be a release tag such as v0.2.13' });
++    }
++
++    const jobId = randomBytes(16).toString('hex');
++    try {
++      const payload = await agentRequest('/v1/upgrade', {
++        method: 'POST',
++        body: { jobId, target, requestedBy: caller.pubkey },
++        timeoutMs: 20_000,
++      });
++      const progressToken = issueToken(jobId);
++
++      addLog('info', `Server upgrade to ${target} started from the NCC admin panel`, {
++        changedBy: caller.pubkey,
++      });
++
++      return {
++        success: true,
++        accepted: payload?.accepted === true,
++        target,
++        jobId,
++        progressToken,
++      };
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The server upgrade could not start';
++      addLog('error', `Server upgrade to ${target} failed to start from the NCC admin panel`, {
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      const status = /already (?:in progress|starting)/i.test(message) ? 409 : 503;
++      return reply.code(status).send({ error: message });
++    }
++  });
++
++  // Progress for a running upgrade. The token is the authorization: it was
++  // handed to an admin over the NIP-98-authorized start (or read) call,
++  // expires, and reveals only upgrade states.
++  server.get('/ncc-api/upgrade/status', async (request, reply) => {
++    const entry = verifyToken(bearerToken(request));
++    if (!entry) {
++      return reply.code(401).send({ error: 'This upgrade progress token is invalid or expired' });
++    }
++
++    try {
++      const payload = await agentRequest('/v1/upgrade/status', { timeoutMs: 10_000 });
++      const job = payload?.job ?? null;
++      return {
++        helper: payload?.helper ?? null,
++        // Before the runner writes its first status, the file still belongs
++        // to the previous job. Waiting is better than showing the old run.
++        job: job && job.jobId === entry.jobId ? job : null,
++      };
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The upgrade status is unavailable';
++      return reply.code(503).send({ error: message });
++    }
++  });
++}
+diff --git a/src/web.js b/src/web.js
+index 40c893c..23515cb 100644
+--- a/src/web.js
++++ b/src/web.js
+@@ -15,6 +15,7 @@ import panelAdminRoutes from './routes/panel-admin.js';
+ import panelSettingsRoutes from './routes/panel-settings.js';
+ import panelServicesRoutes from './routes/panel-services.js';
+ import panelCatalogueRoutes from './routes/panel-catalogue.js';
++import panelUpgradeRoutes from './routes/panel-upgrade.js';
+ import serviceRoutes from './routes/services.js';
+ import configRoutes from './routes/config.js';
+ import dbRoutes from './routes/db.js';
+@@ -89,6 +90,7 @@ export async function startWebServer(initialPort = 3000, onInitialized, options
+   await server.register(panelSettingsRoutes);
+   await server.register(panelServicesRoutes);
+   await server.register(panelCatalogueRoutes);
++  await server.register(panelUpgradeRoutes);
+   await server.register(serviceRoutes);
+   await server.register(configRoutes);
+   await server.register(dbRoutes);
+diff --git a/test/panel-upgrade.test.js b/test/panel-upgrade.test.js
+new file mode 100644
+index 0000000..d52f562
+--- /dev/null
++++ b/test/panel-upgrade.test.js
+@@ -0,0 +1,54 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++
++import {
++  compareVersions,
++  currentTag,
++  normalizeTarget,
++  parseOrigin,
++  versionFromTag,
++} from '../src/routes/panel-upgrade.js';
++
++test('Upgrade: parses GitHub remotes and ignores other forges', () => {
++  assert.deepEqual(
++    parseOrigin('https://github.com/imattau/ncc-server.git'),
++    { owner: 'imattau', repo: 'ncc-server' },
++  );
++  assert.deepEqual(
++    parseOrigin('git@github.com:imattau/ncc-server.git'),
++    { owner: 'imattau', repo: 'ncc-server' },
++  );
++  assert.deepEqual(
++    parseOrigin('ssh://git@github.com/imattau/ncc-server'),
++    { owner: 'imattau', repo: 'ncc-server' },
++  );
++  assert.equal(parseOrigin('https://gitlab.com/imattau/ncc-server'), null);
++  assert.equal(parseOrigin(null), null);
++});
++
++test('Upgrade: normalises release targets', () => {
++  assert.equal(normalizeTarget('0.2.13'), 'v0.2.13');
++  assert.equal(normalizeTarget('v0.2.13'), 'v0.2.13');
++  assert.equal(normalizeTarget('main'), null);
++  assert.equal(normalizeTarget('v0.2'), null);
++  assert.equal(normalizeTarget('v0.2.13; rm -rf /'), null);
++});
++
++test('Upgrade: compares release versions', () => {
++  assert.equal(compareVersions('v0.2.12', 'v0.2.13'), -1);
++  assert.equal(compareVersions('0.2.13', 'v0.2.12'), 1);
++  assert.equal(compareVersions('v0.2.13', '0.2.13'), 0);
++  assert.equal(compareVersions('v0.10.0', 'v0.9.9'), 1);
++  assert.equal(compareVersions('latest', 'v0.2.13'), null);
++  assert.equal(versionFromTag('v0.2.13'), '0.2.13');
++  assert.equal(versionFromTag('main'), null);
++});
++
++test('Upgrade: prefers the host release file and falls back to the image tag', () => {
++  assert.equal(currentTag({ tag: 'v0.2.12' }, { tag: '0.2.11' }), 'v0.2.12');
++  assert.equal(currentTag({ version: '0.2.12' }, null), 'v0.2.12');
++  assert.equal(currentTag(null, { tag: '0.2.12' }), 'v0.2.12');
++  assert.equal(currentTag(null, { tag: 'latest' }), null);
++  assert.equal(currentTag(null, { tag: 'sidecar-2026-11-16' }), null);
++  assert.equal(currentTag(null, null), null);
++});

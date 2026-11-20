@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for NCC Server upgrade requests
+
+[Path]
+PathExists=/var/lib/ncc-server-upgrade/request.json
+Unit=ncc-server-upgrade.service
+
+[Install]
+WantedBy=paths.target

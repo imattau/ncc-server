@@ -110,6 +110,13 @@ images on `v*` tags, or one selected component from its manual dispatch form.
 Make each GHCR package public after its first publish so VPS installs can pull
 without credentials.
 
+The admin panel's Overview page checks the host checkout against the latest
+GitHub release. When it is behind, **Upgrade to vX.Y.Z** runs the same full
+installer update as `make bundle-upgrade REF=vX.Y.Z`. The installer adds a
+fixed root-side systemd helper for this; an install from before v0.2.13 needs
+one manual `git checkout v0.2.13` and `make bundle-upgrade` first. See `docs/deployment-compose.md` for
+the security model, pinning and recovery notes.
+
 ### Unattended / scripted installs
 
 `install-compose-host.sh` only prompts when a value isn't already set. For a

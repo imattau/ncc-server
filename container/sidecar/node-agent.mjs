@@ -22,7 +22,17 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
+import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
+
+import {
+  buildUpgradeRequest,
+  helperFromMarker,
+  imageTagFrom,
+  sanitizeRelease,
+  sanitizeUpgradeStatus,
+  upgradeIsRunning,
+} from './upgrade-state.mjs';
 
 const DOCKER_SOCKET = process.env.NCC_DOCKER_SOCKET || '/var/run/docker.sock';
 // Path of the same socket on the host, used as the bind source when the
@@ -46,6 +56,14 @@ const CPU_SAMPLE_MS = 200;
 const PULL_TIMEOUT_MS = 15 * 60_000;
 const HELPER_TIMEOUT_MS = 5 * 60_000;
 const SERVICE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const UPGRADE_STATE_DIR = process.env.NCC_UPGRADE_STATE_DIR || '/var/lib/ncc-server-upgrade';
+const RELEASE_DIR = process.env.NCC_RELEASE_DIR || '/var/lib/ncc-server-release';
+const UPGRADE_REQUEST = path.join(UPGRADE_STATE_DIR, 'request.json');
+const UPGRADE_STATUS = path.join(UPGRADE_STATE_DIR, 'status.json');
+const HELPER_MARKER = path.join(UPGRADE_STATE_DIR, 'helper.json');
+const RELEASE_FILE = path.join(RELEASE_DIR, 'release.json');
+const UPGRADE_REQUEST_MAX_BYTES = 8 * 1024;
+const UPGRADE_STATUS_MAX_BYTES = 128 * 1024;
 
 /**
  * The images this bundle ships. A caller cannot name an arbitrary image or
@@ -453,6 +471,7 @@ async function projectContainers() {
       image: typeof entry.Image === 'string' ? entry.Image : null,
       imageId: typeof entry.ImageID === 'string' ? entry.ImageID : null,
       imageCreatedAt: null,
+      labels: {},
     });
   }
 
@@ -468,6 +487,9 @@ async function projectContainers() {
       // resolved image ID, which is what an update compares against.
       if (typeof detail?.Config?.Image === 'string') container.image = detail.Config.Image;
       if (typeof detail?.Image === 'string') container.imageId = detail.Image;
+      if (detail?.Config?.Labels && typeof detail.Config.Labels === 'object') {
+        container.labels = detail.Config.Labels;
+      }
       container.imageCreatedAt = await imageCreatedAt(container.imageId);
     } catch {
       // The list view is enough when inspect fails; do not fail the request.
@@ -741,6 +763,10 @@ async function handleRestart(request, response) {
     sendJson(response, 400, { error: 'services must be a non-empty array of Compose service names' });
     return;
   }
+  if (upgradeStarting || await upgradeRunning()) {
+    sendJson(response, 409, { error: 'A server upgrade is already in progress' });
+    return;
+  }
 
   const containers = await projectContainers();
   const { selected, missing } = selectContainers(containers, [...new Set(services)]);
@@ -802,6 +828,9 @@ let updateState = {
 // The state above is set only after the container list is read. This guard
 // closes the await window so two clicks cannot start two pulls.
 let updateLock = false;
+// Set before the first await in an upgrade request. The status file is the
+// durable guard; this closes the in-process double-click window too.
+let upgradeStarting = false;
 
 function updateSnapshot() {
   return {
@@ -1109,8 +1138,12 @@ async function handleUpdate(request, response) {
     return;
   }
 
-  if (updateState.inProgress || updateLock) {
-    sendJson(response, 409, { error: 'An image update is already in progress' });
+  if (updateState.inProgress || updateLock || upgradeStarting || await upgradeRunning()) {
+    sendJson(response, 409, {
+      error: updateState.inProgress || updateLock
+        ? 'An image update is already in progress'
+        : 'A server upgrade is already in progress',
+    });
     return;
   }
   updateLock = true;
@@ -1192,6 +1225,163 @@ function handleUpdateStatus(response) {
   sendJson(response, 200, updateSnapshot());
 }
 
+// --- server upgrade ---------------------------------------------------------
+//
+// The panel's Server Upgrade button triggers a root-side runner through a
+// request file. The agent never executes anything itself and never accepts a
+// command, path or arbitrary ref: it validates a release tag, writes a small
+// JSON request, and reads the status file the runner maintains. That keeps
+// this companion narrow even though it has the Docker socket.
+
+async function readJsonFile(file, maxBytes) {
+  try {
+    const stat = await fs.promises.stat(file);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    return JSON.parse(await fs.promises.readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function readUpgradeStatus() {
+  return sanitizeUpgradeStatus(await readJsonFile(UPGRADE_STATUS, UPGRADE_STATUS_MAX_BYTES));
+}
+
+async function readHelperState() {
+  const marker = await readJsonFile(HELPER_MARKER, 8 * 1024);
+  let writable = false;
+  try {
+    await fs.promises.access(UPGRADE_STATE_DIR, fs.constants.W_OK);
+    writable = true;
+  } catch {
+    // The mount is missing or read-only; the panel disables the action.
+  }
+  return helperFromMarker(marker, writable);
+}
+
+async function upgradeRequestPending() {
+  try {
+    await fs.promises.access(UPGRADE_REQUEST);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function upgradeRunning() {
+  if (await upgradeRequestPending()) return true;
+  return upgradeIsRunning(await readUpgradeStatus());
+}
+
+async function writeUpgradeRequest(payload) {
+  const temporary = path.join(
+    UPGRADE_STATE_DIR,
+    `.request.${process.pid}.${Date.now()}.tmp`,
+  );
+  await fs.promises.writeFile(temporary, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
+  try {
+    await fs.promises.rename(temporary, UPGRADE_REQUEST);
+  } catch (error) {
+    await fs.promises.unlink(temporary).catch(() => {});
+    throw error;
+  }
+}
+
+async function handleVersion(response) {
+  const [releaseValue, helper] = await Promise.all([
+    readJsonFile(RELEASE_FILE, 64 * 1024),
+    readHelperState(),
+  ]);
+  const release = sanitizeRelease(releaseValue);
+
+  // The release file is authoritative and avoids a Docker round trip on the
+  // normal path. Only an older install without one (or an untagged checkout)
+  // needs the running sidecar image tag as a fallback.
+  let image = null;
+  if (!release?.tag && !release?.version) {
+    const containers = await projectContainers();
+    const sidecar = containers.find((container) => container.service === 'sidecar') ?? null;
+    if (sidecar) {
+      image = {
+        tag: imageTagFrom(sidecar.image),
+        image: sidecar.image,
+        imageId: sidecar.imageId,
+        labels: sidecar.labels && typeof sidecar.labels === 'object' ? sidecar.labels : {},
+      };
+    }
+  }
+
+  sendJson(response, 200, {
+    project: PROJECT,
+    release,
+    helper,
+    image,
+  });
+}
+
+async function handleUpgrade(request, response) {
+  let body;
+  try {
+    body = await readBody(request);
+  } catch (error) {
+    sendJson(response, 400, { error: error.message });
+    return;
+  }
+
+  const job = buildUpgradeRequest(body);
+  if (!job) {
+    sendJson(response, 400, {
+      error: 'target must be a release tag such as v0.2.13 and jobId must be 4-128 URL-safe characters',
+    });
+    return;
+  }
+
+  if (upgradeStarting) {
+    sendJson(response, 409, { error: 'A server upgrade is already starting' });
+    return;
+  }
+  upgradeStarting = true;
+  try {
+    const helper = await readHelperState();
+    if (!helper.available) {
+      sendJson(response, 503, { error: helper.error || 'The host upgrade helper is not available' });
+      return;
+    }
+    if (updateState.inProgress || updateLock) {
+      sendJson(response, 409, { error: 'An image update is already in progress' });
+      return;
+    }
+    if (await upgradeRunning()) {
+      sendJson(response, 409, { error: 'A server upgrade is already in progress' });
+      return;
+    }
+
+    try {
+      await writeUpgradeRequest({
+        schema: 1,
+        jobId: job.jobId,
+        target: job.target,
+        requestedBy: job.requestedBy,
+        requestedAt: Date.now(),
+      });
+    } catch (error) {
+      sendJson(response, 503, {
+        error: error instanceof Error ? error.message : 'The upgrade request could not be written',
+      });
+      return;
+    }
+
+    sendJson(response, 202, { accepted: true, ...job });
+  } finally {
+    upgradeStarting = false;
+  }
+}
+
+async function handleUpgradeStatus(response) {
+  const [helper, job] = await Promise.all([readHelperState(), readUpgradeStatus()]);
+  sendJson(response, 200, { project: PROJECT, helper, job });
+}
+
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
@@ -1233,6 +1423,18 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/v1/update/status') {
       handleUpdateStatus(response);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/version') {
+      await handleVersion(response);
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/upgrade') {
+      await handleUpgrade(request, response);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/upgrade/status') {
+      await handleUpgradeStatus(response);
       return;
     }
     sendJson(response, 404, { error: 'Not found' });

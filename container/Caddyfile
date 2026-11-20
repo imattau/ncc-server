@@ -270,12 +270,14 @@
 	}
 }
 
-# The admin panel is published as an NCC service on its own pinned port. Its
-# page lives at /admin in the same SPA build served from CONTENT_ROOT. The
-# service root must be / because NCC Browser joins the endpoint path with the
-# request path, and it cannot be an HTTP redirect: NCC Browser fetches
-# endpoints with redirect: 'manual', which Electron reports as "Redirect was
-# cancelled". Return a tiny 200 document that navigates to /admin instead.
+# The admin panel is published as an NCC service on its own pinned port. The
+# panel assets are baked into this Caddy image and served from /admin, so a
+# Caddy image update also updates the panel even when CONTENT_ROOT holds an
+# operator's own welcome page. The service root must be / because NCC Browser
+# joins the endpoint path with the request path, and it cannot be an HTTP
+# redirect: NCC Browser fetches endpoints with redirect: 'manual', which
+# Electron reports as "Redirect was cancelled". Return a tiny 200 document
+# that navigates to /admin instead.
 :{$ADMIN_PANEL_TLS_PORT} {
 	import ncc_security_headers
 	import ncc_body_small
@@ -283,8 +285,11 @@
 	import cors_response
 	import ncc_public_config
 	import ncc_admin_api
-	root * {$CONTENT_ROOT}
+	root * /srv/ncc-server/admin-panel
 	encode gzip
+	handle_path /admin-static/* {
+		file_server
+	}
 	handle / {
 		header Content-Type "text/html; charset=utf-8"
 		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/admin"><title>NCC Server Admin Panel</title></head><body><p><a href="/admin">Open the NCC Server Admin Panel</a></p></body></html>`
@@ -307,9 +312,12 @@ http://127.0.0.1:{$ADMIN_PANEL_PORT} {
 	bind 127.0.0.1
 	import ncc_public_config
 	import ncc_admin_api
+	root * /srv/ncc-server/admin-panel
+	encode gzip
+	handle_path /admin-static/* {
+		file_server
+	}
 	handle {
-		root * /srv/ncc-server/admin-panel
-		encode gzip
 		try_files {path} /index.html
 		file_server
 	}
@@ -381,8 +389,11 @@ http://:{$TOR_ADMIN_PORT} {
 	import cors_response
 	import ncc_onion_config
 	import ncc_admin_api
-	root * {$CONTENT_ROOT}
+	root * /srv/ncc-server/admin-panel
 	encode gzip
+	handle_path /admin-static/* {
+		file_server
+	}
 	handle / {
 		header Content-Type "text/html; charset=utf-8"
 		respond `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/admin"><title>NCC Server Admin Panel</title></head><body><p><a href="/admin">Open the NCC Server Admin Panel</a></p></body></html>`

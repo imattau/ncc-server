@@ -69,6 +69,14 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/images/progress` — update states for the `Authorization: Bearer <progress-token>` returned by the start call (no NIP-98; the token is the authorization)
 - `POST /ncc-api/images/<service>/update` — pull the image tag and recreate the
   container when the digest changed (single-service compatibility route)
+- `GET /ncc-api/upgrade` — installed release, latest GitHub release,
+  availability, helper state and the current or last upgrade job;
+  `?refresh=1` bypasses the release check cache
+- `POST /ncc-api/upgrade` with `{"target": "v0.2.13"}` — check out and install
+  a release and return a short-lived progress token
+- `GET /ncc-api/upgrade/status` — upgrade state for the
+  `Authorization: Bearer <progress-token>` returned by the start call (no
+  NIP-98; the token is the authorization)
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
@@ -308,6 +316,85 @@ A pull can take a few minutes. The page does not poll: every read needs a new
 NIP-98 event, which would make a NIP-46 signer prompt repeatedly. Press
 **Check images** after a short wait to see the new digest and the result.
 
+### Server upgrades
+
+**Overview** shows **Upgrade to vX.Y.Z** next to **Add a service** only when
+the host checkout is behind the latest published release. That is a different
+operation from an image update: it checks out the release tag on the host,
+pins the bundle's own images to it, and runs the same installer update a
+manual `make install-compose-host` would run.
+
+The availability check uses two facts:
+
+- `/var/lib/ncc-server-release/release.json` records the release tag, commit
+  and GitHub origin of the host checkout. The installer writes it on a fresh
+  install and the upgrade runner rewrites it afterwards;
+- the sidecar asks GitHub for the latest non-prerelease release. The result is
+  cached for fifteen minutes; `?refresh=1` bypasses the cache.
+
+When the current tag cannot be determined — an untagged checkout whose
+image tag is also `latest`, GitHub unreachable or rate-limited, or a fork the
+check cannot resolve — `upgradeAvailable` is `null` and no button is shown. The panel never
+guesses an upgrade.
+
+The upgrade itself runs outside the containers:
+
+- the panel starts it with a NIP-98-authorized `POST /ncc-api/upgrade` naming
+  a release tag;
+- the sidecar forwards it to the node-agent, which writes a small request
+  into `/var/lib/ncc-server-upgrade/request.json`;
+- a systemd path unit runs `/usr/local/sbin/ncc-server-upgrade`, a fixed
+  launcher that executes `scripts/upgrade-compose-host.py` from the checkout.
+  The caller never names a command, path or arbitrary ref.
+
+The runner:
+
+1. validates the tag and refuses if the checkout has local changes to tracked
+   files (a host-built `public/` is ignored);
+2. fetches and checks out the tag;
+3. pins upstream `ghcr.io/imattau/ncc-server-*` image values in `.env` to the
+   release, backing up `.env` first. Custom registries, digest pins and custom
+   image repositories are reported as skipped and left alone;
+4. runs `scripts/install-compose-host.sh` (pull, recreate, provisioning,
+   health waits and public-IP reconcile);
+5. reconciles per-service Tor endpoints (a failure is a warning, not a failed
+   upgrade);
+6. writes the release file and a status file.
+
+**The first install that has no helper must be upgraded on the host once.**
+After checking out the release, run:
+
+~~~sh
+sudo git fetch --tags origin
+sudo git checkout v0.2.13
+sudo make bundle-upgrade-dry-run REF=v0.2.13
+sudo make bundle-upgrade REF=v0.2.13
+~~~
+
+That is the same runner and installs the helper. `make bundle-upgrade-dry-run
+REF=v0.2.13` validates the tag, checkout cleanliness and image pins without
+changing the host. Every later release can be applied from the button.
+
+The progress panel has six steps, the current one, elapsed time and the last
+lines from the host runner. Progress is read with a short-lived bearer token
+stored on the node, so a NIP-46 signer is not prompted every couple of
+seconds, and it survives the sidecar restart caused by the upgrade. The panel
+may briefly disconnect while Caddy and the sidecar are recreated; polling
+keeps retrying.
+
+A failed run records the step and error in
+`/var/lib/ncc-server-upgrade/status.json` and the full installer output in
+`upgrade.log`. There is no automatic rollback: a broken release can leave the
+panel down, so keep SSH access and use
+`git checkout <previous tag>`, restore the `.env` backup from
+`/var/lib/ncc-server-upgrade/env-backups/` and run
+`make install-compose-host`.
+
+The admin panel assets are baked into the Caddy image and served from
+`/admin-static/`; `CONTENT_ROOT` remains the welcome page. A Caddy image
+update therefore also updates the panel UI, even for an operator who replaced
+the bundled welcome page.
+
 ### App catalogue
 
 The **Apps** page lists service packages published with
@@ -420,19 +507,20 @@ NIP-46 signer that can reach its relays over Tor. See
 [deployment](deployment-compose.md) for the one-time
 `make bundle-enable-tor` upgrade step.
 
-The service serves the tracked `public/` build, so deploy a build that
-includes the `/admin` route (`make build-test-app` and
-`make bundle-deploy-test-app`). Older content builds predate the panel and
-render the not-found page at `/admin`.
+The service serves the admin panel from `/srv/ncc-server/admin-panel`, baked
+into the NCC Caddy image and referenced with the `/admin-static/` asset
+prefix. Deploy the welcome page separately (`make build-test-app` and
+`make bundle-deploy-test-app`); it does not need to include the panel build.
+A Caddy image update updates the panel, so the public admin listener works
+even when `CONTENT_ROOT` holds an operator's own site.
 
 ## Loopback listener
 
 The NCC Caddy image also serves the built panel on `127.0.0.1:8081`; it does
 not run another web server. Set `CADDY_IMAGE` to a build of
 `ncc-server-caddy` to include those assets. The Compose installer sets
-`ADMIN_PANEL_PORT=8081` by default. The stack keeps using upstream Caddy when
-`CADDY_IMAGE` is unset, and the public `admin` service still works from the
-deployed `CONTENT_ROOT` content in that case.
+`ADMIN_PANEL_PORT=8081` by default. Keep `CADDY_IMAGE` on the project image;
+a plain upstream Caddy image does not contain `/admin-static/`.
 
 Create an SSH tunnel from the workstation:
 
@@ -454,12 +542,13 @@ podman build -f container/caddy/Containerfile -t ncc-server-caddy:dev .
 The GitHub Actions image workflow publishes `ghcr.io/imattau/ncc-server-caddy`
 for `linux/amd64` and `linux/arm64` on a release or manual image build. Once
 published, set `CADDY_IMAGE=ghcr.io/imattau/ncc-server-caddy:<tag>` in `.env`
-to select it. The default remains upstream Caddy when `CADDY_IMAGE` is unset.
+to pin it. Compose falls back to the project's `:latest` Caddy image; a plain
+upstream Caddy image has no `/admin-static/` panel.
 
-The image build compiles the panel into the Caddy image. The public welcome
-page and the `/admin` route are part of the tracked `public/` build, which is
-deployed separately with `make build-test-app` and
-`make bundle-deploy-test-app`.
+The image build compiles the panel into the Caddy image with the
+`/admin-static/` asset prefix. The welcome page is still the tracked `public/`
+build and is deployed separately with `make build-test-app` and
+`make bundle-deploy-test-app`; it no longer needs to contain the panel.
 
 The panel requests `/ncc-config.json` and accepts either the bech32 `npub` or
 the hex `pubkey`. The bundle's Caddy listeners answer that path from

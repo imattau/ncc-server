@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package test-node-agent
 
 install:
 	sudo ./scripts/install.sh
@@ -23,6 +23,17 @@ bundle-reconcile-public-ip:
 bundle-add-admin:
 	@test -n "$(NPUB)" || (echo 'Usage: make bundle-add-admin NPUB=npub1...' >&2; exit 2)
 	sudo python3 ./scripts/add-compose-admin.py "$(NPUB)"
+
+# Run the same full upgrade the admin panel's Server Upgrade button runs.
+# REF is a release tag, for example v0.2.13. This is also the one-time path
+# for an install that predates the upgrade helper.
+bundle-upgrade:
+	@test -n "$(REF)" || (echo 'Usage: sudo make bundle-upgrade REF=v0.2.13' >&2; exit 2)
+	sudo python3 ./scripts/upgrade-compose-host.py --manual --target "$(REF)"
+
+bundle-upgrade-dry-run:
+	@test -n "$(REF)" || (echo 'Usage: sudo make bundle-upgrade-dry-run REF=v0.2.13' >&2; exit 2)
+	sudo python3 ./scripts/upgrade-compose-host.py --manual --target "$(REF)" --dry-run
 
 uninstall:
 	sudo ./scripts/uninstall.sh
@@ -136,4 +147,7 @@ service-install:
 service-package:
 	@test -n "$(SERVICE_DIR)" -a -n "$(VERSION)" -a -n "$(PUBLISHER)" -a -n "$(OUTPUT)" || (echo 'Usage: make service-package SERVICE_DIR=dir VERSION=1.0.0 PUBLISHER=npub... OUTPUT=name.npk' >&2; exit 2)
 	./scripts/npack-service.py build --service-dir "$(SERVICE_DIR)" --version "$(VERSION)" --publisher "$(PUBLISHER)" --output "$(OUTPUT)" $(if $(IMAGE),--image "$(IMAGE)") $(if $(ARCH),--arch "$(ARCH)") $(if $(REPO),--repo "$(REPO)") $(if $(COMMIT),--commit "$(COMMIT)")
+
+test-node-agent:
+	node --test container/sidecar/test/*.test.mjs
 

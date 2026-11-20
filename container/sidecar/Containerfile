@@ -17,6 +17,7 @@ COPY patches/ncc-sidecar-npack.patch /tmp/ncc-sidecar-npack.patch
 COPY patches/ncc-sidecar-panel-metrics.patch /tmp/ncc-sidecar-panel-metrics.patch
 COPY patches/ncc-sidecar-npanel-sync.patch /tmp/ncc-sidecar-npanel-sync.patch
 COPY patches/ncc-sidecar-panel-images.patch /tmp/ncc-sidecar-panel-images.patch
+COPY patches/ncc-sidecar-panel-upgrade.patch /tmp/ncc-sidecar-panel-upgrade.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -50,6 +51,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-images.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-images.patch; \
      fi \
+  && if [ ! -f src/routes/panel-upgrade.js ]; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-panel-upgrade.patch \
+       && patch -p1 < /tmp/ncc-sidecar-panel-upgrade.patch; \
+     fi \
   && npm ci \
   && npm --prefix ui ci \
   && npm --prefix ui run build \
@@ -77,6 +82,8 @@ COPY --from=build /src/ncc-06/ncc-sidecar/ /app/
 # It uses the same image with a different command and never runs in the
 # sidecar process itself.
 COPY container/sidecar/node-agent.mjs /app/node-agent.mjs
+# Pure validation and status shaping for the node-agent's upgrade control.
+COPY container/sidecar/upgrade-state.mjs /app/upgrade-state.mjs
 # One-shot recreate helper used by the node-agent's image updates.
 COPY container/sidecar/recreate.mjs /app/recreate.mjs
 # ncc-06-js imports nostr-tools without declaring it in its own package manifest.

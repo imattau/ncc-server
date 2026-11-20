@@ -223,3 +223,28 @@
   .section-heading>.heading-actions{width:100%;flex-wrap:wrap}
   .heading-actions .update-all{flex:1;min-width:150px}
 }
+
+/* Server upgrade action and its step progress. The host installer runs as a
+   fixed root-side unit; the panel only watches the status file through the
+   node-agent, so the bar is honestly step-based rather than a fake percent. */
+.upgrade-button.confirming{border-color:var(--warn);color:var(--warn)}
+.upgrade-button{white-space:nowrap}
+.upgrade-progress{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:11px 12px;margin-bottom:14px}
+.upgrade-progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--ink-2);font-size:11px}
+.upgrade-progress-head strong{font-size:11px;font-weight:650}
+.upgrade-progress-head span{font-variant-numeric:tabular-nums;color:var(--muted-2);font-size:10px}
+.upgrade-progress-track{height:6px;background:var(--surface-3);border-radius:6px;margin:9px 0 7px;overflow:hidden}
+.upgrade-progress-track i{display:block;height:100%;border-radius:6px;background:var(--progress);transition:width .35s ease}
+.upgrade-progress.active .upgrade-progress-track i{background-image:linear-gradient(90deg,var(--progress),var(--progress-soft),var(--progress));background-size:200% 100%;animation:upgrade-progress-stripes 1.6s linear infinite}
+.upgrade-progress.failed .upgrade-progress-track i{background:var(--bad)}
+.upgrade-progress-detail{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted-2);font-size:10px;line-height:1.5}
+.upgrade-progress-detail .text-button{margin-left:auto}
+.upgrade-progress-warning{color:var(--warn);font-weight:650}
+.upgrade-progress-note{color:var(--muted-2)}
+.upgrade-progress-log{margin-top:8px;color:var(--muted-2);font-size:10px}
+.upgrade-progress-log summary{cursor:pointer}
+.upgrade-progress-log pre{margin:7px 0 0;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--surface-3);color:var(--ink-2);font-size:10px;line-height:1.5;overflow:auto;max-height:150px;white-space:pre-wrap}
+@keyframes upgrade-progress-stripes{from{background-position:100% 0}to{background-position:-100% 0}}
+@media(max-width:760px){
+  .heading-actions .upgrade-button{flex:1;min-width:150px}
+}

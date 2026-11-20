@@ -248,6 +248,31 @@ EOF
   chmod 0600 "$DITTO_ENV_FILE"
 fi
 
+# Server Upgrade button. The node-agent can only write a request file into
+# this root-owned directory; a systemd path unit runs the fixed upgrade runner
+# from this checkout. The caller never names a command or a path.
+UPGRADE_STATE_DIR="${NCC_UPGRADE_STATE_DIR:-/var/lib/ncc-server-upgrade}"
+RELEASE_DIR="${NCC_RELEASE_DIR:-/var/lib/ncc-server-release}"
+install -d -o root -g root -m 0750 "$UPGRADE_STATE_DIR"
+install -d -o root -g root -m 0755 "$RELEASE_DIR"
+install -m 0755 "$PROJECT_DIR/scripts/ncc-server-upgrade" /usr/local/sbin/ncc-server-upgrade
+install -m 0644 "$PROJECT_DIR/systemd/ncc-server-upgrade.service" /etc/systemd/system/ncc-server-upgrade.service
+install -m 0644 "$PROJECT_DIR/systemd/ncc-server-upgrade.path" /etc/systemd/system/ncc-server-upgrade.path
+# The image always mounts the state at the default container path; these are
+# the host-side paths the unit reads and writes.
+sed -i "s|/var/lib/ncc-server-upgrade|$UPGRADE_STATE_DIR|g; s|/var/lib/ncc-server-release|$RELEASE_DIR|g" \
+  /etc/systemd/system/ncc-server-upgrade.service /etc/systemd/system/ncc-server-upgrade.path
+printf '%s\n' "$PROJECT_DIR" > /etc/ncc-server/compose-project
+chmod 0644 /etc/ncc-server/compose-project
+# Record the checkout's release for the panel's availability check. A failure
+# is not fatal: the sidecar falls back to the running image tag. The upgrade
+# runner defers this until its install step succeeded, so a failed pull cannot
+# make the panel claim the new release is already running.
+if [[ -z "${NCC_SKIP_RELEASE_FILE:-}" ]]; then
+  python3 "$PROJECT_DIR/scripts/publish-server-release.py" \
+    --project-dir "$PROJECT_DIR" --output "$RELEASE_DIR/release.json" --quiet || true
+fi
+
 sysctl -w vm.max_map_count=262144 >/dev/null
 install -d -o root -g root -m 0755 /etc/sysctl.d
 echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-ncc-server-opensearch.conf
@@ -292,6 +317,14 @@ EOF
 chmod 0644 /etc/systemd/system/ncc-public-ip-reconcile.service /etc/systemd/system/ncc-public-ip-reconcile.timer
 systemctl daemon-reload
 systemctl enable --now ncc-public-ip-reconcile.timer
+systemctl enable --now ncc-server-upgrade.path
+# Only advertise the helper once its unit is enabled. A failed install leaves
+# the marker out, so the panel keeps the action disabled instead of writing
+# requests nothing will run.
+cat > "$UPGRADE_STATE_DIR/helper.json" <<EOF
+{"schema":1,"installed":true,"installedAt":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+EOF
+chmod 0644 "$UPGRADE_STATE_DIR/helper.json"
 # Start the identity-independent services. The bootstrap then generates or
 # reuses the root-only host identity, initializes the sidecar, provisions the
 # service records, and starts the full stack.

@@ -8,7 +8,7 @@ COPY test-app/index.html test-app/vite.config.ts test-app/tsconfig.json ./
 COPY test-app/public/ ./public/
 COPY test-app/src/ ./src/
 RUN ./node_modules/.bin/tsc --noEmit \
-    && ./node_modules/.bin/vite build --outDir /panel
+    && ./node_modules/.bin/vite build --outDir /panel --base=/admin-static/
 
 FROM caddy:2.11.9-alpine
 COPY --from=panel-build /panel/ /srv/ncc-server/admin-panel/

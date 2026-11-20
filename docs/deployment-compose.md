@@ -409,6 +409,60 @@ same release as the panel; an older agent answers the registry check with
 Caddy, the sidecar or the node-agent briefly interrupts the panel, so reload
 after the container is back.
 
+### Upgrading the whole server from the panel
+
+The Overview page shows **Upgrade to vX.Y.Z** when
+`/var/lib/ncc-server-release/release.json` names an older release than the
+latest non-prerelease GitHub release for the checkout's origin. The check is
+cached for fifteen minutes. An untagged checkout, a `latest` image with no
+release file, or an unreachable GitHub makes the answer unknown and hides the
+action; it is never guessed.
+
+The button does not run an arbitrary command. The sidecar submits a validated
+release tag to the node-agent, which writes
+`/var/lib/ncc-server-upgrade/request.json`; the
+`ncc-server-upgrade.path` systemd unit runs the fixed
+`/usr/local/sbin/ncc-server-upgrade` launcher as root. The runner checks out
+the tag, pins `ghcr.io/imattau/ncc-server-*` values in `.env`, runs
+`install-compose-host.sh`, reconciles Tor endpoints, and records the new
+release. `install-compose-host.sh` installs the launcher, the path/service
+units, the state directories and the release file, so a fresh install and an
+upgraded install behave the same.
+
+The `.env` pinning only touches this project's upstream image values. A custom
+registry, a digest pin or a different repository is left as-is and reported as
+skipped in the upgrade status. `.env` is backed up next to itself before the
+rewrite.
+
+An install that predates this feature has no unit or release file, so the first
+upgrade is manual after checking out the release:
+
+~~~sh
+sudo git fetch --tags origin
+sudo git checkout v0.2.13
+sudo make bundle-upgrade-dry-run REF=v0.2.13
+sudo make bundle-upgrade REF=v0.2.13
+~~~
+
+The dry run validates the tag, a clean checkout and the image pins without
+changing the host. The real run is the same runner the button uses and installs
+the helper. Every later release can be applied from the panel.
+
+The runner refuses to discard tracked local changes; a modified `public/` is
+ignored because the installer regenerates it. The status and the last lines of
+the installer output are in `/var/lib/ncc-server-upgrade/status.json` and
+`upgrade.log`, and `journalctl -u ncc-server-upgrade` has the full log. There is
+no automatic rollback. A release that breaks the panel can leave the UI down,
+so keep SSH access; to recover, check out the previous tag, restore the saved
+`.env` backup from `/var/lib/ncc-server-upgrade/env-backups/`, and run
+`sudo make install-compose-host`.
+
+Panel assets are baked into the Caddy image and served at `/admin-static/`.
+`CONTENT_ROOT` remains the welcome page, so a Caddy image update also updates
+the panel even when an operator replaced the bundled welcome page. The
+node-agent container mounts the upgrade state directory read-write and the
+release directory read-only; neither contains the operator identity.
+
 The App catalogue uses the `npack` container, which runs npackd read-only and
 answers the sidecar over `/run/npack/npackd.sock`. It has no Docker access and
 no published port. Set `NPACK_IMAGE` to a release that exists in your

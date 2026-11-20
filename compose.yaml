@@ -95,8 +95,15 @@ services:
       # Host path of the Docker socket, mounted into the one-shot recreate
       # helper. Compose mounts it at the same path, so the default is right.
       NCC_UPDATE_DOCKER_SOCKET: "${NCC_UPDATE_DOCKER_SOCKET:-/var/run/docker.sock}"
+      # Server Upgrade button state. The agent writes a request file here and
+      # reads the status the root-side runner writes. The release file is
+      # mounted read-only and describes the checkout the host is running.
+      NCC_UPGRADE_STATE_DIR: /var/lib/ncc-server-upgrade
+      NCC_RELEASE_DIR: /var/lib/ncc-server-release
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - "${NCC_UPGRADE_STATE_DIR:-/var/lib/ncc-server-upgrade}:/var/lib/ncc-server-upgrade"
+      - "${NCC_RELEASE_DIR:-/var/lib/ncc-server-release}:/var/lib/ncc-server-release:ro"
     restart: unless-stopped
     read_only: true
     cap_drop:

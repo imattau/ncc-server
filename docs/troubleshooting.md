@@ -214,6 +214,62 @@ Other messages:
 Updating `caddy`, `sidecar` or `node-agent` briefly interrupts this panel.
 Wait a few seconds and reload; the new container is already being started.
 
+## A server upgrade is unavailable or fails
+
+The **Upgrade to vX.Y.Z** button appears only when the current release tag and
+the latest GitHub release are both known and the host is behind. If it is
+missing:
+
+- the checkout is not on a release tag and the running sidecar image has no
+  version tag (for example `latest`);
+- GitHub was unreachable, rate-limited or returned no version tag;
+- the node is already current.
+
+The release check is cached for fifteen minutes. Reopen the panel or call the
+endpoint with `?refresh=1` after fixing connectivity.
+
+If the button is present but disabled, the host helper is missing or the state
+directory is not writable. Re-run the installer once on the host:
+
+~~~sh
+sudo make install-compose-host
+~~~
+
+That installs `/usr/local/sbin/ncc-server-upgrade`,
+`ncc-server-upgrade.path`, `ncc-server-upgrade.service`, the state
+directories and the release file. Check them with
+`systemctl status ncc-server-upgrade.path` and `journalctl -u
+ncc-server-upgrade`.
+
+Other messages:
+
+- `The server checkout has local changes` means the runner refused to discard
+  tracked edits. Commit or discard them on the host. A locally rebuilt
+  `public/` does not count.
+- `A server upgrade is already in progress` comes from the node-agent while a
+  request is pending or the status is `running`. Wait for it; if the runner
+  died, inspect `systemctl status ncc-server-upgrade.service` and the status
+  file before starting another.
+- The panel goes blank or loses the API for a minute during the installer.
+  That is expected while Caddy and the sidecar are recreated. The status file
+  and the progress token are on disk; keep the page open or reload and the
+  panel resumes.
+- `This upgrade progress token is invalid or expired` after a long run means
+  the one-hour token expired. Reload the panel; the check endpoint mints a new
+  token for a running job.
+- A failed step is shown with the last installer lines. The full log is
+  `/var/lib/ncc-server-upgrade/upgrade.log`; the journal has the systemd
+  wrapper output. There is no automatic rollback. Check out the previous tag,
+  restore the `.env` backup from
+  `/var/lib/ncc-server-upgrade/env-backups/`, and run
+  `sudo make install-compose-host` to recover.
+- `RELAY_IMAGE` or another image is listed as skipped in the pins means it
+  points at a custom registry, a different repository or a digest. The runner
+  deliberately left it alone; update that image on the host yourself.
+- `detected dubious ownership` means the checkout belongs to a different
+  user. The installer expects a root-owned checkout; restore that layout or
+  add the path to root's `safe.directory` before retrying.
+
 ## Admin changes do not reach npanel
 
 Adding a key from the panel writes the node admin list first, then grants

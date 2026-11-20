@@ -1068,6 +1068,247 @@ export async function updatePanelImage(
   };
 }
 
+// --- server upgrade --------------------------------------------------------
+
+export interface PanelServerRelease {
+  version: string | null;
+  tag: string | null;
+  commit: string | null;
+  source: string | null;
+}
+
+export interface PanelServerLatest {
+  tag: string;
+  version: string | null;
+  url: string | null;
+  publishedAt: string | null;
+}
+
+export interface PanelUpgradeHelper {
+  available: boolean;
+  installed: boolean;
+  installedAt: string | null;
+  error: string | null;
+}
+
+export interface PanelUpgradeStep {
+  id: string;
+  label: string;
+}
+
+export interface PanelUpgradeJob {
+  jobId: string | null;
+  state: 'running' | 'success' | 'failed';
+  step: string | null;
+  stepIndex: number;
+  totalSteps: number;
+  steps: PanelUpgradeStep[];
+  target: string | null;
+  from: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+  warning: string | null;
+  logTail: string[];
+  pins: { updated: string[]; skipped: string[] };
+  dryRun: boolean;
+}
+
+export interface PanelServerUpgrade {
+  current: PanelServerRelease | null;
+  latest: PanelServerLatest | null;
+  upgradeAvailable: boolean | null;
+  reason: string | null;
+  helper: PanelUpgradeHelper;
+  job: PanelUpgradeJob | null;
+  progressToken: string | null;
+  checkedAt: number | null;
+  error: string | null;
+}
+
+export interface PanelUpgradeStatus {
+  helper: PanelUpgradeHelper;
+  job: PanelUpgradeJob | null;
+}
+
+export interface PanelUpgradeStart {
+  target: string;
+  jobId: string;
+  progressToken: string | null;
+  accepted: boolean;
+}
+
+const UNAVAILABLE_HELPER: PanelUpgradeHelper = {
+  available: false,
+  installed: false,
+  installedAt: null,
+  error: 'The host upgrade helper is not available',
+};
+
+export function readUpgradeHelper(value: unknown): PanelUpgradeHelper {
+  const record = objectValue(value);
+  if (!record) return { ...UNAVAILABLE_HELPER };
+  return {
+    available: record.available === true,
+    installed: record.installed === true,
+    installedAt: stringOrNull(record.installedAt),
+    error: stringOrNull(record.error),
+  };
+}
+
+export function readUpgradeJob(value: unknown): PanelUpgradeJob | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  if (record.state !== 'running' && record.state !== 'success' && record.state !== 'failed') {
+    return null;
+  }
+
+  const steps = (Array.isArray(record.steps) ? record.steps : []).flatMap(
+    (entry): PanelUpgradeStep[] => {
+      const step = objectValue(entry);
+      if (!step || typeof step.id !== 'string' || typeof step.label !== 'string') return [];
+      return [{ id: step.id, label: step.label }];
+    },
+  );
+  const pins = objectValue(record.pins) ?? {};
+  const logTail = (Array.isArray(record.logTail) ? record.logTail : [])
+    .filter((line): line is string => typeof line === 'string')
+    .slice(-20);
+  const total = numberOrNull(record.totalSteps) ?? steps.length;
+  const index = numberOrNull(record.stepIndex) ?? 0;
+
+  return {
+    jobId: stringOrNull(record.jobId),
+    state: record.state,
+    step: stringOrNull(record.step),
+    stepIndex: Math.max(0, Math.min(index, total)),
+    totalSteps: total,
+    steps,
+    target: stringOrNull(record.target),
+    from: stringOrNull(record.from),
+    startedAt: numberOrNull(record.startedAt),
+    finishedAt: numberOrNull(record.finishedAt),
+    error: stringOrNull(record.error),
+    warning: stringOrNull(record.warning),
+    logTail,
+    pins: {
+      updated: stringArray(pins.updated, 32),
+      skipped: stringArray(pins.skipped, 32),
+    },
+    dryRun: record.dryRun === true,
+  };
+}
+
+export function readServerUpgrade(payload: unknown): PanelServerUpgrade {
+  const record = objectValue(payload);
+  if (!record) throw new PanelApiError(0, 'The node returned an unexpected upgrade response');
+
+  const currentRecord = objectValue(record.current);
+  const latestRecord = objectValue(record.latest);
+  return {
+    current: currentRecord
+      ? {
+        version: stringOrNull(currentRecord.version),
+        tag: stringOrNull(currentRecord.tag),
+        commit: stringOrNull(currentRecord.commit),
+        source: stringOrNull(currentRecord.source),
+      }
+      : null,
+    latest: latestRecord && typeof latestRecord.tag === 'string'
+      ? {
+        tag: latestRecord.tag,
+        version: stringOrNull(latestRecord.version),
+        url: stringOrNull(latestRecord.url),
+        publishedAt: stringOrNull(latestRecord.publishedAt),
+      }
+      : null,
+    upgradeAvailable: typeof record.upgradeAvailable === 'boolean'
+      ? record.upgradeAvailable
+      : null,
+    reason: stringOrNull(record.reason),
+    helper: readUpgradeHelper(record.helper),
+    job: readUpgradeJob(record.job),
+    progressToken: stringOrNull(record.progressToken),
+    checkedAt: numberOrNull(record.checkedAt),
+    error: stringOrNull(record.error),
+  };
+}
+
+/** Check the host checkout against the latest GitHub release. */
+export async function loadServerUpgrade(
+  base: string,
+  signer: PanelSigner,
+  signal?: AbortSignal,
+  refresh = false,
+): Promise<PanelServerUpgrade> {
+  return readServerUpgrade(await requestJson(
+    base,
+    signer,
+    'GET',
+    `/upgrade${refresh ? '?refresh=1' : ''}`,
+    undefined,
+    signal,
+  ));
+}
+
+/** Start a full server upgrade for a validated release tag. */
+export async function startServerUpgrade(
+  base: string,
+  signer: PanelSigner,
+  target: string,
+  signal?: AbortSignal,
+): Promise<PanelUpgradeStart> {
+  const payload = await requestJson(
+    base,
+    signer,
+    'POST',
+    '/upgrade',
+    { target },
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true
+    || typeof record.jobId !== 'string'
+    || typeof record.target !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the server upgrade');
+  }
+  return {
+    target: record.target,
+    jobId: record.jobId,
+    progressToken: stringOrNull(record.progressToken),
+    accepted: record.accepted === true,
+  };
+}
+
+/** Read upgrade progress with the token returned by the start call. */
+export async function loadServerUpgradeProgress(
+  token: string,
+  signal?: AbortSignal,
+): Promise<PanelUpgradeStatus> {
+  const response = await fetch('/ncc-api/upgrade/status', {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+    signal,
+  });
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('json')) {
+    throw new PanelApiError(response.status, 'The node admin API is not served on this address');
+  }
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object'
+      && typeof (payload as { error?: unknown }).error === 'string'
+      ? (payload as { error: string }).error
+      : 'Could not read the server upgrade progress';
+    throw new PanelApiError(response.status, message);
+  }
+  const record = objectValue(payload) ?? {};
+  return {
+    helper: readUpgradeHelper(record.helper),
+    job: readUpgradeJob(record.job),
+  };
+}
+
 // --- npack service catalogue ------------------------------------------------
 
 export interface PanelCatalogueIcon {
