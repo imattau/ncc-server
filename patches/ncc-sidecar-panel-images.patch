@@ -1,5 +1,5 @@
 diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
-index 466f5be..f8d806e 100644
+index 466f5be..63dd2ec 100644
 --- a/src/routes/panel-services.js
 +++ b/src/routes/panel-services.js
 @@ -15,6 +15,7 @@
@@ -252,7 +252,7 @@ index 466f5be..f8d806e 100644
  function numberOrNull(value, { min = null, max = null } = {}) {
    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
    if (min !== null && value < min) return null;
-@@ -627,4 +863,181 @@ export default async function panelServicesRoutes(server) {
+@@ -627,4 +863,241 @@ export default async function panelServicesRoutes(server) {
        };
      }
    });
@@ -309,6 +309,66 @@ index 466f5be..f8d806e 100644
 +        error: null,
 +        images: [],
 +      };
++    }
++  });
++
++  // Old release tags stay on the host after every upgrade: Compose replaces
++  // the container, and Docker keeps the image because a tag still points at
++  // it. This previews what a clean-up would remove -- images in the bundle's
++  // own repositories that no project container uses. `previous=0` also drops
++  // the newest unused tag, i.e. the manual-rollback copy.
++  server.get('/ncc-api/images/prune', async (request, reply) => {
++    if (!authorizePanelRequest(request, reply)) return;
++
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++    const previous = request.query?.previous !== '0' && request.query?.previous !== 'false';
++    try {
++      return await agentRequest(
++        `/v1/images/prune?previous=${previous ? '1' : '0'}`,
++        { timeoutMs: 60_000 },
++      );
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The image clean-up plan is unavailable';
++      return reply.code(503).send({ error: message });
++    }
++  });
++
++  // Remove the records the preview listed. The agent re-reads the containers
++  // and images first, so a container that started in between is skipped
++  // rather than deleted; Docker's own 409 is reported per tag.
++  server.post('/ncc-api/images/prune', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++    const keepPrevious = request.body?.keepPrevious !== false;
++    try {
++      const result = await agentRequest('/v1/images/prune', {
++        method: 'POST',
++        body: { keepPrevious },
++        timeoutMs: 180_000,
++      });
++      const removed = Array.isArray(result?.removed) ? result.removed.length : 0;
++      const failed = Array.isArray(result?.failed) ? result.failed.length : 0;
++      addLog(
++        'info',
++        `Removed ${removed} unused bundle image tag${removed === 1 ? '' : 's'} from the NCC admin panel`
++          + (failed ? `; ${failed} failed` : ''),
++        { changedBy: caller.pubkey, keepPrevious },
++      );
++      return result;
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The image clean-up could not run';
++      addLog('error', 'Image clean-up failed from the NCC admin panel', {
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      const status = /already in progress|upgrade is in progress/i.test(message) ? 409 : 503;
++      return reply.code(status).send({ error: message });
 +    }
 +  });
 +

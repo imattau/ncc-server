@@ -3,9 +3,10 @@
  *
  * The sidecar is deliberately hardened and has no Docker access. This small
  * companion process runs with the sidecar image, mounts the Docker socket,
- * and exposes only five operations: read container state, read recent logs,
- * restart a named service, read host resource metrics, and pull the image of
- * a bundle service and recreate its container when the digest changed.
+ * and exposes only six operations: read container state, read recent logs,
+ * restart a named service, read host resource metrics, pull the image of
+ * a bundle service and recreate its container when the digest changed, and
+ * remove old image tags the bundle no longer runs.
  * Container operations are limited to this Compose project.
  *
  * It is not a general Docker proxy. Every request names Compose services,
@@ -33,6 +34,7 @@ import {
   sanitizeUpgradeStatus,
   upgradeIsRunning,
 } from './upgrade-state.mjs';
+import { parseKeepPrevious, planImagePrune, prunePreview } from './prune-state.mjs';
 
 const DOCKER_SOCKET = process.env.NCC_DOCKER_SOCKET || '/var/run/docker.sock';
 // Path of the same socket on the host, used as the bind source when the
@@ -55,6 +57,8 @@ const IMAGE_CHECK_CONCURRENCY = 4;
 const CPU_SAMPLE_MS = 200;
 const PULL_TIMEOUT_MS = 15 * 60_000;
 const HELPER_TIMEOUT_MS = 5 * 60_000;
+const PRUNE_TIMEOUT_MS = 120_000;
+const DISK_USAGE_TIMEOUT_MS = 60_000;
 const SERVICE_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const UPGRADE_STATE_DIR = process.env.NCC_UPGRADE_STATE_DIR || '/var/lib/ncc-server-upgrade';
 const RELEASE_DIR = process.env.NCC_RELEASE_DIR || '/var/lib/ncc-server-release';
@@ -703,6 +707,138 @@ async function handleImages(request, response, url) {
   });
 }
 
+// --- unused image clean-up -------------------------------------------------
+//
+// Every upgrade pulls new tags and leaves the previous release on disk. This
+// removes the ones that are unambiguously the bundle's own and unused; the
+// planner in prune-state.mjs does the filtering, and this half only talks to
+// Docker. It is not a general image prune: repositories the project does not
+// run, other projects' images, and dangling layers are never touched.
+
+let pruneInProgress = false;
+
+async function prunePlan(keepPrevious) {
+  const [containers, images] = await Promise.all([
+    projectContainers(),
+    dockerJson('/images/json'),
+  ]);
+  return planImagePrune({
+    images: Array.isArray(images) ? images : [],
+    containers,
+    keepPrevious,
+  });
+}
+
+/** Layers currently held by Docker, or null when /system/df cannot answer. */
+async function dockerLayersSize() {
+  try {
+    const df = await dockerJson('/system/df', { timeoutMs: DISK_USAGE_TIMEOUT_MS });
+    return Number.isFinite(df?.LayersSize) ? df.LayersSize : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handlePrunePreview(response, url) {
+  const keepPrevious = parseKeepPrevious(url.searchParams.get('previous'));
+  const plan = await prunePlan(keepPrevious);
+  sendJson(response, 200, {
+    project: PROJECT,
+    ...prunePreview(plan, keepPrevious),
+  });
+}
+
+async function handlePrune(request, response) {
+  // One clean-up at a time, and never while an image update or server upgrade
+  // is replacing containers: both of them change which image is in use. The
+  // flag is claimed before the first await so two requests cannot both pass
+  // the gate.
+  if (pruneInProgress || updateState.inProgress || updateLock || upgradeStarting) {
+    sendJson(response, 409, {
+      error: pruneInProgress
+        ? 'An image clean-up is already in progress'
+        : 'An image update or server upgrade is in progress',
+    });
+    return;
+  }
+
+  pruneInProgress = true;
+  try {
+    if (await upgradeRunning()) {
+      sendJson(response, 409, { error: 'A server upgrade is in progress' });
+      return;
+    }
+
+    const body = await readBody(request).catch(() => ({}));
+    const keepPrevious = parseKeepPrevious(body?.keepPrevious);
+    const plan = await prunePlan(keepPrevious);
+
+    // LayersSize is Docker's deduplicated image-layer total, so the difference
+    // around the deletes is the space actually reclaimed -- unlike summing the
+    // per-image sizes, which counts shared layers more than once.
+    const beforeBytes = plan.images.length ? await dockerLayersSize() : null;
+    const removed = [];
+    const failed = [];
+
+    for (const image of plan.images) {
+      for (const ref of image.refs) {
+        try {
+          await dockerJson(`/images/${encodeURIComponent(ref)}`, {
+            method: 'DELETE',
+            timeoutMs: PRUNE_TIMEOUT_MS,
+          });
+          removed.push({
+            ref,
+            imageId: image.imageId,
+            sizeBytes: image.sizeBytes,
+            createdAt: Number.isFinite(image.created)
+              ? new Date(image.created * 1000).toISOString()
+              : null,
+          });
+        } catch (error) {
+          // A 409 means a container started using it since the plan was read;
+          // that is a safe failure, not a reason to abort the rest.
+          failed.push({
+            ref,
+            error: error instanceof Error ? error.message : 'Docker refused the delete',
+          });
+        }
+      }
+    }
+
+    // The deleted images are no longer accurate for the panel's dates or the
+    // Storage card's Docker total.
+    imageInfoCache = { at: 0, byId: new Map() };
+    usageCache = { at: 0, value: null };
+    const afterBytes = plan.images.length ? await dockerLayersSize() : null;
+    const freedBytes = beforeBytes !== null && afterBytes !== null
+      ? Math.max(0, beforeBytes - afterBytes)
+      : null;
+
+    console.log(
+      `[node-agent] image clean-up removed ${removed.length} tag(s), failed ${failed.length}, freed ${freedBytes ?? 'unknown'} bytes`,
+    );
+
+    sendJson(response, 200, {
+      project: PROJECT,
+      keepPrevious,
+      removed,
+      failed,
+      freedBytes,
+      estimateBytes: plan.estimateBytes,
+      kept: plan.kept.map((image) => ({
+        ref: image.refs[0] ?? null,
+        refs: image.refs,
+        imageId: image.imageId,
+        sizeBytes: image.sizeBytes,
+        reason: image.reason,
+      })),
+    });
+  } finally {
+    pruneInProgress = false;
+  }
+}
+
 async function handleLogs(request, response, url) {
   const services = parseServiceList(url.searchParams.get('services'));
   if (!services) {
@@ -1138,11 +1274,13 @@ async function handleUpdate(request, response) {
     return;
   }
 
-  if (updateState.inProgress || updateLock || upgradeStarting || await upgradeRunning()) {
+  if (pruneInProgress || updateState.inProgress || updateLock || upgradeStarting || await upgradeRunning()) {
     sendJson(response, 409, {
-      error: updateState.inProgress || updateLock
-        ? 'An image update is already in progress'
-        : 'A server upgrade is already in progress',
+      error: pruneInProgress
+        ? 'An image clean-up is in progress'
+        : updateState.inProgress || updateLock
+          ? 'An image update is already in progress'
+          : 'A server upgrade is already in progress',
     });
     return;
   }
@@ -1347,8 +1485,12 @@ async function handleUpgrade(request, response) {
       sendJson(response, 503, { error: helper.error || 'The host upgrade helper is not available' });
       return;
     }
-    if (updateState.inProgress || updateLock) {
-      sendJson(response, 409, { error: 'An image update is already in progress' });
+    if (pruneInProgress || updateState.inProgress || updateLock) {
+      sendJson(response, 409, {
+        error: pruneInProgress
+          ? 'An image clean-up is in progress'
+          : 'An image update is already in progress',
+      });
       return;
     }
     if (await upgradeRunning()) {
@@ -1403,6 +1545,14 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/v1/images') {
       await handleImages(request, response, url);
+      return;
+    }
+    if (request.method === 'GET' && url.pathname === '/v1/images/prune') {
+      await handlePrunePreview(response, url);
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/images/prune') {
+      await handlePrune(request, response);
       return;
     }
     if (request.method === 'GET' && url.pathname === '/v1/logs') {

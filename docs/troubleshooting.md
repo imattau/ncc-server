@@ -214,6 +214,38 @@ Other messages:
 Updating `caddy`, `sidecar` or `node-agent` briefly interrupts this panel.
 Wait a few seconds and reload; the new container is already being started.
 
+## Disk is filling up
+
+The sidebar Storage card shows the host filesystem and, separately, the
+space Docker uses for images, containers, volumes and build cache. The
+filesystem figure alone does not say which one is growing; the Docker line
+does.
+
+Old release images are the usual cause on a node that upgrades regularly:
+every upgrade pulls a new set of tags and Docker keeps the previous one
+because a tag still points at it. **Apps → Clean up images** previews the
+tags no container uses and removes them after confirmation. The previous
+release is kept by default so a manual rollback still works; clear that
+checkbox to remove it too. The panel reports the space Docker actually
+freed. It only considers repositories this bundle runs and never touches an
+image a project container uses, so unrelated images and other projects are
+safe.
+
+What it deliberately leaves alone:
+
+- untagged (dangling) layers, which cannot be attributed to this bundle.
+  Remove them with `docker image prune` on the host if `docker system df`
+  shows them;
+- images in repositories the bundle stopped running. Remove those by name
+  with `docker image rmi <ref>` once you are sure nothing else needs them;
+- volumes and build cache. Neither is created by an image pull, so neither is
+  part of this action.
+
+`docker image prune` on its own does not remove the old release tags: they
+are still tagged, so only `-a` or naming the tag would delete them. Prefer
+the panel action, which keeps the previous release and cannot touch another
+project's images.
+
 ## A server upgrade is unavailable or fails
 
 The **Upgrade to vX.Y.Z** button appears only when the current release tag and

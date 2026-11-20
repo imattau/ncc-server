@@ -84,6 +84,8 @@ COPY --from=build /src/ncc-06/ncc-sidecar/ /app/
 COPY container/sidecar/node-agent.mjs /app/node-agent.mjs
 # Pure validation and status shaping for the node-agent's upgrade control.
 COPY container/sidecar/upgrade-state.mjs /app/upgrade-state.mjs
+# Pure planning for the node-agent's unused-image clean-up.
+COPY container/sidecar/prune-state.mjs /app/prune-state.mjs
 # One-shot recreate helper used by the node-agent's image updates.
 COPY container/sidecar/recreate.mjs /app/recreate.mjs
 # ncc-06-js imports nostr-tools without declaring it in its own package manifest.

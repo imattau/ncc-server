@@ -43,12 +43,14 @@ import {
   loadPanelImages,
   loadPanelImageProgress,
   loadPanelMetrics,
+  loadPanelPrunePlan,
   loadPanelRecords,
   loadPanelServiceLogs,
   loadPanelServices,
   loadPanelSettings,
   loadServerUpgrade,
   loadServerUpgradeProgress,
+  prunePanelImages,
   relayInputToUrl,
   removePanelAdmin,
   republishPanelService,
@@ -69,6 +71,7 @@ import {
   type PanelNodeImage,
   type PanelNodeImages,
   type PanelImageProgress,
+  type PanelPrunePlan,
   type PanelNpanelStatus,
   type PanelServerUpgrade,
   type PanelUpgradeJob,
@@ -872,6 +875,11 @@ export default function AdminPanel() {
   const [progressToken, setProgressToken] = useState<string | null>(null);
   const [confirmUpdate, setConfirmUpdate] = useState<string | null>(null);
   const [confirmUpdateAll, setConfirmUpdateAll] = useState(false);
+  const [prunePlan, setPrunePlan] = useState<PanelPrunePlan | null>(null);
+  const [pruneState, setPruneState] = useState<'idle' | 'loading' | 'ready' | 'applying' | 'error'>('idle');
+  const [pruneError, setPruneError] = useState('');
+  const [pruneDone, setPruneDone] = useState('');
+  const [pruneKeepPrevious, setPruneKeepPrevious] = useState(true);
   const [serverUpgrade, setServerUpgrade] = useState<PanelServerUpgrade | null>(null);
   const [serverUpgradeToken, setServerUpgradeToken] = useState(0);
   const [upgradeToken, setUpgradeToken] = useState<string | null>(null);
@@ -1219,6 +1227,14 @@ export default function AdminPanel() {
 
     return () => controller.abort();
   }, [section, authorized, apiBase, user, imagesToken]);
+
+  // A clean-up plan is a snapshot of the images at the moment it was read.
+  // Leaving Apps drops it instead of offering a stale count on the next visit.
+  useEffect(() => {
+    if (section === 'Apps') return;
+    setPrunePlan(null);
+    setPruneError('');
+  }, [section]);
 
   // Follow a started image update through the token returned by the start
   // call. Polling this route does not need a new NIP-98 event, so a NIP-46
@@ -2047,6 +2063,66 @@ export default function AdminPanel() {
     await startImageUpdate(services, `${services.length} image${services.length === 1 ? '' : 's'}`);
   };
 
+  const loadPrunePlan = async (keepPrevious: boolean) => {
+    if (!apiBase || !user) return;
+
+    setPruneState('loading');
+    setPruneError('');
+    setPruneDone('');
+    try {
+      const plan = await loadPanelPrunePlan(apiBase, user.signer, keepPrevious);
+      setPrunePlan(plan);
+      setPruneState('ready');
+    } catch (error) {
+      setPrunePlan(null);
+      setPruneState('error');
+      setPruneError(error instanceof Error ? error.message : 'Could not read the image clean-up plan');
+    }
+  };
+
+  const handleCleanup = () => {
+    if (prunePlan) {
+      setPrunePlan(null);
+      setPruneError('');
+      setPruneState('idle');
+      return;
+    }
+    void loadPrunePlan(pruneKeepPrevious);
+  };
+
+  const handlePruneKeepPrevious = (keepPrevious: boolean) => {
+    setPruneKeepPrevious(keepPrevious);
+    if (prunePlan) void loadPrunePlan(keepPrevious);
+  };
+
+  const applyPrune = async () => {
+    if (!apiBase || !user || !prunePlan) return;
+
+    setPruneState('applying');
+    setPruneError('');
+    try {
+      const result = await prunePanelImages(apiBase, user.signer, pruneKeepPrevious);
+      const removed = result.removed.length;
+      const freed = result.freedBytes !== null ? `, freeing ${formatBytes(result.freedBytes)}` : '';
+      const failed = result.failed.length
+        ? ` ${result.failed.length} tag${result.failed.length === 1 ? '' : 's'} could not be removed.`
+        : '';
+      setPruneDone(
+        removed
+          ? `Removed ${removed} unused image tag${removed === 1 ? '' : 's'}${freed}.${failed}`
+          : `Nothing was removed.${failed}`,
+      );
+      setPrunePlan(null);
+      setPruneState('idle');
+      refreshImages();
+      // The Storage card reads Docker's image total from the metrics route.
+      setMetricsToken((value) => value + 1);
+    } catch (error) {
+      setPruneState('error');
+      setPruneError(error instanceof Error ? error.message : 'The image clean-up could not run');
+    }
+  };
+
   const handleUpgrade = async () => {
     if (!apiBase || !user || !serverUpgrade?.latest || serverUpgrade.upgradeAvailable !== true) return;
     if (!serverUpgrade.helper.available) {
@@ -2270,6 +2346,8 @@ export default function AdminPanel() {
     .filter((image) => image.updatable && image.updateAvailable === true)
     .length ?? 0;
   const imagesUpdating = nodeImages?.updating === true || imageProgress?.inProgress === true;
+  const pruneBusy = pruneState === 'loading' || pruneState === 'applying';
+  const pruneReady = Boolean(authorized && apiBase && user);
   const imageLabels = new Map((nodeImages?.images ?? []).map((image) => [image.service, image.label]));
   const progressActive = imageProgress?.services.find(
     (entry) => entry.state === 'pulling' || entry.state === 'recreating',
@@ -2367,6 +2445,16 @@ export default function AdminPanel() {
               <small className="storage-docker" title="Images, containers, volumes and build cache">
                 Docker data {formatBytes(dockerUsage.totalBytes)}
               </small>
+            ) : null}
+            {dockerUsage?.totalBytes ? (
+              <button
+                className="storage-cleanup"
+                type="button"
+                onClick={() => { setSection('Apps'); setMobileNav(false); }}
+                title="Review and remove old image tags on the Apps page"
+              >
+                Clean up images <ArrowUpRight size={11} />
+              </button>
             ) : null}
           </div>
           <a
@@ -2776,6 +2864,21 @@ export default function AdminPanel() {
                     <button
                       className="text-button"
                       type="button"
+                      onClick={handleCleanup}
+                      disabled={
+                        !authorized || !apiBase || !user || pruneBusy
+                        || imagesUpdating || upgradeRunning
+                      }
+                      title="Remove old release tags the bundle no longer runs"
+                    >
+                      {pruneState === 'loading'
+                        ? <span className="button-spinner" />
+                        : <Trash2 size={13} />}
+                      {prunePlan ? 'Close clean-up' : 'Clean up images'}
+                    </button>
+                    <button
+                      className="text-button"
+                      type="button"
                       onClick={refreshImages}
                       disabled={nodeImagesState === 'loading' || !apiBase || imagesUpdating}
                       title="Read the current image and last update result from the node"
@@ -2796,6 +2899,98 @@ export default function AdminPanel() {
 
                 {imageDone && (
                   <div className="settings-saved" role="status"><Check size={13} /> {imageDone}</div>
+                )}
+
+                {pruneDone && (
+                  <div className="settings-saved" role="status"><Check size={13} /> {pruneDone}</div>
+                )}
+
+                {pruneError && (
+                  <div className="panel-banner error" role="alert">
+                    <CircleAlert size={14} />
+                    <span>{pruneError}</span>
+                    <button className="text-button" onClick={() => setPruneError('')}>Dismiss</button>
+                  </div>
+                )}
+
+                {prunePlan && (
+                  <div className="prune-panel" role="status">
+                    <div className="image-progress-head">
+                      <strong>
+                        {prunePlan.count
+                          ? `${prunePlan.count} unused image${prunePlan.count === 1 ? '' : 's'} can be removed`
+                          : 'No unused bundle images'}
+                      </strong>
+                      <span>
+                        {prunePlan.count && prunePlan.estimateBytes !== null
+                          ? `up to ${formatBytes(prunePlan.estimateBytes)}`
+                          : ''}
+                      </span>
+                    </div>
+
+                    <label className="prune-keep">
+                      <input
+                        type="checkbox"
+                        checked={pruneKeepPrevious}
+                        disabled={pruneBusy || !pruneReady}
+                        onChange={(event) => handlePruneKeepPrevious(event.target.checked)}
+                      />
+                      <span>
+                        Keep the previous release for manual rollback
+                        {prunePlan.kept.length > 0
+                          ? ` (${prunePlan.kept.length} image${prunePlan.kept.length === 1 ? '' : 's'} kept)`
+                          : ''}
+                      </span>
+                    </label>
+
+                    {prunePlan.images.length > 0 && (
+                      <ul className="prune-list">
+                        {prunePlan.images.slice(0, 5).map((image) => (
+                          <li key={image.imageId ?? image.ref}>
+                            <code>{image.ref ?? 'unknown image'}</code>
+                            <span>{image.sizeBytes !== null ? formatBytes(image.sizeBytes) : 'size unknown'}</span>
+                          </li>
+                        ))}
+                        {prunePlan.images.length > 5 && (
+                          <li className="prune-more">
+                            and {prunePlan.images.length - 5} more image
+                            {prunePlan.images.length - 5 === 1 ? '' : 's'}
+                          </li>
+                        )}
+                      </ul>
+                    )}
+
+                    <div className="prune-actions">
+                      {prunePlan.count > 0 && (
+                        <button
+                          className="catalog-install"
+                          type="button"
+                          onClick={applyPrune}
+                          disabled={pruneBusy || !pruneReady}
+                        >
+                          {pruneState === 'applying'
+                            ? <span className="button-spinner dark" />
+                            : <Trash2 size={14} />}
+                          {pruneState === 'applying'
+                            ? 'Removing…'
+                            : `Remove ${prunePlan.count} image${prunePlan.count === 1 ? '' : 's'}`}
+                        </button>
+                      )}
+                      <button
+                        className="text-button"
+                        type="button"
+                        onClick={handleCleanup}
+                        disabled={pruneState === 'applying'}
+                      >
+                        {prunePlan.count > 0 ? 'Cancel' : 'Close'}
+                      </button>
+                    </div>
+
+                    <small className="prune-note">
+                      Only tags in the repositories this bundle runs are removed, and never an
+                      image a container still uses. Docker reports the space it actually frees.
+                    </small>
+                  </div>
                 )}
 
                 {imageProgress && (

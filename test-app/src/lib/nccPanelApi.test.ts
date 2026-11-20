@@ -4,6 +4,8 @@ import {
   cadenceProblem,
   readImageProgress,
   readNodeImages,
+  readPanelPrunePlan,
+  readPanelPruneResult,
   readResult,
   readServerUpgrade,
   readUpgradeJob,
@@ -262,6 +264,94 @@ describe('readImageProgress', () => {
     expect(progress.services[0]).toEqual({
       service: 'relay', state: 'unknown', changed: false, imageId: null, error: null,
     });
+  });
+});
+
+describe('readPanelPrunePlan', () => {
+  it('reads candidates, sizes and the previous-release copy', () => {
+    const plan = readPanelPrunePlan({
+      keepPrevious: true,
+      count: 2,
+      estimateBytes: 3072,
+      repositories: ['ghcr.io/imattau/ncc-server-search'],
+      images: [
+        {
+          ref: 'ghcr.io/imattau/ncc-server-search:0.2.14',
+          refs: ['ghcr.io/imattau/ncc-server-search:0.2.14'],
+          imageId: 'sha256:old',
+          sizeBytes: 1024,
+          createdAt: '2026-11-01T00:00:00.000Z',
+        },
+        { ref: 'ghcr.io/imattau/ncc-server-search:0.2.15', imageId: 'sha256:previous' },
+      ],
+      kept: [{
+        ref: 'ghcr.io/imattau/ncc-server-relay:0.2.15',
+        refs: ['ghcr.io/imattau/ncc-server-relay:0.2.15'],
+        imageId: 'sha256:relay',
+        sizeBytes: 2048,
+        createdAt: null,
+        reason: 'previous-release',
+      }],
+    });
+
+    expect(plan.keepPrevious).toBe(true);
+    expect(plan.count).toBe(2);
+    expect(plan.estimateBytes).toBe(3072);
+    expect(plan.images[0].createdAt).toBe('2026-11-01T00:00:00.000Z');
+    expect(plan.images[1].sizeBytes).toBeNull();
+    expect(plan.kept[0].reason).toBe('previous-release');
+  });
+
+  it('keeps a missing keepPrevious or size unknown instead of inventing one', () => {
+    const plan = readPanelPrunePlan({ images: [] });
+
+    expect(plan.keepPrevious).toBe(true);
+    expect(plan.count).toBe(0);
+    expect(plan.estimateBytes).toBeNull();
+    expect(plan.images).toEqual([]);
+    expect(plan.kept).toEqual([]);
+  });
+
+  it('ignores entries that name no image and rejects a non-object', () => {
+    const plan = readPanelPrunePlan({
+      images: [null, { imageId: 'sha256:orphan' }, { ref: 'x:1', refs: 'nope' }],
+    });
+    expect(plan.count).toBe(1);
+    expect(plan.images.map((image) => image.ref)).toEqual(['x:1']);
+    expect(plan.images[0].refs).toEqual([]);
+
+    expect(() => readPanelPrunePlan(null)).toThrow(/unexpected image clean-up plan/);
+  });
+});
+
+describe('readPanelPruneResult', () => {
+  it('reads removed tags, failures and the freed byte count', () => {
+    const result = readPanelPruneResult({
+      keepPrevious: false,
+      removed: [{ ref: 'ghcr.io/imattau/ncc-server-search:0.2.14', imageId: 'sha256:old' }],
+      failed: [{ ref: 'ghcr.io/imattau/ncc-server-relay:0.2.15', error: 'in use' }],
+      freedBytes: 4096,
+    });
+
+    expect(result.keepPrevious).toBe(false);
+    expect(result.removed.map((image) => image.ref)).toEqual([
+      'ghcr.io/imattau/ncc-server-search:0.2.14',
+    ]);
+    expect(result.failed).toEqual([{
+      ref: 'ghcr.io/imattau/ncc-server-relay:0.2.15', error: 'in use',
+    }]);
+    expect(result.freedBytes).toBe(4096);
+  });
+
+  it('keeps an unmeasured freed total and a failed delete honest', () => {
+    const result = readPanelPruneResult({
+      removed: [],
+      failed: [{ ref: 'x:1' }],
+    });
+
+    expect(result.freedBytes).toBeNull();
+    expect(result.failed[0].error).toBe('The delete failed');
+    expect(() => readPanelPruneResult(null)).toThrow(/unexpected image clean-up result/);
   });
 });
 

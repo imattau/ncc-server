@@ -69,6 +69,8 @@ verifies nothing itself: the sidecar checks each request.
 - `GET /ncc-api/images/progress` — update states for the `Authorization: Bearer <progress-token>` returned by the start call (no NIP-98; the token is the authorization)
 - `POST /ncc-api/images/<service>/update` — pull the image tag and recreate the
   container when the digest changed (single-service compatibility route)
+- `GET /ncc-api/images/prune?previous=0` — image tags a clean-up would remove; `previous=0` also drops the newest unused tag in each repository
+- `POST /ncc-api/images/prune` with `{"keepPrevious": false}` — remove the unused bundle image tags and return the freed byte count
 - `GET /ncc-api/upgrade` — installed release, latest GitHub release,
   availability, helper state and the current or last upgrade job;
   `?refresh=1` bypasses the release check cache
@@ -315,6 +317,36 @@ proxy.
 A pull can take a few minutes. The page does not poll: every read needs a new
 NIP-98 event, which would make a NIP-46 signer prompt repeatedly. Press
 **Check images** after a short wait to see the new digest and the result.
+
+### Cleaning up old images
+
+Every pull leaves the previous release's tags on the host. Compose replaces
+the container, but Docker keeps the image because a tag still points at it,
+so a node that upgrades regularly accumulates a set of old images. The
+Storage card in the sidebar shows the total Docker footprint; **Clean up
+images** on the Apps page, and the same link under the Storage card, removes
+the old tags.
+
+The plan is shown before anything is deleted:
+
+- only images whose tags name a repository a bundle container currently runs
+  are considered; another project's images, and repositories this bundle
+  stopped using, are untouched;
+- an image used by any container of this Compose project — running or stopped
+  — is never removed;
+- untagged (dangling) layers are not attributable to the bundle and are left
+  alone; `docker image prune` remains the tool for those;
+- by default the newest unused version tag in each repository is kept, which
+  is the previous release a manual rollback would check out. Clear **Keep the
+  previous release** for a full clean-up;
+- the preview's byte figure is an upper bound, because Docker counts shared
+  layers in each image. After a delete the panel reports the real difference
+  from Docker's deduplicated layer total.
+
+Deletes are per tag and a container that starts using an image in the meantime
+makes Docker refuse that tag; the panel reports the failure and leaves the
+rest of the run intact. The action is unavailable while an image update or a
+server upgrade is running, since both change which image is in use.
 
 ### Server upgrades
 

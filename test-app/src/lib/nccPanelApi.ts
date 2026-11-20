@@ -1068,6 +1068,141 @@ export async function updatePanelImage(
   };
 }
 
+export interface PanelPruneImage {
+  ref: string | null;
+  refs: string[];
+  imageId: string | null;
+  sizeBytes: number | null;
+  createdAt: string | null;
+}
+
+export interface PanelPrunePlan {
+  keepPrevious: boolean;
+  count: number;
+  estimateBytes: number | null;
+  images: PanelPruneImage[];
+  kept: Array<PanelPruneImage & { reason: string }>;
+  repositories: string[];
+}
+
+export interface PanelPruneResult {
+  keepPrevious: boolean;
+  removed: PanelPruneImage[];
+  failed: Array<{ ref: string; error: string }>;
+  freedBytes: number | null;
+}
+
+function readPruneImage(value: unknown): PanelPruneImage | null {
+  const record = objectValue(value);
+  if (!record) return null;
+  const refs = Array.isArray(record.refs)
+    ? record.refs.filter((ref): ref is string => typeof ref === 'string')
+    : [];
+  const ref = stringOrNull(record.ref) ?? refs[0] ?? null;
+  if (!ref && refs.length === 0) return null;
+
+  return {
+    ref,
+    refs,
+    imageId: stringOrNull(record.imageId),
+    sizeBytes: numberOrNull(record.sizeBytes),
+    createdAt: stringOrNull(record.createdAt),
+  };
+}
+
+export function readPanelPrunePlan(payload: unknown): PanelPrunePlan {
+  const record = objectValue(payload);
+  if (!record) {
+    throw new PanelApiError(0, 'The node returned an unexpected image clean-up plan');
+  }
+  const images = (Array.isArray(record.images) ? record.images : [])
+    .map(readPruneImage)
+    .filter((image): image is PanelPruneImage => image !== null);
+  const kept = (Array.isArray(record.kept) ? record.kept : []).flatMap((entry) => {
+    const image = readPruneImage(entry);
+    if (!image) return [];
+    const source = objectValue(entry);
+    return [{
+      ...image,
+      reason: typeof source?.reason === 'string' ? source.reason : 'kept',
+    }];
+  });
+
+  return {
+    keepPrevious: record.keepPrevious !== false,
+    count: numberOrNull(record.count) ?? images.length,
+    estimateBytes: numberOrNull(record.estimateBytes),
+    images,
+    kept,
+    repositories: Array.isArray(record.repositories)
+      ? record.repositories.filter((repo): repo is string => typeof repo === 'string')
+      : [],
+  };
+}
+
+export function readPanelPruneResult(payload: unknown): PanelPruneResult {
+  const record = objectValue(payload);
+  if (!record) {
+    throw new PanelApiError(0, 'The node returned an unexpected image clean-up result');
+  }
+  const removed = (Array.isArray(record.removed) ? record.removed : [])
+    .map(readPruneImage)
+    .filter((image): image is PanelPruneImage => image !== null);
+  const failed = (Array.isArray(record.failed) ? record.failed : []).flatMap((entry) => {
+    const failure = objectValue(entry);
+    if (!failure || typeof failure.ref !== 'string') return [];
+    return [{
+      ref: failure.ref,
+      error: typeof failure.error === 'string' ? failure.error : 'The delete failed',
+    }];
+  });
+
+  return {
+    keepPrevious: record.keepPrevious !== false,
+    removed,
+    failed,
+    freedBytes: numberOrNull(record.freedBytes),
+  };
+}
+
+/**
+ * What a clean-up would remove: images in the bundle's own repositories that
+ * no project container uses. `keepPrevious` leaves the newest unused release
+ * tag in each repository for a manual rollback.
+ */
+export async function loadPanelPrunePlan(
+  base: string,
+  signer: PanelSigner,
+  keepPrevious = true,
+  signal?: AbortSignal,
+): Promise<PanelPrunePlan> {
+  return readPanelPrunePlan(await requestJson(
+    base,
+    signer,
+    'GET',
+    `/images/prune?previous=${keepPrevious ? '1' : '0'}`,
+    undefined,
+    signal,
+  ));
+}
+
+/** Remove the unused image tags the plan listed. */
+export async function prunePanelImages(
+  base: string,
+  signer: PanelSigner,
+  keepPrevious = true,
+  signal?: AbortSignal,
+): Promise<PanelPruneResult> {
+  return readPanelPruneResult(await requestJson(
+    base,
+    signer,
+    'POST',
+    '/images/prune',
+    { keepPrevious },
+    signal,
+  ));
+}
+
 // --- server upgrade --------------------------------------------------------
 
 export interface PanelServerRelease {
