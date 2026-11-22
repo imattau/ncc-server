@@ -1,12 +1,14 @@
 import { useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Play, Image as ImageIcon, Video as VideoIcon } from 'lucide-react';
+import { EyeOff, Play, Image as ImageIcon, Video as VideoIcon } from 'lucide-react';
 import type { SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useResizedImage } from '@/hooks/useResizedImage';
 import { useBlurhashPlaceholder } from '@/hooks/useBlurhashPlaceholder';
 import { mediaPreviewTarget } from '@/lib/mediaPreview';
+import { shouldBlurMedia } from '@/lib/nsfw';
 import { sanitizeHref } from '@/lib/sanitize';
+import { cn } from '@/lib/utils';
 import { MediaPreviewDialog } from '@/components/MediaPreviewDialog';
 
 // The grid of square thumbnails every real search engine uses for its
@@ -28,9 +30,12 @@ import { MediaPreviewDialog } from '@/components/MediaPreviewDialog';
 export function MediaGridCard({
   result,
   isFollowed = false,
+  blurNsfw = false,
 }: {
   result: SearchResult;
   isFollowed?: boolean;
+  /** Blur publisher-flagged NSFW media until clicked -- see lib/nsfw.ts. */
+  blurNsfw?: boolean;
 }) {
   const author = useAuthor(result.pubkey);
   const isImage = result.kind === 'image';
@@ -40,6 +45,11 @@ export function MediaGridCard({
   const preview = mediaPreviewTarget(result);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  // Per-card reveal: a deliberate click on one thumbnail shouldn't unblur the
+  // whole grid. Each card is keyed by its source record, so this resets with
+  // the row rather than persisting across queries.
+  const [revealed, setRevealed] = useState(false);
+  const blurred = blurNsfw && shouldBlurMedia(result) && !revealed;
 
   const href = sanitizeHref(result.mediaUrl);
   const displayName = author.data?.metadata?.name?.trim();
@@ -77,7 +87,10 @@ export function MediaGridCard({
           loading="lazy"
           decoding="async"
           onError={() => setImageFailed(true)}
-          className="size-full object-cover transition-transform duration-150 group-hover:scale-105"
+          className={cn(
+            'size-full object-cover transition-transform duration-150 group-hover:scale-105',
+            blurred && 'scale-110 blur-2xl group-hover:scale-110',
+          )}
         />
       ) : loading ? (
         <div aria-hidden="true" className="size-full animate-pulse" />
@@ -94,7 +107,7 @@ export function MediaGridCard({
         </div>
       )}
 
-      {isVideo && src && (
+      {isVideo && src && !blurred && (
         <span
           aria-hidden="true"
           className="absolute inset-0 flex items-center justify-center bg-black/10"
@@ -130,10 +143,29 @@ export function MediaGridCard({
           {identity}{indexedLabel ? ` · indexed ${indexedLabel}` : ''}
         </p>
       </div>
+
+      {/* Blur is a reveal control, not a link: until it is clicked the card
+          deliberately is not wrapped in an <a> at all (see the return below),
+          so a click can never navigate to the raw file while its preview is
+          still hidden. */}
+      {blurred && (
+        <button
+          type="button"
+          onClick={() => setRevealed(true)}
+          aria-label={`Reveal media the publisher flagged as ${result.contentWarning}`}
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 bg-black/45 text-white focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-inset focus-visible:outline-none"
+        >
+          <EyeOff className="size-5" aria-hidden="true" />
+          <span className="max-w-[85%] truncate rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase">
+            {result.contentWarning}
+          </span>
+          <span className="text-[10px] font-medium">Click to show</span>
+        </button>
+      )}
     </div>
   );
 
-  if (!href) return cell;
+  if (!href || blurred) return cell;
   return (
     <>
       <a
@@ -151,6 +183,7 @@ export function MediaGridCard({
           result={result}
           open={previewOpen}
           onClose={() => setPreviewOpen(false)}
+          blurNsfw={blurNsfw}
         />,
         document.body,
       )}

@@ -135,12 +135,12 @@ this UI never asks for a signer to publish, and the publisher never sees a key.
 ## Settings, mobile layout and relay choice
 
 The top-right hamburger opens one settings sheet on both editions: account,
-dark mode, safe search, relay source, and (in the nsite edition) every local
-index control. It is a native `<dialog>`, a full-height sheet below `sm` and
-on coarse pointers, and a centered panel otherwise. The nsite status strip
-keeps only Pause/Resume; its old 11–12px inline form was the part that was
-unreadable on a phone. Touch targets are at least 44px and form text is 16px
-on mobile so iOS does not zoom.
+dark mode, safe search, NSFW media blur, relay source, and (in the nsite
+edition) every local index control. It is a native `<dialog>`, a full-height
+sheet below `sm` and on coarse pointers, and a centered panel otherwise. The
+nsite status strip keeps only Pause/Resume; its old 11–12px inline form was
+the part that was unreadable on a phone. Touch targets are at least 44px and
+form text is 16px on mobile so iOS does not zoom.
 
 A signed-in reader can switch from the site relays to their own NIP-65
 kind:10002 list. `useRelayPreference` reads the `r` tags with no marker or a
@@ -360,6 +360,35 @@ hidden, so turning it on never looks like those results simply don't exist.
 With it off, flagged results show instead with a visible label (the tag's
 own text, e.g. "nsfw") on `ResultRow`/`MediaGridCard` rather than silently
 blending in.
+
+## Blurring NSFW media
+
+[`useBlurNsfw`](src/hooks/useBlurNsfw.ts) is the companion display
+preference for the case safe search doesn't cover: safe search *off*. It is
+on by default and persisted in `localStorage`, and blurs every image, video
+and short whose publisher tagged it NSFW-adjacent — see
+[`lib/nsfw.ts`](src/lib/nsfw.ts), which keyword-matches the free-text
+`content-warning` value (`nsfw`, `nudity`, `explicit`, `18+`, the
+server-side "sensitive content" fallback for a bare tag, and a few similar
+labels). Unrelated warnings such as "flashing lights" are left alone.
+
+The blur is a reveal control, not just a CSS filter:
+
+- `MediaGridCard` and `ResultRow`'s `CompactThumbnail` render the thumbnail
+  blurred with an "NSFW · click to show" overlay. While blurred, the card is
+  not wrapped in its result `<a>` at all, so a click reveals the media
+  instead of navigating to the raw file.
+- `MediaPreviewDialog` shows a blurred poster (when one exists) behind a
+  "Show anyway" panel. A blurred video is deliberately *not* mounted — an
+  Android WebView may autoplay it without a gesture, so a merely blurred
+  player would still play audio.
+- Reveal state is per thumbnail and per dialog, and resets when the dialog
+  closes. It is a reading convenience, not a safety guarantee: this app only
+  trusts the publisher's own label, same as safe search.
+
+The preference lives in the same Settings → Search preferences section as
+safe search and applies to both the server-backed UI and the nsite build,
+since both render these same components.
 
 ## Appearance (light/dark mode)
 

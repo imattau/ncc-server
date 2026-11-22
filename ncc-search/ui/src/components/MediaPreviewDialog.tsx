@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { ExternalLink, ImageIcon, Play, X } from 'lucide-react';
+import { ExternalLink, EyeOff, ImageIcon, Play, X } from 'lucide-react';
 
 import type { SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { mediaPreviewTarget } from '@/lib/mediaPreview';
+import { shouldBlurMedia } from '@/lib/nsfw';
 import { sanitizeHref } from '@/lib/sanitize';
 import { truncateIdentity } from '@/lib/identity';
 
@@ -31,22 +32,34 @@ export function MediaPreviewDialog({
   result,
   open,
   onClose,
+  blurNsfw = false,
 }: {
   result: SearchResult;
   open: boolean;
   onClose: () => void;
+  /** Blur publisher-flagged NSFW media until revealed -- see lib/nsfw.ts. */
+  blurNsfw?: boolean;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const titleId = useId();
   const author = useAuthor(open ? result.pubkey : undefined);
   const [failed, setFailed] = useState(false);
+  // Deliberately not shared with the card that opened this dialog: the grid
+  // tile's reveal is a thumbnail-sized decision, while this is the full-size
+  // file. Closing the dialog resets it (see the effect below).
+  const [revealed, setRevealed] = useState(false);
 
   const target = mediaPreviewTarget(result);
   const displayName = author.data?.metadata?.name?.trim();
   const identity = truncateIdentity(result.nip05 ?? displayName ?? result.npub ?? result.pubkey);
   const title = result.title?.trim() || identity;
   const original = sanitizeHref(result.mediaUrl);
+  // A blurred video must not be mounted at all: Android WebView allows
+  // autoplay without a gesture, so a merely CSS-blurred player would still
+  // play audio. Only an image/poster is safe to show behind the veil.
+  const poster = sanitizeHref(result.thumbnailUrl);
+  const blurred = blurNsfw && shouldBlurMedia(result) && !revealed;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -57,6 +70,7 @@ export function MediaPreviewDialog({
   useEffect(() => {
     if (!open) return;
     setFailed(false);
+    setRevealed(false);
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -109,7 +123,11 @@ export function MediaPreviewDialog({
     // whether the <video> actually exists: re-running here is what captures
     // a player that mounts one render after `open` (the error flag is reset
     // in the effect above), and what releases one that unmounts on error.
-  }, [open, failed, target?.src]);
+    // `blurred` is here for the same reason: revealing a held-back NSFW
+    // video is what mounts the element in the first place, so the cleanup
+    // must be re-captured after that transition or closing the dialog
+    // could leave its audio playing.
+  }, [open, failed, target?.src, blurred]);
 
   return (
     <dialog
@@ -181,6 +199,32 @@ export function MediaPreviewDialog({
                   <ExternalLink className="size-3.5" aria-hidden="true" /> Open original
                 </a>
               )}
+            </div>
+          ) : blurred ? (
+            <div className="relative flex min-h-[18rem] max-h-[calc(90dvh-8rem)] w-full items-center justify-center overflow-hidden">
+              {poster && (
+                <img
+                  src={poster}
+                  alt=""
+                  aria-hidden="true"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="max-h-[calc(90dvh-8rem)] max-w-full scale-110 object-contain blur-2xl"
+                />
+              )}
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/50 px-6 py-10 text-center">
+                <EyeOff className="size-8 text-white/80" aria-hidden="true" />
+                <p className="max-w-md text-sm text-white/85">
+                  The publisher flagged this {target.kind} as &ldquo;{result.contentWarning}&rdquo;.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setRevealed(true)}
+                  className="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-black hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none"
+                >
+                  Show anyway
+                </button>
+              </div>
             </div>
           ) : target.kind === 'image' ? (
             <img

@@ -1,12 +1,14 @@
 import { useState, type MouseEvent } from 'react';
-import { BookOpenText, Image as ImageIcon, Play, Video as VideoIcon } from 'lucide-react';
+import { BookOpenText, EyeOff, Image as ImageIcon, Play, Video as VideoIcon } from 'lucide-react';
 import type { ResultKind, SearchResult } from '@/lib/api';
 import { useAuthor } from '@/hooks/useAuthor';
 import { useMediaProbe } from '@/hooks/useMediaProbe';
 import { useResizedImage } from '@/hooks/useResizedImage';
 import { useBlurhashPlaceholder } from '@/hooks/useBlurhashPlaceholder';
 import { mediaPreviewTarget } from '@/lib/mediaPreview';
+import { shouldBlurMedia } from '@/lib/nsfw';
 import { nsiteHref, sanitizeHref } from '@/lib/sanitize';
+import { cn } from '@/lib/utils';
 import { truncateIdentity } from '@/lib/identity';
 import { Snippet } from '@/components/Snippet';
 import { ArticlePreviewDialog } from '@/components/ArticlePreviewDialog';
@@ -157,12 +159,22 @@ const COMPACT_THUMB_CLASS =
 // a mixed "All" list where most rows are plain text. Reuses the same
 // resize/blurhash pipeline as the full MediaPreview (cached by URL, so
 // switching tabs never re-fetches), just rendered small.
-function CompactThumbnail({ result, onOpen }: { result: SearchResult; onOpen?: () => void }) {
+function CompactThumbnail({
+  result,
+  onOpen,
+  blurNsfw = false,
+}: {
+  result: SearchResult;
+  onOpen?: () => void;
+  blurNsfw?: boolean;
+}) {
   const isImage = result.kind === 'image';
   const isVideo = VIDEO_KINDS.has(result.kind);
   const placeholder = useBlurhashPlaceholder(result.blurhash);
   const resized = useResizedImage(isImage ? sanitizeHref(result.mediaUrl) : null);
   const [failed, setFailed] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const blurred = blurNsfw && shouldBlurMedia(result) && !revealed;
 
   let src: string | null = null;
   if (!failed) {
@@ -197,16 +209,16 @@ function CompactThumbnail({ result, onOpen }: { result: SearchResult; onOpen?: (
 
   const alt = result.title || result.description || `${result.kind} thumbnail`;
   const thumb = (
-    <div className="relative shrink-0">
+    <div className="relative shrink-0 overflow-hidden rounded-md">
       <img
         src={src}
         alt={onOpen ? '' : alt}
         loading="lazy"
         decoding="async"
         onError={() => setFailed(true)}
-        className={COMPACT_THUMB_CLASS}
+        className={cn(COMPACT_THUMB_CLASS, blurred && 'scale-110 blur-lg')}
       />
-      {isVideo && (
+      {isVideo && !blurred && (
         <span
           aria-hidden="true"
           className="absolute inset-0 flex items-center justify-center rounded-md bg-black/10"
@@ -216,8 +228,35 @@ function CompactThumbnail({ result, onOpen }: { result: SearchResult; onOpen?: (
           </span>
         </span>
       )}
+      {blurred && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/50 text-white"
+        >
+          <EyeOff className="size-4" aria-hidden="true" />
+          <span className="max-w-[90%] truncate text-[9px] font-semibold tracking-wide uppercase">
+            {result.contentWarning}
+          </span>
+        </span>
+      )}
     </div>
   );
+
+  // The first click on a blurred thumbnail reveals it; a second click keeps
+  // its normal meaning (open the preview). Doing both at once would show the
+  // media before the reader asked for it.
+  if (blurred) {
+    return (
+      <button
+        type="button"
+        onClick={() => setRevealed(true)}
+        aria-label={`Reveal media the publisher flagged as ${result.contentWarning}`}
+        className="shrink-0 cursor-pointer rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        {thumb}
+      </button>
+    );
+  }
 
   if (!onOpen) return thumb;
   return (
@@ -240,10 +279,13 @@ function CompactThumbnail({ result, onOpen }: { result: SearchResult; onOpen?: (
 export function ResultRow({
   result,
   isFollowed = false,
+  blurNsfw = false,
 }: {
   result: SearchResult;
   /** Whether the signed-in NIP-07 user follows this result's author -- see lib/ranking.ts. */
   isFollowed?: boolean;
+  /** Blur publisher-flagged NSFW media until clicked -- see lib/nsfw.ts. */
+  blurNsfw?: boolean;
 }) {
   const author = useAuthor(result.pubkey);
   const displayName = author.data?.metadata?.name?.trim();
@@ -461,7 +503,12 @@ export function ResultRow({
       )}
 
       {preview && (
-        <MediaPreviewDialog result={result} open={mediaOpen} onClose={() => setMediaOpen(false)} />
+        <MediaPreviewDialog
+          result={result}
+          open={mediaOpen}
+          onClose={() => setMediaOpen(false)}
+          blurNsfw={blurNsfw}
+        />
       )}
     </>
   );
@@ -469,7 +516,11 @@ export function ResultRow({
   if (useCompactThumbnail) {
     return (
       <article className="flex max-w-2xl gap-3 py-5 first:pt-0">
-        <CompactThumbnail result={result} onOpen={preview ? () => setMediaOpen(true) : undefined} />
+        <CompactThumbnail
+          result={result}
+          onOpen={preview ? () => setMediaOpen(true) : undefined}
+          blurNsfw={blurNsfw}
+        />
         <div className="min-w-0 flex-1">{content}</div>
       </article>
     );

@@ -180,9 +180,10 @@ content (src/adapters/article.js + media.js + calendar.js + live.js
                     no reason text) as `contentWarning`, stored verbatim and
                     exposed on `/search` results. This backend makes no
                     safety judgment of its own -- it only exposes what the
-                    publisher tagged; ui/'s safe-search toggle is what
-                    actually filters/labels on it (see ui/README.md
-                    "Safe search")
+                    publisher tagged; ui/'s safe-search and blur-NSFW
+                    preferences are what actually filter, label and blur on
+                    it (see ui/README.md "Safe search" and "Blurring NSFW
+                    media")
 
 profiles (src/adapters/profile.js + profile-crawl.js)  -- Nostr kind:0 metadata
   discoverProfiles -- broad REQ for kind:0; replaceable, so `itemId` is the

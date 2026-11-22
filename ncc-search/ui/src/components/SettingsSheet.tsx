@@ -108,6 +108,8 @@ export function SettingsSheet({
   onToggleTheme,
   safeSearch,
   onToggleSafeSearch,
+  blurNsfw,
+  onToggleBlurNsfw,
   relay,
 }: {
   open: boolean;
@@ -119,6 +121,8 @@ export function SettingsSheet({
   onToggleTheme: () => void;
   safeSearch: boolean;
   onToggleSafeSearch: () => void;
+  blurNsfw: boolean;
+  onToggleBlurNsfw: () => void;
   relay: ReturnType<typeof useRelayPreference>;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -246,6 +250,12 @@ export function SettingsSheet({
               description="Hides results whose publisher tagged them with a NIP-68/71 content warning. This app makes no safety judgment of its own."
               checked={safeSearch}
               onChange={onToggleSafeSearch}
+            />
+            <SettingsToggle
+              label="Blur NSFW media"
+              description="Blurs images, videos and shorts the publisher tagged NSFW or otherwise sensitive, until you click to reveal them. Useful with safe search off, where those results are shown instead of hidden."
+              checked={blurNsfw}
+              onChange={onToggleBlurNsfw}
             />
           </Section>
 

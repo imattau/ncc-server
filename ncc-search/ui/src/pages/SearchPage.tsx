@@ -20,6 +20,7 @@ import { useFollows } from '@/hooks/useFollows';
 import { useInterests } from '@/hooks/useInterests';
 import { useMuteList } from '@/hooks/useMuteList';
 import { useSafeSearch } from '@/hooks/useSafeSearch';
+import { useBlurNsfw } from '@/hooks/useBlurNsfw';
 import { useTheme } from '@/hooks/useTheme';
 import type { SearchResult, SearchSort } from '@/lib/api';
 import { useLocalCrawlStatus } from '@/hooks/useLocalCrawlStatus';
@@ -122,6 +123,7 @@ export function SearchPage() {
   const [taglineSeed] = useState(() => Math.floor(Math.random() * TAGLINES.length));
   const [filter, setFilter] = useState<KindFilter>('all');
   const safeSearch = useSafeSearch();
+  const blurNsfw = useBlurNsfw();
   const theme = useTheme();
 
   // A filter chosen for one query shouldn't silently carry over and hide
@@ -193,7 +195,6 @@ export function SearchPage() {
     || filter === 'video'
     || filter === 'short-video'
     || filter === 'profile';
-  const GridCard = filter === 'profile' ? ProfileGridCard : MediaGridCard;
 
   function handleSubmit(value: string) {
     setQuery(value);
@@ -210,6 +211,8 @@ export function SearchPage() {
       onToggleTheme={theme.toggle}
       safeSearch={safeSearch.enabled}
       onToggleSafeSearch={safeSearch.toggle}
+      blurNsfw={blurNsfw.enabled}
+      onToggleBlurNsfw={blurNsfw.toggle}
       relay={relay}
     />
   );
@@ -351,11 +354,20 @@ export function SearchPage() {
                 ) : isGridView ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                     {filtered.map((r) => (
-                      <GridCard
-                        key={`${r.pubkey}:${r.itemId}:${r.source}`}
-                        result={r}
-                        isFollowed={isFollowed(r, personalization)}
-                      />
+                      filter === 'profile' ? (
+                        <ProfileGridCard
+                          key={`${r.pubkey}:${r.itemId}:${r.source}`}
+                          result={r}
+                          isFollowed={isFollowed(r, personalization)}
+                        />
+                      ) : (
+                        <MediaGridCard
+                          key={`${r.pubkey}:${r.itemId}:${r.source}`}
+                          result={r}
+                          isFollowed={isFollowed(r, personalization)}
+                          blurNsfw={blurNsfw.enabled}
+                        />
+                      )
                     ))}
                   </div>
                 ) : (
@@ -365,6 +377,7 @@ export function SearchPage() {
                         key={`${r.pubkey}:${r.itemId}:${r.source}`}
                         result={r}
                         isFollowed={isFollowed(r, personalization)}
+                        blurNsfw={blurNsfw.enabled}
                       />
                     ))}
                   </div>
