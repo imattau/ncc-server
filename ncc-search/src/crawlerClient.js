@@ -82,6 +82,8 @@ export function createIngestForwarder(client) {
       ingestMedia: forward,
       ingestEvent: forward,
       ingestLiveStream: forward,
+      ingestApp: forward,
+      ingestCommunity: forward,
     },
   };
 }

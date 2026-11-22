@@ -24,6 +24,8 @@ import { KIND_ARTICLE_EVENT } from './article.js';
 import { MEDIA_KINDS, resolveMedia, storeKindFor } from './media.js';
 import { CALENDAR_KINDS } from './calendar.js';
 import { LIVE_STREAM_KINDS } from './live.js';
+import { APP_KINDS, resolveApp } from './app.js';
+import { COMMUNITY_KINDS, resolveCommunity } from './community.js';
 import { stripMarkdown } from './markdown.js';
 
 const SEARCHABLE_KINDS = [
@@ -34,6 +36,8 @@ const SEARCHABLE_KINDS = [
   ...MEDIA_KINDS,
   ...CALENDAR_KINDS,
   ...LIVE_STREAM_KINDS,
+  ...APP_KINDS,
+  ...COMMUNITY_KINDS,
 ];
 
 // Client-supplied relays (NIP-65 fan-out) get a short probe: a search request
@@ -164,6 +168,28 @@ function safeNpub(hexPubkey) {
 }
 
 function toLiveHit(event) {
+  // App and community listings have no generic `title`/`summary` shape to
+  // fall back on, so they go through the same resolvers the crawler uses.
+  // That keeps a live hit identical to the row it will become once indexed.
+  if (APP_KINDS.includes(event.kind) || COMMUNITY_KINDS.includes(event.kind)) {
+    const resolved = APP_KINDS.includes(event.kind) ? resolveApp(event) : resolveCommunity(event);
+    if (!resolved) return null;
+    return {
+      pubkey: event.pubkey,
+      npub: safeNpub(event.pubkey),
+      kind: resolved.kind,
+      itemId: resolved.itemId,
+      title: resolved.title,
+      description: resolved.description,
+      endpoint: resolved.endpoint,
+      thumbnailUrl: resolved.thumbnailUrl,
+      platforms: resolved.platforms ?? null,
+      hashtags: resolved.hashtags,
+      eventId: event.id,
+      source: 'live',
+    };
+  }
+
   const dTag = event.tags.find((t) => t[0] === 'd')?.[1] ?? null;
   const title = event.tags.find((t) => t[0] === 'title')?.[1] ?? null;
   const summaryOrDescription =
@@ -280,13 +306,15 @@ function liveStructuredFields(event, kind) {
  * @typedef {Object} LiveHit
  * @property {string} pubkey
  * @property {string|null} npub - the same pubkey as an npub, when encodable
- * @property {'ncc-service'|'nsite-root'|'nsite-named'|'article'|'image'|'video'|'short-video'|'event'|'live-stream'} kind
+ * @property {'ncc-service'|'nsite-root'|'nsite-named'|'article'|'image'|'video'|'short-video'|'event'|'live-stream'|'app'|'community'} kind
  * @property {string} itemId
  * @property {string|null} title
  * @property {string|null} description
  * @property {string} [mediaUrl] - image/video: the imeta file URL, when present
  * @property {string|null} [mediaType]
  * @property {string|null} [thumbnailUrl]
+ * @property {string|null} [endpoint] - app/community listings: the store URL, or null
+ * @property {string[]|null} [platforms] - app listings: NIP-82 `f` tags
  * @property {string|null} [blurhash]
  * @property {string|null} [thumbhash]
  * @property {string|null} [contentWarning]

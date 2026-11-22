@@ -63,6 +63,16 @@ export const config = {
   // (kind:9900 + their kind:1063 NIP-94 artifact metadata). See
   // adapters/npack.js.
   enableNpack: process.env.NCC_SEARCH_ENABLE_NPACK !== 'false',
+  // Also discover NIP-72 community definitions (kind:34550). A community has
+  // no web endpoint of its own, so this kind is indexed as a relay-native
+  // listing. See adapters/community.js.
+  enableCommunities: process.env.NCC_SEARCH_ENABLE_COMMUNITIES !== 'false',
+  // Also discover NIP-82 (draft "Zapstore spec") software applications
+  // (kind:32267). Apps are normally carried by a store's catalog relay rather
+  // than a general-purpose one, so appRelays is added to the configured
+  // relays for this subscription only. See adapters/app.js.
+  enableApps: process.env.NCC_SEARCH_ENABLE_APPS !== 'false',
+  appRelays: listEnv('NCC_SEARCH_APP_RELAYS', ['wss://relay.zapstore.dev']),
   // Learn additional crawl relays from NIP-65 lists published by authors
   // already present in the index. Configured relays remain the bootstrap set.
   learnRelays: process.env.NCC_SEARCH_LEARN_RELAYS !== 'false',

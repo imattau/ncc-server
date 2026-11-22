@@ -311,3 +311,70 @@ test('a NIP-53 live stream row keeps status, times and the streaming link', () =
   assert.equal(result.startsAt, 1_800_000_000_000);
   assert.equal(result.participantCount, 42);
 });
+
+test('a Zapstore app event becomes an app row with a store link and platforms', () => {
+  const row = eventToRow(
+    event({
+      kind: 32267,
+      content: 'A **private** app store.',
+      tags: [
+        ['d', 'dev.zapstore.app'],
+        ['name', 'Zapstore'],
+        ['summary', 'The private app store'],
+        ['icon', 'https://cdn.example.com/icon.png'],
+        ['f', 'android-arm64-v8a'],
+        ['f', 'linux-x86_64'],
+        ['t', 'Android'],
+      ],
+    }),
+    NOW,
+  );
+
+  assert.ok(row);
+  assert.equal(row.kind, 'app');
+  assert.equal(row.itemId, 'dev.zapstore.app');
+  assert.equal(row.title, 'Zapstore');
+  assert.equal(row.description, 'The private app store');
+  assert.equal(row.thumbnailUrl, 'https://cdn.example.com/icon.png');
+  assert.equal(row.endpoint, 'https://zapstore.dev/apps/dev.zapstore.app');
+  assert.deepEqual(row.platforms, ['android-arm64-v8a', 'linux-x86_64']);
+  assert.deepEqual(row.hashtags, ['android']);
+  assert.equal(row.body, 'A private app store.');
+
+  const result = toSearchResult(row, 'zapstore');
+  assert.equal(result.kind, 'app');
+  assert.equal(result.platforms?.[0], 'android-arm64-v8a');
+});
+
+test('an app with no name is not indexed', () => {
+  assert.equal(eventToRow(event({ kind: 32267, tags: [['d', 'example.app']] }), NOW), null);
+});
+
+test('a NIP-72 community row keeps its image and has no external link', () => {
+  const row = eventToRow(
+    event({
+      kind: 34550,
+      content: 'A place for writers.',
+      tags: [
+        ['d', 'writers'],
+        ['name', 'Nostr Writers'],
+        ['description', 'Fiction and non-fiction'],
+        ['image', 'https://cdn.example.com/community.png'],
+      ],
+    }),
+    NOW,
+  );
+
+  assert.ok(row);
+  assert.equal(row.kind, 'community');
+  assert.equal(row.title, 'Nostr Writers');
+  assert.equal(row.description, 'Fiction and non-fiction');
+  assert.equal(row.thumbnailUrl, 'https://cdn.example.com/community.png');
+  assert.equal(row.endpoint, null);
+  assert.match(row.body ?? '', /A place for writers\./);
+});
+
+test('the d tag is the community title when no name is set', () => {
+  const row = eventToRow(event({ kind: 34550, tags: [['d', 'writers']] }), NOW);
+  assert.equal(row?.title, 'writers');
+});

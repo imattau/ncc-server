@@ -39,6 +39,8 @@ export interface LocalRow {
   /** NIP-53 publisher-declared status. */
   liveStatus?: 'planned' | 'live' | 'ended' | null;
   participantCount?: number | null;
+  /** NIP-82 app listings only: the `f` platform identifiers. */
+  platforms?: string[] | null;
   title: string | null;
   description: string | null;
   /** Plain text, capped at BODY_LIMIT. Never rendered as Markdown. */

@@ -3,9 +3,10 @@
 A separate, standalone process that discovers public Nostr-native content —
 NCC-02/NCC-05 service records, nsites (NIP-5A), NIP-23 articles, NIP-68/71
 pictures and videos (normal and short-form), NIP-52 calendar events, NIP-53
-live streams, Nostr profiles (kind:0), and npack
-(github.com/imattau/npack) package releases — resolves each per its own
-normative contract, and serves unified full-text search over the result.
+live streams, NIP-72 communities, Nostr profiles (kind:0), npack
+(github.com/imattau/npack) package releases, and NIP-82/Zapstore software
+applications — resolves each per its own normative contract, and serves
+unified full-text search over the result.
 
 This is not a feature of `ncc-server` or the `ncc-sidecar`: it runs as its own
 process/service, reads from the same relay list, and is intended to sit behind
@@ -221,6 +222,37 @@ npack (src/adapters/npack.js + npack-crawl.js)   -- github.com/imattau/npack
      stance media.js takes on image/video bytes: a package manager client
      does that, this is a search index, not an installer
 
+communities (src/adapters/community.js)  -- NIP-72 community definitions
+  discoverCommunities -- broad REQ for kind:34550; the event is addressable
+                    and owner-signed, so an updated definition replaces the
+                    row
+  resolveCommunity -- `d` is the identity (and falls back to the title when
+                    there is no `name`), `description`/`image` become the
+                    listing text/thumbnail, `content` is stripped to plain
+                    text for FTS. A community has a relay coordinate
+                    (`naddr`), not a web endpoint, so the row has no
+                    external link. NIP-72 itself is marked "unrecommended"
+                    in favour of NIP-29 relay groups, but it is the concrete
+                    community event publishers sign today.
+
+apps (src/adapters/app.js)  -- NIP-82 software applications / Zapstore
+  discoverApps   -- broad REQ for kind:32267 on the node's relays plus
+                    `NCC_SEARCH_APP_RELAYS` (default `wss://relay.zapstore.dev`),
+                    because app listings are normally only carried by a
+                    store's catalog relay
+  resolveApp     -- `d`/`name` are required; `summary` is the description,
+                    `icon` the thumbnail, repeated `f` tags are exposed as
+                    `platforms`, and `endpoint` is
+                    `https://zapstore.dev/apps/<d>` -- Zapstore's Android
+                    app declares a verified App Link for that path, so the
+                    same link opens the installed store app on mobile and
+                    the web listing elsewhere. Release (30063) and asset
+                    (3063) events are deliberately not indexed: one result
+                    per app listing, not per version.
+  -- NIP-82 is an unmerged draft (nostr-protocol/nips PR #2526, the
+     "Zapstore spec"); this adapter follows the tag shape it and Zapstore's
+     client use in practice. No APK bytes are ever fetched here.
+
 NIP-50 (src/nip11.js + adapters/nip50.js)   -- live search, not a crawl adapter
   Nip11Prober    -- fetches each relay's NIP-11 document (wss:// -> https://,
                     Accept: application/nostr+json), caches whether
@@ -256,9 +288,9 @@ server.js -- GET /search?q= (merges the index with live NIP-50 hits, verified
 
 ## Posting dates and result order
 
-Article, image, video, short-video, event, live-stream, nsite and npack rows
-record `posted_at`: when the event that produced the row was posted, in unix
-seconds. For NIP-23 articles the `published_at` tag wins -- that is the date
+Article, image, video, short-video, event, live-stream, community, app, nsite
+and npack rows record `posted_at`: when the event that produced the row was
+posted, in unix seconds. For NIP-23 articles the `published_at` tag wins -- that is the date
 the author calls the publication date, and unlike `created_at` it does not
 move when the article is edited and republished. Everything else uses the
 event's `created_at` (for a NIP-53 live stream, the latest update). Profiles
@@ -407,6 +439,18 @@ source event is kind 22/34236, and is safe to re-run.
   22/34236 rows indexed before the `short-video` split stay `video` until
   `src/reclassifyVideoKinds.js` runs (see "Short videos and the existing
   index" above).
+- **Apps follow an unmerged NIP.** NIP-82 is a draft (nostr-protocol/nips
+  PR #2526, the "Zapstore spec"); this adapter reads the tag shape Zapstore
+  publishes in practice. Only kind 32267 listings are indexed — release
+  (30063) and asset (3063) events are not, so there is no version or
+  download-size information per result. The app adapter also subscribes to
+  `NCC_SEARCH_APP_RELAYS` (default `wss://relay.zapstore.dev`) in addition
+  to the node's relays, because general relays rarely carry app listings.
+- **Communities have no external link.** A NIP-72 kind 34550 community is
+  addressed by a relay coordinate (`naddr`), not a URL, so its row shows
+  the name, image and description but cannot open anywhere from a browser.
+  NIP-72 is also marked "unrecommended" in favour of NIP-29 relay groups;
+  this index covers the concrete event publishers sign today.
 - **NIP-05 has no defined relation to nsite in the spec** — attaching it is
   this project's own enrichment (parallel to how NCC-02 attestations add
   trust signal on top of a bare service record), not something NIP-5A asks

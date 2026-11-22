@@ -112,9 +112,14 @@ reader's NIP-65 read relays with `/search` for the live NIP-50 fan-out. Those
 relays are validated (wss only, no private/local hosts), capped by
 `SEARCH_MAX_CLIENT_RELAYS` (default 3), and never ingested into the index; set
 it to `false` to keep the API talking only to `SEARCH_RELAYS`. The crawler
-indexes NIP-52 calendar events and NIP-53 live streams by default; set
-`NCC_SEARCH_ENABLE_EVENTS=false` / `NCC_SEARCH_ENABLE_LIVE=false` on
-`search-crawler` to turn either off. `ncc-search/README.md` has the details.
+indexes NIP-52 calendar events, NIP-53 live streams, NIP-72 communities and
+NIP-82/Zapstore app listings by default. App listings are crawled from
+`SEARCH_APP_RELAYS` (default `wss://relay.zapstore.dev`) in addition to
+`SEARCH_RELAYS`, since general relays rarely carry them. Set
+`NCC_SEARCH_ENABLE_EVENTS=false`, `NCC_SEARCH_ENABLE_LIVE=false`,
+`NCC_SEARCH_ENABLE_COMMUNITIES=false` or `NCC_SEARCH_ENABLE_APPS=false` on
+`search-crawler` to turn any of those off. `ncc-search/README.md` has the
+details.
 
 The operator identity is stored at
 `/etc/ncc-server/operator-identity.json` (root-owned, mode 0600), outside the

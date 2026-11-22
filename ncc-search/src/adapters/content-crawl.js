@@ -15,6 +15,8 @@ import { discoverArticles, resolveArticle } from './article.js';
 import { discoverMedia, resolveMedia } from './media.js';
 import { discoverEvents, resolveEvent } from './calendar.js';
 import { discoverLiveStreams, resolveLiveStream } from './live.js';
+import { discoverApps, resolveApp } from './app.js';
+import { discoverCommunities, resolveCommunity } from './community.js';
 import { resolveNip05 } from './nsite.js';
 import { takeSeenRelays } from '../relayTracking.js';
 
@@ -73,6 +75,22 @@ export function startContentCrawler(config, store, pool) {
     scheduleNip05(resolved.pubkey, 0);
   }
 
+  function ingestApp(event) {
+    const resolved = resolveApp(event);
+    if (!resolved) return;
+    const existing = store.getService(resolved.pubkey, resolved.itemId);
+    store.upsertContent(resolved, existing?.nip05 ?? null, takeSeenRelays(pool, event.id));
+    scheduleNip05(resolved.pubkey, 0);
+  }
+
+  function ingestCommunity(event) {
+    const resolved = resolveCommunity(event);
+    if (!resolved) return;
+    const existing = store.getService(resolved.pubkey, resolved.itemId);
+    store.upsertContent(resolved, existing?.nip05 ?? null, takeSeenRelays(pool, event.id));
+    scheduleNip05(resolved.pubkey, 0);
+  }
+
   const subscriptionOptions = { store, monitor: config.crawlMonitor, relayRegistry: config.relayRegistry };
   const articleSub = discoverArticles(pool, config.relays, ingestArticle, subscriptionOptions);
   const mediaSub = discoverMedia(pool, config.relays, ingestMedia, subscriptionOptions);
@@ -81,6 +99,16 @@ export function startContentCrawler(config, store, pool) {
     : null;
   const liveSub = config.enableLive
     ? discoverLiveStreams(pool, config.relays, ingestLiveStream, subscriptionOptions)
+    : null;
+  // Apps are usually only carried by a store's catalog relay, so this
+  // subscription adds the configured app relay(s) to the node's own relays.
+  // Communities use the node's relays like every other relay-native kind.
+  const appRelays = [...new Set([...config.relays, ...(config.appRelays ?? [])])];
+  const appSub = config.enableApps
+    ? discoverApps(pool, appRelays, ingestApp, subscriptionOptions)
+    : null;
+  const communitySub = config.enableCommunities
+    ? discoverCommunities(pool, config.relays, ingestCommunity, subscriptionOptions)
     : null;
 
   async function processNip05(pubkey) {
@@ -114,12 +142,16 @@ export function startContentCrawler(config, store, pool) {
     ingestMedia,
     ingestEvent,
     ingestLiveStream,
+    ingestApp,
+    ingestCommunity,
     stop() {
       clearInterval(interval);
       articleSub.close();
       mediaSub.close();
       eventSub?.close();
       liveSub?.close();
+      appSub?.close();
+      communitySub?.close();
     },
   };
 }

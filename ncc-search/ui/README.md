@@ -16,11 +16,14 @@ actually reads like a search engine result.
 
 - **`ncc-search` backend** (`../src`) owns the crawl, the anchored NCC-02/
   NCC-05 resolution, the nsite (NIP-5A) adapter, the NIP-23/68/71 article and
-  media adapters, NIP-05 verification, and the SQLite/FTS5 full-text index.
+  media adapters, the NIP-52/53 event/live adapters, NIP-72 communities, the
+  NIP-82/Zapstore app adapter, NIP-05 verification, and the SQLite/FTS5
+  full-text index.
   It exposes `GET /search?q=` as plain JSON — see
   [`../src/server.js`](../src/server.js). Results carry a `kind` field
   (`ncc-service` / `nsite-root` / `nsite-named` / `article` / `image` /
-  `video` / `short-video` / `event` / `live-stream` / `profile` / `npack`),
+  `video` / `short-video` / `event` / `live-stream` / `community` /
+  `profile` / `npack` / `app`),
   a `source` field (`index` = verified/discovered by the crawler,
   `live` = a just-found NIP-50 hit, not yet even discovered), and, when
   verified, a `nip05` handle.
@@ -81,7 +84,8 @@ How it works:
   visit is searchable in seconds), then deeper pages up to the depth setting,
   then `kind:0` profiles for the authors of the content it found. It dedupes on
   `(kind, pubkey, item id)` with the newest `created_at` winning, exactly like
-  the backend.
+  the backend. The default relay list includes `wss://relay.zapstore.dev` so
+  the Apps tab has listings; remove it in local index settings to opt out.
 - [`local/db.ts`](src/lib/local/db.ts) stores rows and per-relay crawl cursors
   in IndexedDB. Reopening the page loads that index and resumes from the
   cursors; it does not start over. `navigator.storage.persist()` is requested
@@ -103,9 +107,14 @@ What it can index, and what it deliberately cannot:
 
 - Indexed: articles (`30023`, with `published_at` honoured), pictures (`20`),
   videos (`21`/`34235` and short-form `22`/`34236` as a separate kind),
-  NIP-52 events (`31922`/`31923`), NIP-53 live streams (`30311`), nsite
-  manifests (`15128`/`35128`), npack releases (`9900`), NCC-02 service records
-  (`30059`) and profiles (`0`).
+  NIP-52 events (`31922`/`31923`), NIP-53 live streams (`30311`), NIP-72
+  communities (`34550`), nsite manifests (`15128`/`35128`), npack releases
+  (`9900`), NIP-82/Zapstore apps (`32267`), NCC-02 service records (`30059`)
+  and profiles (`0`). App rows link to `https://zapstore.dev/apps/<id>`;
+  Zapstore's Android client claims that https path as an App Link, so the
+  same link opens the installed store app on a phone and the web listing
+  elsewhere. Community rows have no external link — a NIP-72 community lives
+  at a relay coordinate, not a web URL.
 - Not indexed: anything that requires fetching an arbitrary endpoint. A browser
   cannot read another site's HTML without CORS, so there is no NCC anchor/
   locator resolution, no fetched page titles, no reachability checks, no

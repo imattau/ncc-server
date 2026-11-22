@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools';
 import type { ResultKind, SearchResult } from '@/lib/api';
 import { postedAtOf } from '@shared/postedAt.js';
 import { stripMarkdown } from '@shared/markdown.js';
+import { zapstoreAppUrl } from '@shared/zapstore.js';
 
 import type { LocalRow } from './types';
 
@@ -11,7 +12,7 @@ import type { LocalRow } from './types';
 // no endpoint fetches, so no NCC resolution and no article HTML. The Node
 // crawler indexes the same kinds plus the text it can fetch from endpoints
 // (see ../src/adapters/).
-export const CRAWL_KINDS = [30023, 20, 21, 22, 34235, 34236, 31922, 31923, 30311, 15128, 35128, 9900, 30059] as const;
+export const CRAWL_KINDS = [30023, 20, 21, 22, 34235, 34236, 31922, 31923, 30311, 34550, 32267, 15128, 35128, 9900, 30059] as const;
 
 const KIND_PROFILE = 0;
 const KIND_ARTICLE = 30023;
@@ -23,8 +24,10 @@ const KIND_NCC_SERVICE = 30059;
 const KIND_CALENDAR_DATE = 31922;
 const KIND_CALENDAR_TIME = 31923;
 const KIND_LIVE_STREAM = 30311;
+const KIND_COMMUNITY = 34550;
+const KIND_APP = 32267;
 
-const ADDRESSABLE_KINDS = new Set([30023, 34235, 34236, 35128, 9900, 31922, 31923, 30311]);
+const ADDRESSABLE_KINDS = new Set([30023, 34235, 34236, 35128, 9900, 31922, 31923, 30311, 34550, 32267]);
 
 // Bounds chosen for a browser index, not a server one. Articles are the only
 // kind that regularly produce large text; the rest are titles and summaries.
@@ -64,6 +67,14 @@ function hashtagsOf(event: NostrEvent): string[] | null {
       .filter(Boolean),
   )].slice(0, 12);
   return tags.length ? tags : null;
+}
+
+function tagValues(event: NostrEvent, name: string): string[] {
+  return [...new Set(
+    event.tags
+      .filter((tag) => tag[0] === name && tag[1]?.trim())
+      .map((tag) => tag[1].trim()),
+  )];
 }
 
 /** One `imeta` tag as a key -> first value map (NIP-92 entries are `"key value"` strings). */
@@ -113,6 +124,7 @@ function baseRow(event: NostrEvent, now: number, kind: ResultKind, itemId: strin
     location: null,
     liveStatus: null,
     participantCount: null,
+    platforms: null,
     title: null,
     description: null,
     body: null,
@@ -310,6 +322,45 @@ function npackRow(event: NostrEvent, now: number): LocalRow | null {
   return row;
 }
 
+function appRow(event: NostrEvent, now: number): LocalRow | null {
+  const itemId = tagValue(event, 'd');
+  const name = tagValue(event, 'name');
+  if (!itemId || !name) return null;
+
+  const platforms = tagValues(event, 'f');
+  const row = baseRow(event, now, 'app', itemId);
+  row.title = clip(name, TITLE_LIMIT);
+  row.description = clip(tagValue(event, 'summary'), DESCRIPTION_LIMIT);
+  row.thumbnailUrl = tagValue(event, 'icon');
+  // NIP-82 `d` is the app id. The same https link opens the installed
+  // Zapstore app on Android (its verified App Link) and the listing elsewhere.
+  row.endpoint = zapstoreAppUrl(itemId);
+  row.platforms = platforms.length ? platforms : null;
+  row.hashtags = hashtagsOf(event);
+  row.body = bodyOf(event);
+  return row;
+}
+
+function communityRow(event: NostrEvent, now: number): LocalRow | null {
+  const itemId = tagValue(event, 'd');
+  if (!itemId) return null;
+
+  const name = tagValue(event, 'name');
+  const description = tagValue(event, 'description');
+  const row = baseRow(event, now, 'community', itemId);
+  row.title = clip(name || itemId, TITLE_LIMIT);
+  row.description = clip(description, DESCRIPTION_LIMIT);
+  row.thumbnailUrl = tagValue(event, 'image');
+  // NIP-72 communities live at a relay coordinate (`naddr`), not a web URL.
+  row.endpoint = null;
+  row.hashtags = hashtagsOf(event);
+  row.body = clip(
+    stripMarkdown([event.content ?? '', description ?? ''].filter(Boolean).join(' ')),
+    BODY_LIMIT,
+  );
+  return row;
+}
+
 function nccServiceRow(event: NostrEvent, now: number): LocalRow | null {
   const itemId = tagValue(event, 'd');
   if (!itemId) return null;
@@ -389,6 +440,10 @@ export function eventToRow(event: NostrEvent, now: number): LocalRow | null {
       return nsiteRow(event, now);
     case KIND_NPACK_RELEASE:
       return npackRow(event, now);
+    case KIND_APP:
+      return appRow(event, now);
+    case KIND_COMMUNITY:
+      return communityRow(event, now);
     case KIND_NCC_SERVICE:
       return nccServiceRow(event, now);
     case KIND_PROFILE:
@@ -481,6 +536,7 @@ export function toSearchResult(row: LocalRow, query: string): SearchResult {
     location: row.location ?? null,
     liveStatus: row.liveStatus ?? null,
     participantCount: row.participantCount ?? null,
+    platforms: row.platforms ?? null,
     lastStatus: null,
     title: row.title,
     description: row.description,

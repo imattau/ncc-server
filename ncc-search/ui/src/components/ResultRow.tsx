@@ -26,7 +26,33 @@ const KIND_LABEL: Record<ResultKind, string> = {
   'live-stream': 'live stream',
   profile: 'profile',
   npack: 'package',
+  app: 'app',
+  community: 'community',
 };
+
+const PLATFORM_LABELS: Record<string, string> = {
+  android: 'Android',
+  ios: 'iOS',
+  linux: 'Linux',
+  darwin: 'macOS',
+  macos: 'macOS',
+  windows: 'Windows',
+  web: 'Web',
+};
+
+/**
+ * NIP-82 `f` values are target triples like `android-arm64-v8a` or
+ * `linux-x86_64`. Search readers only need the operating system, so the
+ * architecture suffix is dropped and duplicates collapse; the full list
+ * stays available as the element's title.
+ */
+function platformSummary(platforms: string[]): string {
+  const labels = platforms.map((value) => {
+    const base = value.trim().toLowerCase().split('-')[0];
+    return PLATFORM_LABELS[base] ?? value.trim();
+  });
+  return [...new Set(labels)].slice(0, 3).join(' / ');
+}
 
 const MEDIA_KINDS = new Set<ResultKind>(['image', 'video', 'short-video']);
 const VIDEO_KINDS = new Set<ResultKind>(['video', 'short-video']);
@@ -294,15 +320,18 @@ export function ResultRow({
 
   const isMedia = MEDIA_KINDS.has(result.kind);
   // A compact thumbnail applies to any image/video result, plus
-  // articles (NIP-23 `image` cover) and nsites (an extracted `og:image` --
-  // see extract.js) when one was actually found. Most other kinds have no
-  // thumbnail concept at all, and an nsite with no og:image just falls
+  // articles (NIP-23 `image` cover), nsites (an extracted `og:image` --
+  // see extract.js), communities (their `image`) and apps (their `icon`),
+  // when one was actually found. Most other kinds have no
+  // thumbnail concept at all, and a row with no image just falls
   // through to the plain text row, same as always.
   const hasOptionalThumbnail =
     (result.kind === 'article'
       || result.kind === 'profile'
       || result.kind === 'event'
       || result.kind === 'live-stream'
+      || result.kind === 'app'
+      || result.kind === 'community'
       || result.kind.startsWith('nsite'))
     && !!result.thumbnailUrl;
   const useCompactThumbnail = isMedia || hasOptionalThumbnail;
@@ -364,6 +393,17 @@ export function ResultRow({
         <span className="truncate text-emerald-700 dark:text-emerald-400">{identity}</span>
         <span className="text-muted-foreground" aria-hidden="true">·</span>
         <span className="text-muted-foreground">{KIND_LABEL[result.kind]}</span>
+        {result.platforms && result.platforms.length > 0 && (
+          <>
+            <span className="text-muted-foreground" aria-hidden="true">·</span>
+            <span
+              className="max-w-56 truncate text-xs text-muted-foreground"
+              title={result.platforms.join(', ')}
+            >
+              {platformSummary(result.platforms)}
+            </span>
+          </>
+        )}
         {liveBadge && (
           <>
             <span className="text-muted-foreground" aria-hidden="true">·</span>

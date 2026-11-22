@@ -16,6 +16,9 @@ export const DEFAULT_RELAYS = [
   'wss://relay.primal.net',
   'wss://relay.ditto.pub',
   'wss://nos.lol',
+  // Zapstore's catalog relay, so the Apps tab has listings without the reader
+  // having to find and add it. Remove it in local index settings to opt out.
+  'wss://relay.zapstore.dev',
 ];
 
 /**

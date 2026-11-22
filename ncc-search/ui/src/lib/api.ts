@@ -11,7 +11,9 @@ export type ResultKind =
   | 'event'
   | 'live-stream'
   | 'profile'
-  | 'npack';
+  | 'npack'
+  | 'app'
+  | 'community';
 
 /**
  * Result orders GET /search accepts. `relevance` is the backend's FTS/bm25
@@ -54,6 +56,9 @@ export interface SearchResult {
   liveStatus?: 'planned' | 'live' | 'ended' | null;
   /** NIP-53 current_participants, when the publisher supplied it. */
   participantCount?: number | null;
+  // app only -- NIP-82 `f` platform identifiers (e.g. "android-arm64-v8a"),
+  // shown as labels; null for every other kind.
+  platforms?: string[] | null;
   // For ncc-service/nsite rows, the backend's own reachability check.
   // Always null for article/image/video: this backend never fetches media
   // bytes or re-renders article content, so it has no reachability claim to

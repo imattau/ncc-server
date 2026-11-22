@@ -101,6 +101,10 @@ function rowKeyFor(event) {
       return { kind: 'nsite-named', itemId: addressableId(event) };
     case 9900:
       return { kind: 'npack', itemId: addressableId(event) };
+    case 32267:
+      return { kind: 'app', itemId: addressableId(event) };
+    case 34550:
+      return { kind: 'community', itemId: addressableId(event) };
     default:
       return null;
   }

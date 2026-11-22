@@ -76,6 +76,12 @@ internal
     console.log(`ncc-search live streams adapter: ${config.enableLive ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search profile adapter: ${config.enableProfiles ? 'enabled' : 'disabled'}`);
     console.log(`ncc-search npack adapter: ${config.enableNpack ? 'enabled' : 'disabled'}`);
+    console.log(`ncc-search community adapter: ${config.enableCommunities ? 'enabled' : 'disabled'}`);
+    console.log(
+      config.enableApps
+        ? `ncc-search app adapter: enabled (kind 32267; extra relays: ${(config.appRelays ?? []).join(', ') || 'none'})`
+        : 'ncc-search app adapter: disabled',
+    );
     console.log(
       config.dbMaxBytes > 0
         ? `ncc-search index size limit: ${config.dbMaxBytes} bytes (LRU-pruned)`

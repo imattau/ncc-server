@@ -327,6 +327,7 @@ services:
       # the single writer of /data/ncc-search.db.
       NCC_SEARCH_RELAYS: "${SEARCH_RELAYS}"
       NCC_SEARCH_LEARN_RELAYS: "${SEARCH_LEARN_RELAYS:-true}"
+      NCC_SEARCH_APP_RELAYS: "${SEARCH_APP_RELAYS:-wss://relay.zapstore.dev}"
       NCC_SEARCH_DB_MAX_BYTES: "${SEARCH_DB_MAX_BYTES}"
       # Private listener for the API (crawl health + NIP-50 ingest). Reachable
       # on the compose network only -- no `ports:` below.

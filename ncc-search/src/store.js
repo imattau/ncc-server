@@ -28,6 +28,8 @@ export const KIND_EVENT = 'event';
 export const KIND_LIVE_STREAM = 'live-stream';
 export const KIND_PROFILE = 'profile';
 export const KIND_NPACK = 'npack';
+export const KIND_APP = 'app';
+export const KIND_COMMUNITY = 'community';
 
 /**
  * How long a writer waits for another connection's transaction to commit
@@ -154,6 +156,10 @@ export function openStore(dbPath, opts = {}) {
       status TEXT,
       -- NIP-53 only: the publisher's current participant count.
       participant_count INTEGER,
+      -- app only: NIP-82 f platform identifiers (e.g. android-arm64-v8a),
+      -- stored as a JSON array string so the UI can label the app's targets.
+      -- Null for every other kind.
+      platforms TEXT,
       -- nsite/article/image/video/event/live-stream only (see
       -- relayTracking.js): which
       -- relay(s), by URL, actually delivered the event this row was built
@@ -226,6 +232,7 @@ export function openStore(dbPath, opts = {}) {
       ['location', 'TEXT'],
       ['status', 'TEXT'],
       ['participant_count', 'INTEGER'],
+      ['platforms', 'TEXT'],
     ]) {
       if (!columns.has(name)) db.exec(`ALTER TABLE services ADD COLUMN ${name} ${type}`);
     }
@@ -238,10 +245,10 @@ export function openStore(dbPath, opts = {}) {
     const columns = new Set(
       db.prepare(`PRAGMA table_info(services)`).all().map((column) => column.name),
     );
-    if (!columns.has('posted_at') || !columns.has('starts_at')) {
+    if (!columns.has('posted_at') || !columns.has('starts_at') || !columns.has('platforms')) {
       db.close();
       throw new Error(
-        'index schema is older than this build (services.posted_at/starts_at are missing); waiting for the crawler to migrate it',
+        'index schema is older than this build (services.posted_at/starts_at/platforms are missing); waiting for the crawler to migrate it',
       );
     }
   }
@@ -253,14 +260,14 @@ export function openStore(dbPath, opts = {}) {
       last_resolved_at, last_reachable_at, last_status, last_error,
       title, description, body, media_url, media_type, thumbnail_url,
       blurhash, thumbhash, hashtags, content_warning, posted_at, seen_relays,
-      starts_at, ends_at, all_day, location, status, participant_count
+      starts_at, ends_at, all_day, location, status, participant_count, platforms
     ) VALUES (
       @pubkey, @itemId, @kind, @npub, @nip05, @endpoint, @fingerprint, @family,
       @anchored, @usedFallback, @attestationCount, @isRevoked, @ttlSeconds,
       @lastResolvedAt, @lastReachableAt, @lastStatus, @lastError,
       @title, @description, @body, @mediaUrl, @mediaType, @thumbnailUrl,
       @blurhash, @thumbhash, @hashtags, @contentWarning, @postedAt, @seenRelays,
-      @startsAt, @endsAt, @allDay, @location, @status, @participantCount
+      @startsAt, @endsAt, @allDay, @location, @status, @participantCount, @platforms
     )
     ON CONFLICT (pubkey, item_id) DO UPDATE SET
       kind = excluded.kind,
@@ -300,7 +307,8 @@ export function openStore(dbPath, opts = {}) {
       all_day = excluded.all_day,
       location = COALESCE(excluded.location, services.location),
       status = COALESCE(excluded.status, services.status),
-      participant_count = COALESCE(excluded.participant_count, services.participant_count)
+      participant_count = COALESCE(excluded.participant_count, services.participant_count),
+      platforms = COALESCE(excluded.platforms, services.platforms)
   `);
 
   // Partial updates (e.g. attaching a NIP-05 handle without re-fetching
@@ -354,6 +362,7 @@ export function openStore(dbPath, opts = {}) {
       location: null,
       status: null,
       participantCount: null,
+      platforms: null,
       ...row,
     });
   }
@@ -492,6 +501,8 @@ export function openStore(dbPath, opts = {}) {
       location: resolved.location ?? null,
       status: resolved.status ?? null,
       participantCount: resolved.participantCount ?? null,
+      platforms:
+        resolved.platforms && resolved.platforms.length ? JSON.stringify(resolved.platforms) : null,
     });
   }
 
@@ -571,7 +582,7 @@ export function openStore(dbPath, opts = {}) {
                   s.participant_count AS "participantCount",
                   s.media_url AS "mediaUrl", s.media_type AS "mediaType",
                   s.thumbnail_url AS "thumbnailUrl",
-                  s.blurhash, s.thumbhash, s.hashtags,
+                  s.blurhash, s.thumbhash, s.hashtags, s.platforms,
                   s.content_warning AS "contentWarning",
                   snippet(services_fts, 5, '[', ']', '…', 12) AS snippet,
                   bm25(services_fts, 0, 0, 30.0, 8.0, 5.0, 1.0) AS rank,
@@ -616,6 +627,7 @@ export function openStore(dbPath, opts = {}) {
     return rows.map(({ rank, boost, dupeRank, ...row }) => ({
       ...row,
       hashtags: parseHashtags(row.hashtags),
+      platforms: parseHashtags(row.platforms),
       alternates:
         row.title == null && row.description == null
           ? []
@@ -750,7 +762,7 @@ export function openStore(dbPath, opts = {}) {
 
   function getService(pubkey, itemId) {
     const row = db.prepare(`SELECT * FROM services WHERE pubkey = ? AND item_id = ?`).get(pubkey, itemId);
-    return row ? { ...row, hashtags: parseHashtags(row.hashtags) } : row;
+    return row ? { ...row, hashtags: parseHashtags(row.hashtags), platforms: parseHashtags(row.platforms) } : row;
   }
 
   function listNip65AuthorsToCheck(limit = 5, olderThanSeconds = 7 * 24 * 60 * 60) {

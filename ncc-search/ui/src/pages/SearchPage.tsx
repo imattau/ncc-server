@@ -77,7 +77,9 @@ type KindFilter =
   | 'short-video'
   | 'event'
   | 'live-stream'
+  | 'community'
   | 'profile'
+  | 'app'
   | 'npack';
 
 const KIND_TABS: Array<{ value: KindFilter; label: string }> = [
@@ -90,7 +92,9 @@ const KIND_TABS: Array<{ value: KindFilter; label: string }> = [
   { value: 'short-video', label: 'Shorts' },
   { value: 'event', label: 'Events' },
   { value: 'live-stream', label: 'Live' },
+  { value: 'community', label: 'Communities' },
   { value: 'profile', label: 'Profiles' },
+  { value: 'app', label: 'Apps' },
   { value: 'npack', label: 'Packages' },
 ];
 
@@ -244,7 +248,7 @@ export function SearchPage() {
         <p className="mt-2 max-w-sm text-center text-xs text-muted-foreground/80">
           {local
             ? 'This copy crawls relays in your browser, indexes while the tab is open, and keeps what it finds for next time.'
-            : 'NCC-02 services, nsites, articles, media, events and live streams discovered across configured Nostr relays.'}
+            : 'NCC-02 services, nsites, articles, media, events, live streams, communities and apps discovered across configured Nostr relays.'}
           {pubkey &&
             ' Signed in: results are prioritized by who you follow and your interests, and anyone/anything on your mute list is hidden.'}
         </p>
