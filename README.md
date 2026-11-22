@@ -11,6 +11,10 @@ provisions the NCC service records, and starts the complete stack. A root-only
 host copy is kept outside the container images; services receive the key
 through their managed runtime configuration.
 
+Source: [GitHub](https://github.com/imattau/ncc-server); Nostr git mirror:
+[gitworkshop.dev/npub1khf5…/relay.ngit.dev/ncc-server](https://gitworkshop.dev/npub1khf5amw8mrupe649a5mhkk3d2d8wjj06urz6kwawpftk4f68tjlstdmd3q/relay.ngit.dev/ncc-server),
+kept in sync by the [mirror workflow](docs/nostr-mirror.md).
+
 ## What you need
 
 - A Debian 12 or Ubuntu server or VM with at least 4 GiB RAM and sudo access.
