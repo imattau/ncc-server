@@ -383,7 +383,10 @@ The runner:
 
 1. validates the tag and refuses if the checkout has local changes to tracked
    files (a host-built `public/` is ignored);
-2. fetches and checks out the tag;
+2. fetches and checks out the tag, then checks that every release-owned image
+   exists. If the host's saved GHCR login refuses a public image, the check is
+   retried with an empty Docker config, so a stale credential cannot make a
+   published release look missing (nor require a manual `docker logout`);
 3. pins upstream `ghcr.io/imattau/ncc-server-*` image values in `.env` to the
    release, backing up `.env` first. Custom registries, digest pins and custom
    image repositories are reported as skipped and left alone;

@@ -263,20 +263,15 @@ def image_refs_to_pin(pinned, version):
     return refs
 
 
-def image_manifest_exists(ref):
-    """Whether the registry has `ref`, or None when Docker cannot say.
-
-    Returns False only when Docker reached the registry and it answered that
-    the manifest does not exist. A missing CLI or a Docker too old for
-    `manifest inspect` is "unknown", not "missing", so such a host still
-    upgrades instead of being blocked by the check.
-    """
+def _manifest_inspect(ref, env=None):
+    """Ask the Docker CLI whether `ref` exists; None when it cannot answer."""
     try:
         result = subprocess.run(
             ['docker', 'manifest', 'inspect', ref],
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
     except FileNotFoundError:
         return None
@@ -290,6 +285,25 @@ def image_manifest_exists(ref):
     return False
 
 
+def image_manifest_exists(ref, anonymous=False):
+    """Whether the registry has `ref`, or None when Docker cannot say.
+
+    Returns False only when Docker reached the registry and it answered that
+    the manifest does not exist. A missing CLI or a Docker too old for
+    `manifest inspect` is "unknown", not "missing", so such a host still
+    upgrades instead of being blocked by the check.
+
+    `anonymous=True` runs the same check with an empty Docker config, so a
+    stale or private GHCR login on the host cannot make a public release image
+    look missing. The upgrade itself pulls anonymously on a standard install,
+    so that is the access level this check should reflect.
+    """
+    if not anonymous:
+        return _manifest_inspect(ref)
+    with tempfile.TemporaryDirectory(prefix='ncc-manifest-') as config_dir:
+        return _manifest_inspect(ref, {**os.environ, 'DOCKER_CONFIG': config_dir})
+
+
 def check_release_images(refs):
     """Fail before `.env` changes when the release is not pullable yet.
 
@@ -298,14 +312,23 @@ def check_release_images(refs):
     a deleted image or a failed matrix can still leave the tags missing. This
     turns what would otherwise be a wall of `manifest unknown` pulls into one
     clear error, before any pin is written.
+
+    A saved GHCR credential can also make `docker manifest inspect` refuse a
+    public image. When the first check fails, retry it anonymously; if that
+    works, keep using anonymous checks for the rest of the release instead of
+    sending the operator to a shell for `docker logout`.
     """
     unknown = False
     missing = []
+    anonymous = False
     for ref in refs:
-        exists = image_manifest_exists(ref)
+        exists = image_manifest_exists(ref, anonymous=anonymous)
         if exists is None:
             unknown = True
             break
+        if not exists and not anonymous and image_manifest_exists(ref, anonymous=True):
+            anonymous = True
+            continue
         if not exists:
             missing.append(ref)
     if unknown:
@@ -313,7 +336,8 @@ def check_release_images(refs):
         return
     if missing:
         raise UpgradeError(
-            'The images for this release are not published yet: '
+            'The images for this release are not published yet, or GHCR refused '
+            'this host\'s Docker login: '
             + ', '.join(missing)
             + '. Try again once the release workflow has finished.'
         )

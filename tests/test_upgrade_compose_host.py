@@ -122,6 +122,43 @@ class ReleaseImageTests(unittest.TestCase):
         with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=True):
             UPGRADE.check_release_images(['ghcr.io/imattau/ncc-server-sidecar:0.2.13'])
 
+    def test_a_stale_docker_login_is_retried_anonymously(self):
+        ref = 'ghcr.io/imattau/ncc-server-sidecar:0.2.13'
+        denied = subprocess.CompletedProcess(
+            [], 1, '', 'unauthorized: authentication required')
+        ok = subprocess.CompletedProcess([], 0, '{}', '')
+        with mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, ok]) as run:
+            UPGRADE.check_release_images([ref])
+
+        self.assertEqual(run.call_count, 2)
+        anonymous_env = run.call_args_list[1].kwargs.get('env') or {}
+        self.assertIn('DOCKER_CONFIG', anonymous_env)
+
+    def test_the_rest_of_a_release_reuses_the_anonymous_check(self):
+        first = 'ghcr.io/imattau/ncc-server-sidecar:0.2.13'
+        second = 'ghcr.io/imattau/ncc-server-tor:0.2.13'
+        denied = subprocess.CompletedProcess([], 1, '', 'denied')
+        ok = subprocess.CompletedProcess([], 0, '{}', '')
+        with mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, ok, ok]) as run:
+            UPGRADE.check_release_images([first, second])
+
+        self.assertEqual(run.call_count, 3)
+        for call in run.call_args_list[1:]:
+            self.assertIn('DOCKER_CONFIG', call.kwargs.get('env') or {})
+
+    def test_a_real_missing_image_still_fails_after_the_anonymous_retry(self):
+        missing = 'ghcr.io/imattau/ncc-server-ditto-web:0.2.13'
+        denied = subprocess.CompletedProcess([], 1, '', 'unauthorized')
+        absent = subprocess.CompletedProcess([], 1, '', 'manifest unknown')
+        with mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, absent]):
+            with self.assertRaises(UPGRADE.UpgradeError) as caught:
+                UPGRADE.check_release_images([missing])
+
+        message = str(caught.exception)
+        self.assertIn('not published yet', message)
+        self.assertIn('GHCR refused this host', message)
+        self.assertIn(missing, message)
+
     def test_an_unavailable_registry_check_does_not_block_the_upgrade(self):
         with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=None):
             with contextlib.redirect_stdout(io.StringIO()) as output:
