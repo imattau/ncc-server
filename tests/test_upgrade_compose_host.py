@@ -127,7 +127,8 @@ class ReleaseImageTests(unittest.TestCase):
         denied = subprocess.CompletedProcess(
             [], 1, '', 'unauthorized: authentication required')
         ok = subprocess.CompletedProcess([], 0, '{}', '')
-        with mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, ok]) as run:
+        with mock.patch.object(UPGRADE, '_ghcr_manifest_exists', return_value=None), \
+                mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, ok]) as run:
             UPGRADE.check_release_images([ref])
 
         self.assertEqual(run.call_count, 2)
@@ -139,25 +140,45 @@ class ReleaseImageTests(unittest.TestCase):
         second = 'ghcr.io/imattau/ncc-server-tor:0.2.13'
         denied = subprocess.CompletedProcess([], 1, '', 'denied')
         ok = subprocess.CompletedProcess([], 0, '{}', '')
-        with mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, ok, ok]) as run:
+        with mock.patch.object(UPGRADE, '_ghcr_manifest_exists', return_value=None), \
+                mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, ok, ok]) as run:
             UPGRADE.check_release_images([first, second])
 
         self.assertEqual(run.call_count, 3)
         for call in run.call_args_list[1:]:
             self.assertIn('DOCKER_CONFIG', call.kwargs.get('env') or {})
 
+    def test_the_registry_is_asked_directly_when_docker_cannot_see_it(self):
+        ref = 'ghcr.io/imattau/ncc-server-sidecar:0.2.13'
+        denied = subprocess.CompletedProcess([], 1, '', 'error during connect')
+        with mock.patch.object(UPGRADE, '_ghcr_manifest_exists', return_value=True) as registry, \
+                mock.patch.object(UPGRADE.subprocess, 'run', return_value=denied):
+            UPGRADE.check_release_images([ref])
+
+        registry.assert_called_once_with(ref)
+
     def test_a_real_missing_image_still_fails_after_the_anonymous_retry(self):
         missing = 'ghcr.io/imattau/ncc-server-ditto-web:0.2.13'
         denied = subprocess.CompletedProcess([], 1, '', 'unauthorized')
         absent = subprocess.CompletedProcess([], 1, '', 'manifest unknown')
-        with mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, absent]):
+        with mock.patch.object(UPGRADE, '_ghcr_manifest_exists', return_value=None), \
+                mock.patch.object(UPGRADE.subprocess, 'run', side_effect=[denied, absent]):
             with self.assertRaises(UPGRADE.UpgradeError) as caught:
                 UPGRADE.check_release_images([missing])
 
         message = str(caught.exception)
         self.assertIn('not published yet', message)
-        self.assertIn('GHCR refused this host', message)
+        self.assertIn('could not be checked from this host', message)
         self.assertIn(missing, message)
+
+    def test_the_image_check_can_be_skipped_explicitly(self):
+        with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=False) as check, \
+                mock.patch.dict(UPGRADE.os.environ, {'NCC_UPGRADE_SKIP_IMAGE_CHECK': '1'}):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                UPGRADE.check_release_images(['ghcr.io/imattau/ncc-server-tor:0.2.13'])
+
+        check.assert_not_called()
+        self.assertIn('NCC_UPGRADE_SKIP_IMAGE_CHECK=1', output.getvalue())
 
     def test_an_unavailable_registry_check_does_not_block_the_upgrade(self):
         with mock.patch.object(UPGRADE, 'image_manifest_exists', return_value=None):

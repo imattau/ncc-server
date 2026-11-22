@@ -385,8 +385,11 @@ The runner:
    files (a host-built `public/` is ignored);
 2. fetches and checks out the tag, then checks that every release-owned image
    exists. If the host's saved GHCR login refuses a public image, the check is
-   retried with an empty Docker config, so a stale credential cannot make a
-   published release look missing (nor require a manual `docker logout`);
+   retried with an empty Docker config; when the Docker CLI still cannot
+   confirm an image, the registry is asked directly, so a stale credential or
+   a CLI/daemon network difference cannot make a published release look
+   missing (nor require a manual `docker logout`). Set
+   `NCC_UPGRADE_SKIP_IMAGE_CHECK=1` to skip the check and let the pull decide;
 3. pins upstream `ghcr.io/imattau/ncc-server-*` image values in `.env` to the
    release, backing up `.env` first. Custom registries, digest pins and custom
    image repositories are reported as skipped and left alone;

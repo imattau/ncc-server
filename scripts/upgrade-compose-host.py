@@ -32,6 +32,9 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 
 TARGET_RE = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)$')
@@ -285,23 +288,92 @@ def _manifest_inspect(ref, env=None):
     return False
 
 
+def _ghcr_manifest_exists(ref):
+    """Anonymous GHCR lookup that does not depend on the Docker CLI.
+
+    `docker manifest inspect` runs in the CLI's own network and credential
+    context, which is not necessarily the daemon's: a host whose daemon pulls
+    through a proxy, or whose CLI has a broken credential helper, can answer
+    "missing" for an image that is plainly published. This asks the registry
+    directly, the same way a standard install pulls: an anonymous pull token,
+    then a HEAD for the manifest. Returns None for anything that is not a
+    GHCR reference or when the request cannot be made.
+    """
+    prefix = 'ghcr.io/'
+    if not ref.startswith(prefix):
+        return None
+    rest = ref[len(prefix):]
+    if '@' in rest:
+        repository, reference = rest.split('@', 1)
+    else:
+        repository, _, reference = rest.rpartition(':')
+    if not repository or not reference:
+        return None
+
+    token_url = 'https://ghcr.io/token?' + urllib.parse.urlencode({
+        'scope': f'repository:{repository}:pull',
+        'service': 'ghcr.io',
+    })
+    try:
+        with urllib.request.urlopen(token_url, timeout=30) as response:
+            token = json.loads(response.read().decode('utf-8')).get('token')
+    except (OSError, ValueError, urllib.error.URLError):
+        return None
+    if not token:
+        return None
+
+    request = urllib.request.Request(
+        f'https://ghcr.io/v2/{repository}/manifests/{reference}',
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Accept': ', '.join((
+                'application/vnd.oci.image.index.v1+json',
+                'application/vnd.docker.distribution.manifest.list.v2+json',
+                'application/vnd.oci.image.manifest.v1+json',
+                'application/vnd.docker.distribution.manifest.v2+json',
+            )),
+        },
+        method='HEAD',
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return 200 <= response.status < 300
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403, 404):
+            return False
+        return None
+    except (OSError, urllib.error.URLError):
+        return None
+
+
 def image_manifest_exists(ref, anonymous=False):
     """Whether the registry has `ref`, or None when Docker cannot say.
 
-    Returns False only when Docker reached the registry and it answered that
-    the manifest does not exist. A missing CLI or a Docker too old for
-    `manifest inspect` is "unknown", not "missing", so such a host still
-    upgrades instead of being blocked by the check.
+    Returns False only when the registry says the manifest does not exist. A
+    missing CLI or a Docker too old for `manifest inspect` is "unknown", not
+    "missing", so such a host still upgrades instead of being blocked by the
+    check.
 
-    `anonymous=True` runs the same check with an empty Docker config, so a
-    stale or private GHCR login on the host cannot make a public release image
-    look missing. The upgrade itself pulls anonymously on a standard install,
-    so that is the access level this check should reflect.
+    `anonymous=True` runs the Docker check with an empty config, so a stale or
+    private GHCR login on the host cannot make a public release image look
+    missing. The upgrade itself pulls anonymously on a standard install, so
+    that is the access level this check should reflect.
+
+    Whenever the CLI cannot confirm an image, the registry is asked directly
+    (`_ghcr_manifest_exists`). That covers a CLI whose network or credentials
+    differ from the daemon's, without requiring `docker logout`.
     """
-    if not anonymous:
-        return _manifest_inspect(ref)
-    with tempfile.TemporaryDirectory(prefix='ncc-manifest-') as config_dir:
-        return _manifest_inspect(ref, {**os.environ, 'DOCKER_CONFIG': config_dir})
+    if anonymous:
+        with tempfile.TemporaryDirectory(prefix='ncc-manifest-') as config_dir:
+            result = _manifest_inspect(ref, {**os.environ, 'DOCKER_CONFIG': config_dir})
+    else:
+        result = _manifest_inspect(ref)
+    if result is True:
+        return True
+    registry = _ghcr_manifest_exists(ref)
+    if registry is not None:
+        return registry
+    return result
 
 
 def check_release_images(refs):
@@ -317,7 +389,14 @@ def check_release_images(refs):
     public image. When the first check fails, retry it anonymously; if that
     works, keep using anonymous checks for the rest of the release instead of
     sending the operator to a shell for `docker logout`.
+
+    `NCC_UPGRADE_SKIP_IMAGE_CHECK=1` is the explicit escape hatch for a host
+    whose CLI and Python networking both cannot reach the registry; the pull
+    that follows still fails loudly if the image really is absent.
     """
+    if os.environ.get('NCC_UPGRADE_SKIP_IMAGE_CHECK') == '1':
+        print('Skipping the release image check: NCC_UPGRADE_SKIP_IMAGE_CHECK=1.')
+        return
     unknown = False
     missing = []
     anonymous = False
@@ -336,10 +415,11 @@ def check_release_images(refs):
         return
     if missing:
         raise UpgradeError(
-            'The images for this release are not published yet, or GHCR refused '
-            'this host\'s Docker login: '
+            'The images for this release are not published yet, or the registry '
+            'could not be checked from this host: '
             + ', '.join(missing)
-            + '. Try again once the release workflow has finished.'
+            + '. Try again once the release workflow has finished, or set '
+            'NCC_UPGRADE_SKIP_IMAGE_CHECK=1 to let the pull decide.'
         )
 
 
