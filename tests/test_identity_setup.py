@@ -24,6 +24,7 @@ class IdentitySetupTests(unittest.TestCase):
                     CREATE TABLE admins (pubkey TEXT PRIMARY KEY, status TEXT);
                     INSERT INTO services VALUES (1, 'old-manager', '{"port": 3000}', '{}');
                     INSERT INTO services VALUES (2, 'old-web', '{"port": 8443}', '{}');
+                    INSERT INTO services VALUES (3, 'dedicated-key', '{"service_identity": "dedicated"}', '{}');
                     INSERT INTO admins VALUES ('old-admin', 'active');
                 ''')
 
@@ -32,8 +33,10 @@ class IdentitySetupTests(unittest.TestCase):
             with sqlite3.connect(db_path) as db:
                 services = db.execute('SELECT service_nsec, config FROM services ORDER BY id').fetchall()
                 admins = db.execute('SELECT pubkey, status FROM admins').fetchall()
-            self.assertEqual([row[0] for row in services], ['new-shared-nsec'] * 2)
-            self.assertEqual([row[1] for row in services], ['{"port": 3000}', '{"port": 8443}'])
+            self.assertEqual([row[0] for row in services], ['new-shared-nsec', 'new-shared-nsec', 'dedicated-key'])
+            self.assertEqual([row[1] for row in services], [
+                '{"port": 3000}', '{"port": 8443}', '{"service_identity": "dedicated"}',
+            ])
             self.assertEqual(admins, [('a' * 64, 'active')])
 
     def test_relay_env_replaces_private_key_and_creates_protected_file(self):

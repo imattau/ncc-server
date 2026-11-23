@@ -56,6 +56,7 @@ import {
   republishPanelService,
   resolvePanelApiBase,
   restartPanelService,
+  rotatePanelServiceIdentity,
   savePanelCadence,
   savePanelIdentity,
   savePanelRelays,
@@ -947,12 +948,23 @@ export default function AdminPanel() {
   const [visibilityEditor, setVisibilityEditor] = useState<{
     serviceId: string;
     name: string;
+    npub: string | null;
     mode: 'public' | 'private';
     recipients: string;
     includeAdmins: boolean;
+    newIdentity: boolean;
+    retireOld: boolean;
   } | null>(null);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState('');
+  const [identityEditor, setIdentityEditor] = useState<{
+    serviceId: string;
+    name: string;
+    npub: string | null;
+    retireOld: boolean;
+  } | null>(null);
+  const [newIdentityBusy, setNewIdentityBusy] = useState(false);
+  const [newIdentityError, setNewIdentityError] = useState('');
   const [logsFor, setLogsFor] = useState<PanelService | null>(null);
   const [serviceLogs, setServiceLogs] = useState<PanelServiceLogs | null>(null);
   const [logsState, setLogsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -2240,9 +2252,12 @@ export default function AdminPanel() {
     setVisibilityEditor({
       serviceId: service.id,
       name: serviceMeta(service.id).label,
+      npub: health?.npub ?? service.npub ?? operatorNpub,
       mode,
       recipients: (health?.recipients ?? []).join('\n'),
       includeAdmins: true,
+      newIdentity: false,
+      retireOld: true,
     });
     setVisibilityError('');
   };
@@ -2277,10 +2292,16 @@ export default function AdminPanel() {
         visibilityEditor.mode,
         recipients,
         visibilityEditor.includeAdmins,
+        {
+          newIdentity: visibilityEditor.newIdentity,
+          retireOld: visibilityEditor.retireOld,
+        },
       );
-      notify(saved.mode === 'private'
-        ? `Private locator published to ${saved.recipients.length} recipient(s)`
-        : 'Public locator republished');
+      notify(saved.npub && saved.npub !== saved.previousNpub
+        ? `New npub published: ${shortNpub(saved.npub)}`
+        : saved.mode === 'private'
+          ? `Private locator published to ${saved.recipients.length} recipient(s)`
+          : 'Public locator republished');
       closeVisibility();
       refreshHealth();
       refresh();
@@ -2289,6 +2310,48 @@ export default function AdminPanel() {
       refreshHealth();
     } finally {
       setVisibilityBusy(false);
+    }
+  };
+
+  const openIdentity = (service: PanelService) => {
+    const health = healthById.get(service.id);
+    setIdentityEditor({
+      serviceId: service.id,
+      name: serviceMeta(service.id).label,
+      npub: health?.npub ?? service.npub ?? operatorNpub,
+      retireOld: true,
+    });
+    setIdentityError('');
+  };
+
+  const closeIdentity = () => {
+    setIdentityEditor(null);
+    setNewIdentityError('');
+    setNewIdentityBusy(false);
+  };
+
+  const handleNewIdentity = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!identityEditor || !apiBase || !user) return;
+
+    setNewIdentityError('');
+    setNewIdentityBusy(true);
+    try {
+      const rotated = await rotatePanelServiceIdentity(
+        apiBase,
+        user.signer,
+        identityEditor.serviceId,
+        identityEditor.retireOld,
+      );
+      notify(`New npub for ${identityEditor.name}: ${shortNpub(rotated.npub)}`);
+      closeIdentity();
+      refreshHealth();
+      refresh();
+    } catch (error) {
+      setNewIdentityError(error instanceof Error ? error.message : 'Could not create a new npub');
+      refreshHealth();
+    } finally {
+      setNewIdentityBusy(false);
     }
   };
 
@@ -2842,7 +2905,8 @@ export default function AdminPanel() {
                       const status = statusCopy(service);
                       const health = healthById.get(service.id);
                       const isPrivate = health?.visibility === 'private' || service.private;
-                      const nccHref = nccServiceAddress(operatorNpub, service.id);
+                      const serviceNpub = health?.npub ?? service.npub ?? operatorNpub;
+                      const nccHref = nccServiceAddress(serviceNpub, service.id);
                       const recipients = health?.recipients.length ?? 0;
                       return (
                         <div className="service-row" key={service.id}>
@@ -3446,9 +3510,12 @@ export default function AdminPanel() {
                     const status = statusCopy(service);
                     const health = healthById.get(service.id);
                     const healthLabel = healthCopy(health, healthLoading);
-                    const nccHref = nccServiceAddress(operatorNpub, service.id);
+                    const serviceNpub = health?.npub ?? service.npub ?? operatorNpub;
+                    const nccHref = nccServiceAddress(serviceNpub, service.id);
                     const href = nccHref ?? safeHref(service.endpoint);
+                    const isDedicated = health?.identity === 'dedicated';
                     const canControl = Boolean(authorized && apiBase && user);
+                    const canRekey = canControl && service.id !== 'addr';
                     const restartBusy = controlBusy === `restart:${service.id}`;
                     const republishBusy = controlBusy === `republish:${service.id}`;
                     const isPrivate = health?.visibility === 'private' || service.private;
@@ -3481,6 +3548,7 @@ export default function AdminPanel() {
                               {health?.package?.version
                                 ? `npack v${health.package.version}${health.package.npub ? ` · ${shortNpub(health.package.npub)}` : ''}`
                                 : service.pin ? `pin ${service.pin.slice(0, 16)}…` : 'No certificate pin published'}
+                              {isDedicated ? ` · dedicated ${shortNpub(serviceNpub)}` : ''}
                             </small>
                           </div>
                         </div>
@@ -3531,6 +3599,18 @@ export default function AdminPanel() {
                             title={canControl ? 'Choose who may decrypt this service locator' : 'Sign in to change service visibility'}
                           >
                             <LockKeyhole size={14} /> Access
+                          </button>
+                          <button
+                            onClick={() => openIdentity(service)}
+                            disabled={!canRekey || newIdentityBusy}
+                            title={!canRekey
+                              ? (service.id === 'addr'
+                                ? 'The root address must keep the operator identity'
+                                : 'Sign in to create a new npub')
+                              : 'Create a new npub for this service and retire the old address'}
+                          >
+                            {newIdentityBusy ? <span className="button-spinner" /> : <KeyRound size={14} />}
+                            New npub
                           </button>
                           {href ? (
                             <a
@@ -4284,6 +4364,67 @@ export default function AdminPanel() {
         </div>
       )}
 
+      {identityEditor && (
+        <div
+          className="modal-scrim"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (!newIdentityBusy && event.target === event.currentTarget) closeIdentity();
+          }}
+        >
+          <section className="install-modal visibility-modal" role="dialog" aria-modal="true" aria-labelledby="identity-title">
+            <div className="modal-top">
+              <div className="eyebrow">SERVICE IDENTITY <span>·</span> {identityEditor.name}</div>
+              <button className="icon-quiet" onClick={closeIdentity} aria-label="Close identity" disabled={newIdentityBusy}><X size={19} /></button>
+            </div>
+            <h2 id="identity-title">Create a new npub</h2>
+            <p className="modal-intro">
+              This service will sign its NCC records with a new key. Its address changes from
+              ncc://{identityEditor.npub ? shortNpub(identityEditor.npub) : '<current>'}/
+              {identityEditor.serviceId}/ to the new npub.
+            </p>
+
+            <form onSubmit={handleNewIdentity}>
+              <div className="install-security">
+                <KeyRound size={15} />
+                <span>
+                  Existing links stop resolving under the new key. Share the new address with anyone
+                  who opens this service. The operator and admin keys are not replaced.
+                </span>
+              </div>
+
+              <label className="visibility-check">
+                <input
+                  type="checkbox"
+                  checked={identityEditor.retireOld}
+                  onChange={(event) => setIdentityEditor({
+                    ...identityEditor,
+                    retireOld: event.target.checked,
+                  })}
+                />
+                Retire the old records now
+              </label>
+              <small className="settings-hint">
+                Retirement expires the old locator and republishes its anchor without an endpoint,
+                so clients and search drop the old address. Unchecking leaves it until its normal expiry.
+              </small>
+
+              {newIdentityError && (
+                <p className="invite-error" role="alert"><CircleAlert size={12} /> {newIdentityError}</p>
+              )}
+
+              <div className="modal-buttons">
+                <button type="button" className="button-secondary" onClick={closeIdentity} disabled={newIdentityBusy}>Cancel</button>
+                <button type="submit" className="button-primary" disabled={newIdentityBusy}>
+                  {newIdentityBusy ? <span className="button-spinner" /> : <KeyRound size={14} />}
+                  {newIdentityBusy ? 'Creating…' : 'Create new npub'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
       {visibilityEditor && (
         <div
           className="modal-scrim"
@@ -4338,7 +4479,7 @@ export default function AdminPanel() {
               />
               <small className="settings-hint">
                 One npub per line, or comma-separated. The operator key is always included.
-                Recipients open ncc://{operatorNpub ? shortNpub(operatorNpub) : '<operator>'}/{visibilityEditor.serviceId}/ in NCC Browser.
+                Recipients open ncc://{visibilityEditor.npub ? shortNpub(visibilityEditor.npub) : '<service-npub>'}/{visibilityEditor.serviceId}/ in NCC Browser.
               </small>
 
               <label className="visibility-check">
@@ -4350,6 +4491,38 @@ export default function AdminPanel() {
                 />
                 Include node admin keys as recipients
               </label>
+
+              <label className="visibility-check">
+                <input
+                  type="checkbox"
+                  checked={visibilityEditor.newIdentity}
+                  onChange={(event) => setVisibilityEditor({
+                    ...visibilityEditor,
+                    newIdentity: event.target.checked,
+                  })}
+                  disabled={visibilityEditor.serviceId === 'addr'}
+                />
+                Create a new npub for this service
+              </label>
+              {visibilityEditor.newIdentity && (
+                <label className="visibility-check">
+                  <input
+                    type="checkbox"
+                    checked={visibilityEditor.retireOld}
+                    onChange={(event) => setVisibilityEditor({
+                      ...visibilityEditor,
+                      retireOld: event.target.checked,
+                    })}
+                  />
+                  Retire the old address now
+                </label>
+              )}
+              {visibilityEditor.newIdentity && (
+                <small className="settings-hint">
+                  The ncc:// address changes to the new npub. Existing links must be re-shared.
+                  The old address is expired and marked private when retirement succeeds.
+                </small>
+              )}
 
               <div className="install-security">
                 <LockKeyhole size={15} />

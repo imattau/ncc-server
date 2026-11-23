@@ -98,9 +98,10 @@ def main():
         })
         public_npub = identity.get('npub')
     else:
-        request(f'/api/service/{relay_service["id"]}', 'PUT', {
-            'service_nsec': identity['nsec'],
-        })
+        if relay_service.get('config', {}).get('service_identity') != 'dedicated':
+            request(f'/api/service/{relay_service["id"]}', 'PUT', {
+                'service_nsec': identity['nsec'],
+            })
         public_npub = identity.get('npub')
 
     if not ENV_PATH.exists():

@@ -1,0 +1,453 @@
+
+--- a/src/routes/panel-services.js	2026-11-23 12:07:06.682583176 +1100
++++ b/src/routes/panel-services.js	2026-11-23 14:25:30.635886522 +1100
+@@ -25,6 +25,7 @@
+ import { authorizePanelRequest } from '../panel-auth.js';
+ import { addLog, getAdmins, getConfig, getLogs, getServices, updateService } from '../db.js';
+ import { runPublishCycle } from '../app.js';
++import { rotateServiceIdentity, serviceNpub } from '../service-identity.js';
+ 
+ const AGENT_URL = (process.env.NCC_NODE_AGENT_URL || 'http://127.0.0.1:3010').replace(/\/+$/, '');
+ const AGENT_TOKEN = process.env.NCC_NODE_AGENT_TOKEN || '';
+@@ -729,12 +730,15 @@
+         }
+         : null;
+       const visibility = serviceVisibility(service);
++      const dedicated = service.config?.service_identity === 'dedicated';
+ 
+       return {
+         serviceId: service.service_id,
+         name: service.name,
+         recordId: service.id,
+         status: service.status || 'active',
++        npub: serviceNpub(service),
++        identity: dedicated ? 'dedicated' : 'shared',
+         visibility: visibility.mode,
+         recipients: visibility.npubs,
+         composeServices: compose,
+@@ -843,18 +847,51 @@
+     if (mode === 'private' && recipients.length === 0) {
+       return reply.code(400).send({ error: 'A private service needs at least one recipient' });
+     }
++    const newIdentity = body.newIdentity === true;
++    if (newIdentity && service.service_id === 'addr') {
++      return reply.code(409).send({ error: 'The root addr service must keep the operator identity' });
++    }
+ 
+     const config = {
+       ...(service.config && typeof service.config === 'object' ? service.config : {}),
+       service_mode: mode,
+       ncc05_recipients: recipients,
+     };
+-    updateService(service.id, { config });
+-
+     const npubs = recipients.map(recipientNpub).filter(Boolean);
++
++    let rotated = null;
++    try {
++      if (newIdentity) {
++        rotated = await rotateServiceIdentity(service, {
++          config,
++          retireOld: body.retireOld !== false,
++        });
++      } else {
++        updateService(service.id, { config });
++      }
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The identity change failed';
++      addLog('error', `Visibility not saved for ${service.name}: identity rotation failed`, {
++        serviceId: service.id,
++        serviceMode: mode,
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      return reply.code(502).send({
++        success: false,
++        saved: false,
++        published: false,
++        serviceId: service.service_id,
++        mode,
++        recipients: npubs,
++        error: message,
++      });
++    }
++
++    const updated = rotated?.service || findService(request.params.id) || service;
++    const npub = rotated?.npub || serviceNpub(updated);
+     let published = false;
+     try {
+-      const updated = findService(request.params.id) || service;
+       await runPublishCycle(updated, { forcePublish: true });
+       published = true;
+     } catch (error) {
+@@ -872,6 +909,8 @@
+         serviceId: service.service_id,
+         mode,
+         recipients: npubs,
++        npub,
++        previousNpub: rotated?.previousNpub ?? null,
+         error: message,
+       });
+     }
+@@ -880,6 +919,7 @@
+       serviceId: service.id,
+       serviceMode: mode,
+       recipients: npubs.length,
++      newIdentity,
+       changedBy: caller.pubkey,
+     });
+ 
+@@ -890,6 +930,78 @@
+       serviceId: service.service_id,
+       mode,
+       recipients: npubs,
++      npub,
++      previousNpub: rotated?.previousNpub ?? null,
++      identity: newIdentity ? 'dedicated' : (updated.config?.service_identity === 'dedicated' ? 'dedicated' : 'shared'),
++      retired: Boolean(rotated && !rotated.retirement.skipped),
++      publishedAt: Date.now(),
++    };
++  });
++
++  server.post('/ncc-api/services/:id/identity', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const service = findService(request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++    if (service.type === 'sidecar') {
++      return reply.code(409).send({ error: 'The management service has no published locator' });
++    }
++    if (service.service_id === 'addr') {
++      return reply.code(409).send({ error: 'The root addr service must keep the operator identity' });
++    }
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    let rotated;
++    try {
++      rotated = await rotateServiceIdentity(service, {
++        config: service.config,
++        retireOld: body.retireOld !== false,
++      });
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'Identity rotation failed';
++      addLog('error', `New npub failed for ${service.name} from the NCC admin panel`, {
++        serviceId: service.id,
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      return reply.code(502).send({ success: false, saved: false, published: false, error: message });
++    }
++
++    let published = false;
++    try {
++      await runPublishCycle(rotated.service, { forcePublish: true });
++      published = true;
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The publish cycle failed';
++      return reply.code(502).send({
++        success: false,
++        saved: true,
++        published: false,
++        npub: rotated.npub,
++        previousNpub: rotated.previousNpub,
++        serviceId: rotated.service.service_id,
++        error: message,
++      });
++    }
++
++    addLog('info', `Generated a new npub for ${service.name} from the NCC admin panel`, {
++      serviceId: service.id,
++      previousNpub: rotated.previousNpub,
++      npub: rotated.npub,
++      changedBy: caller.pubkey,
++    });
++
++    return {
++      success: true,
++      saved: true,
++      published: true,
++      serviceId: rotated.service.service_id,
++      npub: rotated.npub,
++      previousNpub: rotated.previousNpub,
++      address: `ncc://${rotated.npub}/${rotated.service.service_id}/`,
++      identity: 'dedicated',
++      retired: !rotated.retirement.skipped,
+       publishedAt: Date.now(),
+     };
+   });
+
+--- a/src/routes/panel-settings.js	2026-11-23 12:07:06.663058478 +1100
++++ b/src/routes/panel-settings.js	2026-11-23 14:25:45.561169975 +1100
+@@ -61,6 +61,22 @@
+   }
+ }
+ 
++/** Every key that may have published a record for this node: shared + dedicated. */
++function recordAuthors() {
++  const authors = new Set();
++  const operator = operatorPubkey();
++  if (operator) authors.add(operator);
++  for (const service of publishingServices()) {
++    if (!service.service_nsec) continue;
++    try {
++      authors.add(getPublicKey(fromNsec(service.service_nsec)));
++    } catch {
++      // A malformed row is reported by the service's own publish cycle.
++    }
++  }
++  return [...authors];
++}
++
+ /** Normalise one relay URL, accepting host, http(s) and ws(s) forms. */
+ export function normalizeRelayUrl(value) {
+   if (typeof value !== 'string') return null;
+@@ -115,9 +131,9 @@
+  * already knows which relays the node publishes to.
+  */
+ async function queryPublishedRecords() {
+-  const pubkey = operatorPubkey();
++  const authors = recordAuthors();
+   const relays = readRelays().slice(0, RECORD_RELAY_LIMIT);
+-  if (!pubkey || relays.length === 0) return { relays: [], events: [] };
++  if (authors.length === 0 || relays.length === 0) return { relays: [], events: [] };
+ 
+   const pool = new SimplePool({ websocketImplementation: WebSocket });
+   const reports = [];
+@@ -133,12 +149,12 @@
+ 
+         const found = await pool.querySync([url], {
+           kinds: [30059, 30058],
+-          authors: [pubkey],
++          authors,
+           limit: 200,
+         }, { maxWait: RECORD_QUERY_TIMEOUT_MS });
+ 
+         for (const event of found) {
+-          if (event.pubkey !== pubkey) continue;
++          if (!authors.includes(event.pubkey)) continue;
+           if (event.kind === 30059) report.anchorCount += 1;
+           else if (event.kind === 30058) report.locatorCount += 1;
+           events.push(event);
+
+--- a/src/routes/services.js	2026-11-23 11:55:55.200246682 +1100
++++ b/src/routes/services.js	2026-11-23 14:25:02.371854654 +1100
+@@ -4,12 +4,13 @@
+ import { runPublishCycle } from '../app.js';
+ import { provisionOnion } from '../onion-service.js';
+ import { generateKeypair, ensureSelfSignedCert } from 'ncc-06-js';
++import { rotateServiceIdentity, serviceNpub } from '../service-identity.js';
+ import path from 'path';
+ import fs from 'fs';
+ 
+ export default async function serviceRoutes(server) {
+   server.get('/api/services', async () => {
+-    return getServices();
++    return getServices().map((service) => ({ ...service, npub: serviceNpub(service) }));
+   });
+ 
+   server.post('/api/service/add', async (request) => {
+@@ -45,6 +46,60 @@
+     return { nsec: keys.nsec, npub: keys.npub };
+   });
+ 
++  // Loopback-only equivalent of the panel's NIP-98 route, used by the CLI.
++  // Generates a new author for one service and retires the old address first.
++  server.post('/api/service/:id/identity', async (request, reply) => {
++    const service = getServices().find((candidate) => String(candidate.id) === String(request.params.id))
++      || getServices().find((candidate) => candidate.service_id === request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++    if (service.type === 'sidecar') {
++      return reply.code(409).send({ error: 'The management service has no published locator' });
++    }
++    if (service.service_id === 'addr') {
++      return reply.code(409).send({ error: 'The root addr service must keep the operator identity' });
++    }
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    let rotated;
++    try {
++      rotated = await rotateServiceIdentity(service, {
++        config: body.config,
++        retireOld: body.retireOld !== false,
++      });
++    } catch (error) {
++      return reply.code(502).send({
++        success: false,
++        error: error instanceof Error ? error.message : 'Identity rotation failed',
++      });
++    }
++
++    try {
++      await runPublishCycle(rotated.service, { forcePublish: true });
++    } catch (error) {
++      return reply.code(502).send({
++        success: false,
++        saved: true,
++        published: false,
++        npub: rotated.npub,
++        previousNpub: rotated.previousNpub,
++        serviceId: rotated.service.service_id,
++        error: error instanceof Error ? error.message : 'Republish failed',
++      });
++    }
++
++    return {
++      success: true,
++      saved: true,
++      published: true,
++      serviceId: rotated.service.service_id,
++      npub: rotated.npub,
++      previousNpub: rotated.previousNpub,
++      address: `ncc://${rotated.npub}/${rotated.service.service_id}/`,
++      retired: !rotated.retirement.skipped,
++      retiredRelays: rotated.retirement.relays,
++    };
++  });
++
+   server.post('/api/services/republish', async () => {
+     const services = getServices().filter(s => s.status === 'active');
+     const details = [];
+
+--- a/src/service-identity.js	1970-01-01 10:00:00.000000000 +1000
++++ b/src/service-identity.js	2026-11-23 14:31:34.211956001 +1100
+@@ -0,0 +1,139 @@
++/** Per-service key rotation and retirement of the old address. */
++
++import { fromNsec, generateKeypair, getPublicKey, toNpub } from 'ncc-06-js';
++import { addLog, getConfig, getServices, updateService } from './db.js';
++import { publishToRelays } from './publisher.js';
++
++function publicationRelays(service) {
++  const configured = Array.isArray(service?.config?.publication_relays)
++    ? service.config.publication_relays.filter(Boolean)
++    : [];
++  if (configured.length) return configured;
++
++  const appConfig = getConfig('app_config') || {};
++  const fromApp = Array.isArray(appConfig.publication_relays)
++    ? appConfig.publication_relays.filter(Boolean)
++    : [];
++  if (fromApp.length) return fromApp;
++
++  const sidecar = getServices().find((candidate) => candidate.type === 'sidecar');
++  return Array.isArray(sidecar?.config?.publication_relays)
++    ? sidecar.config.publication_relays.filter(Boolean)
++    : [];
++}
++
++export function serviceNpub(service) {
++  if (!service?.service_nsec) return null;
++  try {
++    return toNpub(getPublicKey(fromNsec(service.service_nsec)));
++  } catch {
++    return null;
++  }
++}
++
++export function resetPublishState(state) {
++  return {
++    ...(state && typeof state === 'object' ? state : {}),
++    is_probing: false,
++    last_published_ncc02_id: null,
++    last_published_ncc05_id: null,
++    last_published_kind0_id: null,
++    last_primary_endpoint_hash: null,
++    last_endpoints_hash: null,
++    last_profile_hash: null,
++    last_full_publish_timestamp: 0,
++    last_success_per_relay: {},
++  };
++}
++
++/**
++ * Replace the old author's records before the old key is discarded.
++ *
++ * A relocation to a new npub would otherwise leave the previous public locator
++ * (and its fallback `u` anchor) resolvable until its normal expiry. The
++ * locator is expired and the anchor is republished without an endpoint, with
++ * `private=true` so ncc-search drops any row it still has for the old address.
++ */
++export async function retireServiceIdentity(service) {
++  const state = service?.state || {};
++  const hadRecords = Boolean(state.last_published_ncc02_id || state.last_published_ncc05_id);
++  if (!hadRecords) return { retired: true, skipped: true, relays: [] };
++
++  const relays = publicationRelays(service);
++  if (!relays.length) throw new Error('No publication relays are configured, so the old records cannot be retired');
++
++  const secretKey = fromNsec(service.service_nsec);
++  const serviceId = service.service_id;
++  const locatorId = service.config?.locator_id || `${serviceId}-locator`;
++  const now = Math.floor(Date.now() / 1000);
++  const locator = {
++    kind: 30058,
++    created_at: now,
++    tags: [
++      ['d', locatorId],
++      ['expiration', String(now - 1)],
++      ['private', 'true'],
++    ],
++    content: JSON.stringify({ v: 1, ttl: 1, updated_at: now - 2, endpoints: [] }),
++  };
++  const anchor = {
++    kind: 30059,
++    created_at: now,
++    tags: [
++      ['d', serviceId],
++      ['exp', String(now + 86_400)],
++      ['private', 'true'],
++    ],
++    content: `NCC-02 Service Record for ${serviceId}`,
++  };
++
++  const results = await publishToRelays(relays, [locator, anchor], secretKey);
++  const relaysOk = Object.entries(results)
++    .filter(([, result]) => result?.success)
++    .map(([relay]) => relay);
++  const failures = Object.entries(results)
++    .filter(([, result]) => !result?.success)
++    .map(([relay, result]) => `${relay}: ${result?.error || 'publish failed'}`);
++  if (relaysOk.length === 0) {
++    throw new Error(`The old address could not be retired: ${failures.join('; ')}`);
++  }
++  return { retired: true, skipped: false, relays: relaysOk, failures };
++}
++
++/**
++ * Generate a new npub for one service. `config` lets the visibility dialog
++ * change privacy and identity in one publish cycle instead of publishing the
++ * service publicly under its new key first.
++ */
++export async function rotateServiceIdentity(service, { config, retireOld = true } = {}) {
++  if (!service?.service_nsec) throw new Error('That service has no signing key');
++  const previousNpub = serviceNpub(service);
++  let retirement = { retired: false, skipped: true, relays: [] };
++  if (retireOld) retirement = await retireServiceIdentity(service);
++
++  const keys = generateKeypair();
++  const nextConfig = {
++    ...(service.config && typeof service.config === 'object' ? service.config : {}),
++    ...(config && typeof config === 'object' ? config : {}),
++    service_identity: 'dedicated',
++  };
++  updateService(service.id, {
++    service_nsec: keys.nsec,
++    config: nextConfig,
++    state: resetPublishState(service.state),
++  });
++  addLog('info', `Generated a dedicated npub for ${service.name}`, {
++    serviceId: service.id,
++    previousNpub,
++    npub: keys.npub,
++    retiredOldRecords: retirement.retired && !retirement.skipped,
++  });
++
++  return {
++    service: getServices().find((candidate) => String(candidate.id) === String(service.id)) || service,
++    previousNpub,
++    npub: keys.npub,
++    nsec: keys.nsec,
++    retirement,
++  };
++}

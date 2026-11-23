@@ -54,7 +54,12 @@ if (service) {
   await request(`/api/service/${service.id}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'Ditto NCC web test', config, status: 'active', service_nsec: identity.nsec }),
+    body: JSON.stringify({
+      name: 'Ditto NCC web test',
+      config,
+      status: 'active',
+      ...(previous.service_identity === 'dedicated' ? {} : { service_nsec: identity.nsec }),
+    }),
   });
 } else {
   npub = identity.npub;

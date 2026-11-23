@@ -100,6 +100,46 @@ Removing a recipient republishes the locator for the remaining keys; it does
 not revoke an endpoint the removed person already copied. Rotate the endpoint
 or enforce authentication when access must be cut off.
 
+## Dedicated service identities
+
+By default every service is signed by the node's operator key, so its address
+is `ncc://<operator-npub>/<service>/`. A service can instead use its own npub:
+
+- **Installed → New npub** creates a key for that one service and retires the
+  old address.
+- **Installed → Access** has **Create a new npub for this service**, so a
+  change from public to private can also move the service to a new identity in
+  one publish cycle.
+
+The new key signs only that service's NCC-02 anchor and NCC-05 locator. The
+operator and admin keys remain the node's management keys, and they remain
+locator recipients for a private service. The service address becomes:
+
+```text
+ncc://<new-service-npub>/<service>/
+```
+
+Old links must be re-shared. With retirement enabled (the default), the old
+locator is expired and the old anchor is republished without an endpoint and
+marked private, so clients and ncc-search drop the old address. If retirement
+is disabled, the old record remains until its normal TTL/expiry.
+
+The `addr` service is excluded: it is the bare `ncc://<operator-npub>/`
+address, and changing its key would break the node root.
+
+CLI equivalents:
+
+```sh
+sudo make service-rekey SERVICE=search
+sudo make service-rekey SERVICE=search NO_RETIRE=1
+sudo make service-private SERVICE=search NEW_IDENTITY=1 RECIPIENTS="npub1..."
+```
+
+`make service-list` shows each service's address, `shared`/`dedicated` key
+mode, visibility and recipients. Dedicated keys live in `sidecar.db`; keep an
+encrypted backup. Re-provisioning and operator-identity migration preserve
+services marked `service_identity: "dedicated"`.
+
 ## Interaction with search
 
 `ncc-search` deliberately does not decrypt locators and does not index private

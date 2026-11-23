@@ -445,6 +445,10 @@ def install(source, *, private=False, recipients=(), include_admins=True):
         old_recipients = service_visibility.recipients_for(old_config)
         if old_recipients:
             config['ncc05_recipients'] = old_recipients
+        for key in ('service_identity', 'profile', 'locator_id'):
+            if old_config.get(key):
+                config[key] = old_config[key]
+        dedicated = old_config.get('service_identity') == 'dedicated'
 
         env_private = set(service_visibility.split_values(
             [env_values.get('NCC_PRIVATE_SERVICES', '')]))
@@ -481,10 +485,10 @@ def install(source, *, private=False, recipients=(), include_admins=True):
         )
         record = next((item for item in existing if item.get('service_id') == service_id), None)
         if record:
-            record = api(f'/api/service/{record["id"]}', 'PUT', {
-                'name': name, 'service_nsec': identity['nsec'], 'config': config,
-                'status': 'active',
-            })
+            updates = {'name': name, 'config': config, 'status': 'active'}
+            if not dedicated:
+                updates['service_nsec'] = identity['nsec']
+            record = api(f'/api/service/{record["id"]}', 'PUT', updates)
         else:
             record = api('/api/service/add', 'POST', {
                 'type': 'custom', 'name': name, 'service_id': service_id,

@@ -41,6 +41,8 @@ export interface RelayReport {
 
 export interface PanelService {
   id: string;
+  /** Author npub of the anchor/locator for this service, when known. */
+  npub: string | null;
   endpoint: string | null;
   pin: string | null;
   private: boolean;
@@ -277,6 +279,11 @@ export function buildPanelSnapshot(events: NostrEvent[], relayReports: RelayRepo
 
     services.push({
       id,
+      npub: (() => {
+        const author = anchor?.pubkey ?? locator?.pubkey;
+        if (!author) return null;
+        try { return nip19.npubEncode(author); } catch { return null; }
+      })(),
       endpoint,
       pin,
       private: isPrivate,

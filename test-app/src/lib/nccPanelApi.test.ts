@@ -7,6 +7,7 @@ import {
   readNodeImages,
   readPanelPrunePlan,
   readPanelPruneResult,
+  rotatePanelServiceIdentity,
   readResult,
   readServerUpgrade,
   readUpgradeJob,
@@ -479,6 +480,8 @@ describe('private service visibility', () => {
         name: 'ncc-search',
         recordId: 7,
         status: 'active',
+        npub: 'npub1service',
+        identity: 'dedicated',
         visibility: 'private',
         recipients: ['npub1recipient'],
         composeServices: ['search'],
@@ -496,6 +499,8 @@ describe('private service visibility', () => {
 
     expect(health.services[0].visibility).toBe('private');
     expect(health.services[0].recipients).toEqual(['npub1recipient']);
+    expect(health.services[0].npub).toBe('npub1service');
+    expect(health.services[0].identity).toBe('dedicated');
   });
 
   it('sends the mode, recipients and admin choice when saving', async () => {
@@ -506,6 +511,9 @@ describe('private service visibility', () => {
       serviceId: 'search',
       mode: 'private',
       recipients: ['npub1recipient'],
+      npub: 'npub1service',
+      previousNpub: 'npub1old',
+      identity: 'dedicated',
       publishedAt: 10,
     }));
     vi.stubGlobal('fetch', fetchMock);
@@ -517,6 +525,7 @@ describe('private service visibility', () => {
       'private',
       ['npub1recipient'],
       true,
+      { newIdentity: true, retireOld: true },
     );
     vi.unstubAllGlobals();
 
@@ -529,6 +538,38 @@ describe('private service visibility', () => {
       mode: 'private',
       recipients: ['npub1recipient'],
       includeAdmins: true,
+      newIdentity: true,
     });
+  });
+
+  it('requests a new service npub and returns its address', async () => {
+    const fetchMock = vi.fn(async () => response({
+      success: true,
+      saved: true,
+      published: true,
+      serviceId: 'search',
+      npub: 'npub1service',
+      previousNpub: 'npub1old',
+      address: 'ncc://npub1service/search/',
+      publishedAt: 20,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rotated = await rotatePanelServiceIdentity(
+      'https://node.example:8448/ncc-api',
+      signer,
+      'search',
+      true,
+    );
+    vi.unstubAllGlobals();
+
+    expect(rotated).toMatchObject({
+      npub: 'npub1service',
+      previousNpub: 'npub1old',
+      address: 'ncc://npub1service/search/',
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/ncc-api/services/search/identity');
+    expect(init.method).toBe('POST');
   });
 });

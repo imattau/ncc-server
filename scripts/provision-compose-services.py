@@ -95,6 +95,12 @@ def visible_config(config, existing, service_id):
     old_recipients = service_visibility.recipients_for(old)
     if old_recipients:
         updated['ncc05_recipients'] = old_recipients
+    # Provisioning does not own the service key or its private profile. Keep
+    # the marker so identity migration and re-provisioning leave dedicated
+    # services on their own npub.
+    for key in ('service_identity', 'profile', 'locator_id'):
+        if old.get(key):
+            updated[key] = old[key]
 
     policy = VISIBILITY_POLICY
     if service_id in policy['private_services']:
@@ -121,13 +127,19 @@ def visible_config(config, existing, service_id):
 def ensure_service(services, identity, *, service_id, name, config, service_type='custom'):
     current = next((item for item in services if item.get('service_id') == service_id), None)
     config = visible_config(config, current, service_id)
+    dedicated = (current or {}).get('config', {}).get('service_identity') == 'dedicated'
     if current:
-        result = request(f'/api/service/{current["id"]}', 'PUT', {
+        updates = {
             'name': name,
-            'service_nsec': identity['nsec'],
             'config': config,
             'status': 'active',
-        })
+        }
+        # A dedicated service owns its key. Re-sending the shared operator nsec
+        # here would silently replace it and make the existing address stop
+        # resolving.
+        if not dedicated:
+            updates['service_nsec'] = identity['nsec']
+        result = request(f'/api/service/{current["id"]}', 'PUT', updates)
         current.update(result)
         current['name'] = name
         current['config'] = config

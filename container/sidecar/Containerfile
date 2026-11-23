@@ -14,6 +14,7 @@ COPY patches/ncc-sidecar-tor-control-close.patch /tmp/ncc-sidecar-tor-control-cl
 COPY patches/ncc-sidecar-panel-admin-api.patch /tmp/ncc-sidecar-panel-admin-api.patch
 COPY patches/ncc-sidecar-panel-services.patch /tmp/ncc-sidecar-panel-services.patch
 COPY patches/ncc-sidecar-panel-visibility.patch /tmp/ncc-sidecar-panel-visibility.patch
+COPY patches/ncc-sidecar-service-identity.patch /tmp/ncc-sidecar-service-identity.patch
 COPY patches/ncc-sidecar-npack.patch /tmp/ncc-sidecar-npack.patch
 COPY patches/ncc-sidecar-panel-metrics.patch /tmp/ncc-sidecar-panel-metrics.patch
 COPY patches/ncc-sidecar-npanel-sync.patch /tmp/ncc-sidecar-npanel-sync.patch
@@ -55,6 +56,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && if ! grep -q 'ncc-api/services/:id/visibility' src/routes/panel-services.js; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-visibility.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-visibility.patch; \
+     fi \
+  && if ! grep -q 'ncc-api/services/:id/identity' src/routes/panel-services.js; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-service-identity.patch \
+       && patch -p1 < /tmp/ncc-sidecar-service-identity.patch; \
      fi \
   && if [ ! -f src/routes/panel-upgrade.js ]; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-upgrade.patch \

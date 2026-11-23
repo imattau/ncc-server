@@ -519,6 +519,8 @@ export interface PanelServiceStatus {
   name: string;
   recordId: number;
   status: string;
+  npub: string | null;
+  identity: 'shared' | 'dedicated';
   visibility: 'public' | 'private';
   recipients: string[];
   composeServices: string[];
@@ -651,6 +653,8 @@ function readServiceStatus(value: unknown): PanelServiceStatus | null {
     name: typeof record.name === 'string' ? record.name : record.serviceId,
     recordId: numberOrNull(record.recordId) ?? 0,
     status: typeof record.status === 'string' ? record.status : 'active',
+    npub: stringOrNull(record.npub),
+    identity: record.identity === 'dedicated' ? 'dedicated' : 'shared',
     visibility: record.visibility === 'private' ? 'private' : 'public',
     recipients: Array.isArray(record.recipients)
       ? record.recipients.filter((value): value is string => typeof value === 'string')
@@ -750,6 +754,9 @@ export async function loadPanelServiceLogs(
 export interface PanelServiceVisibility {
   mode: 'public' | 'private';
   recipients: string[];
+  npub: string | null;
+  previousNpub: string | null;
+  identity: 'shared' | 'dedicated';
   publishedAt: number;
 }
 
@@ -761,12 +768,19 @@ export async function savePanelServiceVisibility(
   mode: 'public' | 'private',
   recipients: string[],
   includeAdmins: boolean,
+  options: { newIdentity?: boolean; retireOld?: boolean } = {},
   signal?: AbortSignal,
 ): Promise<PanelServiceVisibility> {
   const payload = await requestJson(
     base, signer, 'PUT',
     `/services/${encodeURIComponent(serviceId)}/visibility`,
-    { mode, recipients, includeAdmins },
+    {
+      mode,
+      recipients,
+      includeAdmins,
+      ...(options.newIdentity ? { newIdentity: true } : {}),
+      ...(options.retireOld === false ? { retireOld: false } : {}),
+    },
     signal,
   );
   const record = objectValue(payload);
@@ -779,6 +793,46 @@ export async function savePanelServiceVisibility(
     recipients: Array.isArray(record.recipients)
       ? record.recipients.filter((value): value is string => typeof value === 'string')
       : [],
+    npub: stringOrNull(record.npub),
+    previousNpub: stringOrNull(record.previousNpub),
+    identity: record.identity === 'dedicated' ? 'dedicated' : 'shared',
+    publishedAt: numberOrNull(record.publishedAt) ?? Date.now(),
+  };
+}
+
+export interface PanelServiceIdentity {
+  npub: string;
+  previousNpub: string | null;
+  address: string;
+  publishedAt: number;
+}
+
+/** Give one service a new signing key and retire its old records. */
+export async function rotatePanelServiceIdentity(
+  base: string,
+  signer: PanelSigner,
+  serviceId: string,
+  retireOld = true,
+  signal?: AbortSignal,
+): Promise<PanelServiceIdentity> {
+  const payload = await requestJson(
+    base, signer, 'POST',
+    `/services/${encodeURIComponent(serviceId)}/identity`,
+    retireOld ? undefined : { retireOld: false },
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || typeof record.serviceId !== 'string'
+    || typeof record.npub !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the new npub');
+  }
+
+  return {
+    npub: record.npub,
+    previousNpub: stringOrNull(record.previousNpub),
+    address: typeof record.address === 'string'
+      ? record.address
+      : `ncc://${record.npub}/${record.serviceId}/`,
     publishedAt: numberOrNull(record.publishedAt) ?? Date.now(),
   };
 }

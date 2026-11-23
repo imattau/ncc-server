@@ -47,6 +47,7 @@ describe('buildPanelSnapshot', () => {
     expect(snapshot.services).toHaveLength(1);
     expect(snapshot.services[0]).toMatchObject({
       id: 'web',
+      npub: 'npub1hwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwasxw04hu',
       endpoint: 'https://example.com:8443/',
       pin: 'pin',
       ttlSeconds: 43200,

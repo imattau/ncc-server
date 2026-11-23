@@ -101,6 +101,47 @@ class VisibilityTests(unittest.TestCase):
             {'service_mode': 'public', 'ncc05_recipients': []}, None, 'web')
         self.assertEqual(config['service_mode'], 'public')
 
+    def test_reprovision_preserves_a_dedicated_identity_marker(self):
+        existing = {
+            'service_id': 'search',
+            'config': {
+                'service_identity': 'dedicated',
+                'profile': {'name': 'search'},
+                'locator_id': 'search-locator',
+            },
+        }
+        config = PROVISION.visible_config(
+            {'service_mode': 'public', 'ncc05_recipients': [], 'port': 8447},
+            existing,
+            'search',
+        )
+        self.assertEqual(config['service_identity'], 'dedicated')
+        self.assertEqual(config['profile'], {'name': 'search'})
+        self.assertEqual(config['locator_id'], 'search-locator')
+
+    def test_dedicated_service_keeps_its_key_when_reprovisioned(self):
+        existing = {
+            'id': 7,
+            'service_id': 'search',
+            'config': {'service_identity': 'dedicated'},
+        }
+        calls = []
+
+        def request(path, method='GET', data=None, timeout=60):
+            calls.append({'path': path, 'method': method, 'data': data})
+            return {'id': 7, 'service_id': 'search'}
+
+        with mock.patch.object(PROVISION, 'request', side_effect=request):
+            PROVISION.ensure_service(
+                [existing], {'nsec': 'operator-nsec'}, service_id='search',
+                name='ncc-search',
+                config={'service_mode': 'public', 'ncc05_recipients': []},
+            )
+
+        body = calls[0]['data']
+        self.assertNotIn('service_nsec', body)
+        self.assertEqual(body['config']['service_identity'], 'dedicated')
+
 
 if __name__ == '__main__':
     unittest.main()

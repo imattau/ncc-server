@@ -132,7 +132,14 @@ def update_relay_env(path, nsec, relay_url):
 def migrate_database(db_path, nsec, pubkey):
     with sqlite3.connect(db_path) as db:
         db.execute('BEGIN IMMEDIATE')
-        db.execute('UPDATE services SET service_nsec = ?', (nsec,))
+        # Dedicated service keys are deliberately independent of the operator
+        # identity. Rotating them here would silently change their ncc://
+        # addresses and discard the only copy of each key.
+        db.execute(
+            "UPDATE services SET service_nsec = ? "
+            "WHERE COALESCE(json_extract(config, '$.service_identity'), '') != 'dedicated'",
+            (nsec,),
+        )
         db.execute('DELETE FROM admins')
         db.execute('INSERT INTO admins (pubkey, status) VALUES (?, ?)',
                    (pubkey, 'active'))

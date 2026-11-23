@@ -236,7 +236,9 @@ deletes its data directory.
 ## Security notes
 
 - The nsec is managed by the sidecar and stored in its SQLite database; it is
-  not in the project env file. Restrict access to the database and its backups.
+  not in the project env file. A service that has its own npub stores that key
+  there too. Restrict access to the database and its backups; losing a
+  dedicated key means that service's records can no longer be updated.
 - Public locator records disclose endpoint metadata by design. Do not publish a
   private or administrative endpoint this way. A private service encrypts the
   locator but still leaves its port reachable; private is unlisting, not access

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package service-list service-private service-public test-node-agent
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package service-list service-private service-public service-rekey test-node-agent
 
 install:
 	sudo ./scripts/install.sh
@@ -143,12 +143,18 @@ service-list:
 	sudo python3 ./scripts/service_visibility.py list
 
 service-private:
-	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-private SERVICE=search [RECIPIENTS="npub1...,npub1..."] [NO_ADMINS=1]' >&2; exit 2)
-	sudo python3 ./scripts/service_visibility.py set --service "$(SERVICE)" --mode private $(if $(RECIPIENTS),--recipients "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
+	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-private SERVICE=search [RECIPIENTS="npub1...,npub1..."] [NO_ADMINS=1] [NEW_IDENTITY=1]' >&2; exit 2)
+	sudo python3 ./scripts/service_visibility.py set --service "$(SERVICE)" --mode private $(if $(RECIPIENTS),--recipients "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins) $(if $(NEW_IDENTITY),--new-identity) $(if $(NO_RETIRE),--no-retire)
 
 service-public:
 	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-public SERVICE=search' >&2; exit 2)
-	sudo python3 ./scripts/service_visibility.py set --service "$(SERVICE)" --mode public
+	sudo python3 ./scripts/service_visibility.py set --service "$(SERVICE)" --mode public $(if $(NEW_IDENTITY),--new-identity) $(if $(NO_RETIRE),--no-retire)
+
+# Give one service a new signing npub. Old records are expired and republished
+# as a private, endpoint-less anchor unless NO_RETIRE=1 is set.
+service-rekey:
+	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-rekey SERVICE=search [NO_RETIRE=1]' >&2; exit 2)
+	sudo python3 ./scripts/service_visibility.py rekey --service "$(SERVICE)" $(if $(NO_RETIRE),--no-retire)
 
 # Install a signed npack service package (REF=npub/name[@version]) or a local
 # .npk descriptor (NPK=/path/file.npk). Pass YES=1 to skip the publisher

@@ -40,8 +40,10 @@ republish a record, restart a container or pull and recreate one of the
 bundle's images; the sidecar forwards container work to the node-agent and
 never touches Docker itself, and package installation stays a host command.
 **Installed → Access** changes a service between a public locator and an
-encrypted locator for the operator, admins and any added npubs; see
-[private services](private-services.md).
+encrypted locator for the operator, admins and any added npubs. The same
+dialog can create a new npub for the service while changing visibility.
+**Installed → New npub** gives one service its own signing key and retires the
+old address. See [private services](private-services.md).
 Host CPU load, memory and disk are read from the node-agent and shown in the
 sidebar and on the overview; anything the agent cannot measure is shown as
 `unknown` rather than invented.
@@ -84,9 +86,13 @@ verifies nothing itself: the sidecar checks each request.
   NIP-98; the token is the authorization)
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
 - `PUT /ncc-api/services/<id>/visibility` with `{"mode": "private",
-  "recipients": ["npub1…"], "includeAdmins": true}` — publish a plaintext
-  locator or encrypt it to the operator, admins and listed keys; forces a
-  republish. See [private services](private-services.md)
+  "recipients": ["npub1…"], "includeAdmins": true, "newIdentity": true,
+  "retireOld": true}` — publish a plaintext locator or encrypt it to the
+  operator, admins and listed keys; optional new identity and old-record
+  retirement are applied in the same cycle. See
+  [private services](private-services.md)
+- `POST /ncc-api/services/<id>/identity` with `{"retireOld": true}` — generate
+  a new npub for one service, retire the old address and republish it
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
 - `GET /ncc-api/catalogue/service?event=<id>` — verify and unpack one release

@@ -274,14 +274,18 @@ def print_list(services):
     for service in sorted(services, key=lambda item: item.get('service_id') or ''):
         config = service.get('config') or {}
         recipients = [encode_npub(value) for value in recipients_for(config)]
+        npub = service.get('npub')
+        address = f"ncc://{npub}/{service.get('service_id')}/" if npub else '-'
         rows.append((
             service.get('service_id') or '?',
+            address,
+            'dedicated' if config.get('service_identity') == 'dedicated' else 'shared',
             visibility(config),
             ', '.join(recipients) if recipients else '-',
         ))
-    widths = [max(len(row[index]) for row in rows + [('SERVICE', 'MODE', 'RECIPIENTS')])
-              for index in range(3)]
-    header = ('SERVICE', 'MODE', 'RECIPIENTS')
+    widths = [max(len(row[index]) for row in rows + [('SERVICE', 'ADDRESS', 'KEY', 'MODE', 'RECIPIENTS')])
+              for index in range(5)]
+    header = ('SERVICE', 'ADDRESS', 'KEY', 'MODE', 'RECIPIENTS')
     print('  '.join(value.ljust(widths[index]) for index, value in enumerate(header)))
     for row in rows:
         print('  '.join(value.ljust(widths[index]) for index, value in enumerate(row)))
@@ -292,6 +296,11 @@ def run_set(args):
         fail('run through make service-private/service-public, or as root')
     services = service_records()
     targets = choose_targets(services, args.service)
+    if args.new_identity:
+        if len(targets) != 1:
+            fail('--new-identity can only be used for one service at a time')
+        if targets[0].get('service_id') == 'addr':
+            fail('the root addr service must keep the operator identity')
     operator = operator_pubkey(read_env())
     admins = admin_pubkeys()
     explicit = normalize_recipients(args.recipients)
@@ -313,8 +322,21 @@ def run_set(args):
     if args.dry_run:
         print('Dry run; no sidecar records will change.')
         for service, config in plans:
+            suffix = ' with a new npub' if args.new_identity else ''
             print(f"{service.get('service_id')}: {args.mode}"
-                  f" ({len(recipients_for(config))} recipient(s))")
+                  f" ({len(recipients_for(config))} recipient(s)){suffix}")
+        return
+
+    if args.new_identity:
+        service, config = plans[0]
+        result = request(f'/api/service/{service["id"]}/identity', 'POST', {
+            'config': config,
+            'retireOld': not args.no_retire,
+        }, timeout=600)
+        if not result.get('success'):
+            fail(result.get('error') or 'identity rotation failed')
+        print(f"Created {result.get('npub')} for {service.get('service_id')}.")
+        print(f"NCC address: {result.get('address')}")
         return
 
     for service, config in plans:
@@ -338,6 +360,28 @@ def run_set(args):
     print(f"Republished {len(plans)} service record(s).")
 
 
+def run_rekey(args):
+    if os.geteuid() != 0:
+        fail('run through make service-rekey, or as root')
+    service = choose_targets(service_records(), [args.service])[0]
+    if service.get('service_id') == 'addr':
+        fail('the root addr service must keep the operator identity')
+    if args.dry_run:
+        print(f"Would create a new npub for {service.get('service_id')} "
+              f"(retire old: {not args.no_retire}).")
+        return
+    result = request(f'/api/service/{service["id"]}/identity', 'POST', {
+        'retireOld': not args.no_retire,
+    }, timeout=600)
+    if not result.get('success'):
+        fail(result.get('error') or 'identity rotation failed')
+    print(f"Created {result.get('npub')} for {service.get('service_id')}.")
+    print(f"Previous npub: {result.get('previousNpub') or '-'}")
+    print(f"NCC address: {result.get('address')}")
+    if result.get('retired') is False:
+        print('Warning: old records were not retired; they remain until their normal expiry.')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest='action', required=True)
@@ -352,12 +396,24 @@ def main(argv=None):
                             help='npub or hex keys, comma- or space-separated; repeated')
     set_parser.add_argument('--no-admins', action='store_true',
                             help='do not include node admin keys as recipients')
+    set_parser.add_argument('--new-identity', action='store_true',
+                            help='create a new npub for the service and retire its old address')
+    set_parser.add_argument('--no-retire', action='store_true',
+                            help='with --new-identity, leave the old records until their expiry')
     set_parser.add_argument('--dry-run', action='store_true')
     set_parser.add_argument('--no-republish', action='store_true')
+
+    rekey_parser = subparsers.add_parser('rekey', help='give one service a new npub')
+    rekey_parser.add_argument('--service', required=True, help='service ID')
+    rekey_parser.add_argument('--no-retire', action='store_true')
+    rekey_parser.add_argument('--dry-run', action='store_true')
 
     args = parser.parse_args(argv)
     if args.action == 'list':
         print_list(service_records())
+        return 0
+    if args.action == 'rekey':
+        run_rekey(args)
         return 0
     run_set(args)
     return 0
