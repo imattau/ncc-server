@@ -913,7 +913,17 @@ export function openStore(dbPath, opts = {}) {
     return { prunedRows };
   }
 
+  const serviceExistsStmt = db.prepare(
+    `SELECT 1 FROM services WHERE pubkey = ? AND item_id = ?`,
+  );
+
   function removeService(pubkey, itemId) {
+    // FTS5 has no index on these UNINDEXED columns, so deleting by
+    // (pubkey, item_id) scans the whole full-text table. Most private
+    // services were never indexed at all, and an unconditional delete makes
+    // every one of those scans run during a crawl. Check the ordinary row
+    // first; an absent service has no FTS row to remove.
+    if (!serviceExistsStmt.get(pubkey, itemId)) return 0;
     deleteFtsStmt.run(pubkey, itemId);
     return deleteServiceStmt.run(pubkey, itemId).changes;
   }

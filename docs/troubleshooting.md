@@ -415,6 +415,28 @@ If **use my NIP-65 relay list** has no effect on live results, check:
 - the relay advertises NIP-50 in its NIP-11 document. The node's own index is
   unchanged by this setting; only live, `source: "live"` hits use those relays.
 
+### `search-crawler` is unhealthy after an upgrade
+
+`search-crawler` serves its health endpoint from the same Node event loop that
+writes the SQLite/FTS index. A first-import burst after a restart can keep that
+loop busy long enough that the default 5-second Docker probe reports
+`Health check exceeded timeout`, even though the process is alive and still
+indexing. The health check now allows 15 seconds and a 90-second start period.
+
+If the container stays unhealthy after that window, check whether it is
+actually progressing:
+
+~~~sh
+sudo docker stats --no-stream ncc-bundle_search-crawler_1
+sudo docker logs --tail 200 ncc-bundle_search-crawler_1
+sudo docker-compose -p ncc-bundle exec search-crawler \
+  node -e "fetch('http://127.0.0.1:7781/health').then(r=>r.text()).then(console.log).catch(console.error)"
+~~~
+
+A large unbounded index makes full-text maintenance slower. Set
+`SEARCH_DB_MAX_BYTES` in `.env` to enable LRU pruning, then recreate the search
+containers so the crawler migrates to `auto_vacuum` and enforces the ceiling.
+
 ## App catalogue is empty or unavailable
 
 The **Apps** page reads signed service packages from the node's `npack`

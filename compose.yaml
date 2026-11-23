@@ -350,9 +350,13 @@ services:
         - -e
         - "fetch('http://127.0.0.1:7781/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 20s
-      timeout: 5s
+      # The crawler's event loop can be busy with a first-import burst after
+      # an upgrade. Docker's default 5s is short enough that a live process
+      # looks dead while it is committing the backlog; this is liveness, not
+      # a search-latency budget.
+      timeout: 15s
       retries: 5
-      start_period: 15s
+      start_period: 90s
     logging: *bounded-logs
 
   search-ui:
