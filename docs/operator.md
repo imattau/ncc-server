@@ -94,9 +94,12 @@ admin npub and configure:
    generic HTTP service type in the pinned UI).
 2. IPv4 enabled, port 8080, with the desired primary address family. Disable
    Tor unless the host has intentionally configured Tor.
-3. Service mode `public`. The sidecar defaults to `private`; private mode with
-   no recipient does not publish a locator. Public mode explicitly opts out of
-   locator encryption. The locator will expose the endpoint to relays.
+3. Service mode `public` for the normal bundle. The sidecar defaults to
+   `private`; private mode with no recipient does not publish a locator. Public
+   mode explicitly opts out of locator encryption and exposes the endpoint to
+   relays. To keep a service unlisted, use `make service-private` (or the
+   panel's **Access** dialog) after provisioning; see
+   [private services](private-services.md).
 4. A publication relay set. The Compose defaults use the tested pair
    `wss://relay.primal.net` and `wss://relay.ditto.pub`.
 5. NCC-05 TTL and refresh interval so the refresh interval is shorter than the
@@ -235,7 +238,9 @@ deletes its data directory.
 - The nsec is managed by the sidecar and stored in its SQLite database; it is
   not in the project env file. Restrict access to the database and its backups.
 - Public locator records disclose endpoint metadata by design. Do not publish a
-  private or administrative endpoint this way.
+  private or administrative endpoint this way. A private service encrypts the
+  locator but still leaves its port reachable; private is unlisting, not access
+  control. See [private services](private-services.md).
 - Keep the sidecar admin API on localhost. Do not pass its installer's
   `--allow-remote` option or expose port 3000 through the firewall.
 - Use only one service profile in v0.1. Multi-service publishing and NIP-46

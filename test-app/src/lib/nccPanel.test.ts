@@ -67,6 +67,30 @@ describe('buildPanelSnapshot', () => {
     expect(snapshot.services[0].endpoint).toBe('wss://relay.example:8444/relay/');
   });
 
+  it('marks an encrypted locator as private and hides its endpoint', () => {
+    const anchor = event({
+      kind: 30059,
+      tags: [['d', 'admin'], ['private', 'true'], ['k', 'pin']],
+    });
+    const locator = event({
+      id: 'e'.repeat(64),
+      kind: 30058,
+      tags: [['d', 'admin-locator'], ['private', 'true']],
+      content: 'nip44-ciphertext-that-is-not-json',
+    });
+
+    const snapshot = buildPanelSnapshot([anchor, locator], [report]);
+
+    expect(snapshot.services).toHaveLength(1);
+    expect(snapshot.services[0]).toMatchObject({
+      id: 'admin',
+      endpoint: null,
+      pin: 'pin',
+      private: true,
+      status: 'private',
+    });
+  });
+
   it('marks a service with only a locator as locator-only', () => {
     const snapshot = buildPanelSnapshot([
       event({

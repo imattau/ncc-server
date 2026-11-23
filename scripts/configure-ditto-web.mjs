@@ -29,11 +29,16 @@ async function request(path, options) {
 const endpoint = `https://${host}:${port}/`;
 const identity = JSON.parse(readFileSync(identityPath, 'utf8'));
 if (!identity.nsec || !identity.npub) throw new Error(`Invalid shared Nostr identity at ${identityPath}`);
+const services = await request('/api/services');
+let service = services.find((candidate) => candidate.service_id === 'ditto');
+const previous = service?.config ?? {};
 const config = {
+  ...previous,
   refresh_interval_minutes: 360,
   ncc02_expiry_days: 14,
   ncc05_ttl_hours: 12,
-  service_mode: 'public',
+  service_mode: previous.service_mode === 'private' ? 'private' : 'public',
+  ncc05_recipients: Array.isArray(previous.ncc05_recipients) ? previous.ncc05_recipients : [],
   generate_self_signed: false,
   protocols: { ipv4: true, ipv6: false, tor: false },
   primary_protocol: 'ipv4',
@@ -44,8 +49,6 @@ const config = {
   endpoints: [{ url: endpoint, family: 'ipv4', protocol: 'https', priority: 1, k: pin }],
 };
 
-const services = await request('/api/services');
-let service = services.find((candidate) => candidate.service_id === 'ditto');
 let npub;
 if (service) {
   await request(`/api/service/${service.id}`, {

@@ -90,7 +90,9 @@ fetch -> extract page content -> index that content. See
   only ever resolves it with no signer, so an encrypted payload simply fails
   to decode and is treated as "no locator" — it never attempts to decrypt a
   private locator. That mirrors this project's own public-locator opt-in
-  stance (see the root README's callout).
+  stance (see the root README's callout). NCC-02 anchors tagged
+  `private=true` are skipped entirely, so a private service does not appear
+  as an unreachable public entry and any earlier public row is removed.
 
 Resolution order, implemented in [`src/resolver.js`](src/resolver.js) by
 composing the two reference libraries the sidecar itself depends on

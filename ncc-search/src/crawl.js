@@ -72,6 +72,16 @@ export function startCrawler(config, store, pool) {
   async function processOne(pubkey, serviceId) {
     const resolved = await resolver.resolveService(pubkey, serviceId);
 
+    // A private service's anchor has no endpoint and its locator is encrypted
+    // to chosen readers. The index has no signer and must not list it as a
+    // broken public service. Drop any row left from a public period and check
+    // again later in case the operator makes it public.
+    if (resolved.isPrivate) {
+      store.removeService(pubkey, serviceId);
+      schedule(pubkey, serviceId, DEFAULT_RECRAWL_MS);
+      return;
+    }
+
     let fetched = {};
     if (resolved.endpoint && !resolved.isRevoked) {
       try {

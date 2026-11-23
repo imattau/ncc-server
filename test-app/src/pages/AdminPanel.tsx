@@ -59,6 +59,7 @@ import {
   savePanelCadence,
   savePanelIdentity,
   savePanelRelays,
+  savePanelServiceVisibility,
   setPanelCatalogueTrust,
   startServerUpgrade,
   updatePanelImages,
@@ -328,6 +329,8 @@ function statusCopy(service: PanelService): { label: string; tone: string } {
       return { label: 'Anchor only', tone: 'muted' };
     case 'locator-only':
       return { label: 'Locator only', tone: 'muted' };
+    case 'private':
+      return { label: 'Private', tone: 'muted' };
   }
 }
 
@@ -941,6 +944,15 @@ export default function AdminPanel() {
   const [controlBusy, setControlBusy] = useState<string | null>(null);
   const [controlError, setControlError] = useState('');
   const [confirmRestart, setConfirmRestart] = useState<string | null>(null);
+  const [visibilityEditor, setVisibilityEditor] = useState<{
+    serviceId: string;
+    name: string;
+    mode: 'public' | 'private';
+    recipients: string;
+    includeAdmins: boolean;
+  } | null>(null);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const [visibilityError, setVisibilityError] = useState('');
   const [logsFor, setLogsFor] = useState<PanelService | null>(null);
   const [serviceLogs, setServiceLogs] = useState<PanelServiceLogs | null>(null);
   const [logsState, setLogsState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -2222,6 +2234,64 @@ export default function AdminPanel() {
     }
   };
 
+  const openVisibility = (service: PanelService) => {
+    const health = healthById.get(service.id);
+    const mode = health?.visibility ?? (service.private ? 'private' : 'public');
+    setVisibilityEditor({
+      serviceId: service.id,
+      name: serviceMeta(service.id).label,
+      mode,
+      recipients: (health?.recipients ?? []).join('\n'),
+      includeAdmins: true,
+    });
+    setVisibilityError('');
+  };
+
+  const closeVisibility = () => {
+    setVisibilityEditor(null);
+    setVisibilityError('');
+    setVisibilityBusy(false);
+  };
+
+  const handleSaveVisibility = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!visibilityEditor || !apiBase || !user) return;
+
+    const recipients = visibilityEditor.recipients
+      .split(/[\s,]+/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const invalid = recipients.find((value) => pubkeyFromAdminInput(value) === null);
+    if (invalid) {
+      setVisibilityError(`Not a valid npub or public key: ${invalid}`);
+      return;
+    }
+
+    setVisibilityError('');
+    setVisibilityBusy(true);
+    try {
+      const saved = await savePanelServiceVisibility(
+        apiBase,
+        user.signer,
+        visibilityEditor.serviceId,
+        visibilityEditor.mode,
+        recipients,
+        visibilityEditor.includeAdmins,
+      );
+      notify(saved.mode === 'private'
+        ? `Private locator published to ${saved.recipients.length} recipient(s)`
+        : 'Public locator republished');
+      closeVisibility();
+      refreshHealth();
+      refresh();
+    } catch (error) {
+      setVisibilityError(error instanceof Error ? error.message : 'Could not change service visibility');
+      refreshHealth();
+    } finally {
+      setVisibilityBusy(false);
+    }
+  };
+
   const handleRestart = async (service: PanelService) => {
     if (!apiBase || !user) return;
 
@@ -2770,6 +2840,10 @@ export default function AdminPanel() {
                     {services.slice(0, 3).map((service) => {
                       const meta = serviceMeta(service.id);
                       const status = statusCopy(service);
+                      const health = healthById.get(service.id);
+                      const isPrivate = health?.visibility === 'private' || service.private;
+                      const nccHref = nccServiceAddress(operatorNpub, service.id);
+                      const recipients = health?.recipients.length ?? 0;
                       return (
                         <div className="service-row" key={service.id}>
                           <IconBox icon={meta.icon} tint={meta.tint} />
@@ -2777,11 +2851,19 @@ export default function AdminPanel() {
                           <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
                           <button
                             className="locator-link"
-                            onClick={() => service.endpoint && copy(service.endpoint, 'Endpoint')}
-                            disabled={!service.endpoint}
-                            title={service.endpoint ?? 'No endpoint published'}
+                            onClick={() => {
+                              if (isPrivate && nccHref) copy(nccHref, 'NCC address');
+                              else if (service.endpoint) copy(service.endpoint, 'Endpoint');
+                            }}
+                            disabled={isPrivate ? !nccHref : !service.endpoint}
+                            title={isPrivate
+                              ? `Encrypted to ${recipients} recipient${recipients === 1 ? '' : 's'}${nccHref ? ` · copy ${nccHref}` : ''}`
+                              : (service.endpoint ?? 'No endpoint published')}
                           >
-                            <span>{service.endpoint ?? 'No endpoint'}</span><Copy size={14} />
+                            <span>{isPrivate
+                              ? `Encrypted · ${recipients} recipient${recipients === 1 ? '' : 's'}`
+                              : (service.endpoint ?? 'No endpoint')}</span>
+                            {isPrivate ? <LockKeyhole size={14} /> : <Copy size={14} />}
                           </button>
                           <button className="icon-quiet" onClick={() => setSection('Installed')} aria-label={`Manage ${meta.label}`} title="Open installed services">
                             <MoreHorizontal size={19} />
@@ -3369,6 +3451,7 @@ export default function AdminPanel() {
                     const canControl = Boolean(authorized && apiBase && user);
                     const restartBusy = controlBusy === `restart:${service.id}`;
                     const republishBusy = controlBusy === `republish:${service.id}`;
+                    const isPrivate = health?.visibility === 'private' || service.private;
                     const canRestart = canControl && Boolean(health?.restartable) && !healthLoading;
                     const restartTitle = !canControl
                       ? 'Sign in to control services'
@@ -3388,6 +3471,11 @@ export default function AdminPanel() {
                             <div className="installed-title">
                               <strong>{meta.label}</strong>
                               <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
+                              {isPrivate && (
+                                <span className="status-pill muted" title="The locator is encrypted to its recipients">
+                                  <LockKeyhole size={11} /> Private
+                                </span>
+                              )}
                             </div>
                             <small>
                               {health?.package?.version
@@ -3397,7 +3485,14 @@ export default function AdminPanel() {
                           </div>
                         </div>
                         <div className="installed-details">
-                          <div><span>PUBLIC ENDPOINT</span><strong>{service.endpoint ?? 'Not published'}</strong></div>
+                          <div>
+                            <span>{isPrivate ? 'PRIVATE LOCATOR' : 'PUBLIC ENDPOINT'}</span>
+                            <strong>
+                              {isPrivate
+                                ? `${health?.recipients.length ?? 0} recipient${(health?.recipients.length ?? 0) === 1 ? '' : 's'}`
+                                : (service.endpoint ?? 'Not published')}
+                            </strong>
+                          </div>
                           <div>
                             <span>HEALTH</span>
                             <strong className={healthLabel.tone} title={healthLabel.detail || undefined}>
@@ -3429,6 +3524,13 @@ export default function AdminPanel() {
                           >
                             {republishBusy ? <span className="button-spinner" /> : <Radio size={14} />}
                             {republishBusy ? 'Republishing…' : 'Republish'}
+                          </button>
+                          <button
+                            onClick={() => openVisibility(service)}
+                            disabled={!canControl || visibilityBusy}
+                            title={canControl ? 'Choose who may decrypt this service locator' : 'Sign in to change service visibility'}
+                          >
+                            <LockKeyhole size={14} /> Access
                           </button>
                           {href ? (
                             <a
@@ -4178,6 +4280,97 @@ export default function AdminPanel() {
               )}
               <button className="button-secondary" onClick={closeRelease}>Close</button>
             </div>
+          </section>
+        </div>
+      )}
+
+      {visibilityEditor && (
+        <div
+          className="modal-scrim"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (!visibilityBusy && event.target === event.currentTarget) closeVisibility();
+          }}
+        >
+          <section className="install-modal visibility-modal" role="dialog" aria-modal="true" aria-labelledby="visibility-title">
+            <div className="modal-top">
+              <div className="eyebrow">PRIVATE ACCESS <span>·</span> {visibilityEditor.name}</div>
+              <button className="icon-quiet" onClick={closeVisibility} aria-label="Close visibility" disabled={visibilityBusy}><X size={19} /></button>
+            </div>
+            <h2 id="visibility-title">Service visibility</h2>
+            <p className="modal-intro">
+              A private locator encrypts this service&rsquo;s endpoint to the recipient keys.
+              Relays still see that the service exists and when it changed, not where it points.
+            </p>
+
+            <form onSubmit={handleSaveVisibility}>
+              <div className="visibility-choice" role="radiogroup" aria-label="Service visibility">
+                <label className={visibilityEditor.mode === 'public' ? 'selected' : ''}>
+                  <input
+                    type="radio"
+                    name="visibility"
+                    checked={visibilityEditor.mode === 'public'}
+                    onChange={() => setVisibilityEditor({ ...visibilityEditor, mode: 'public' })}
+                  />
+                  <span><strong>Public</strong><small>Anyone with the address can resolve the endpoint.</small></span>
+                </label>
+                <label className={visibilityEditor.mode === 'private' ? 'selected' : ''}>
+                  <input
+                    type="radio"
+                    name="visibility"
+                    checked={visibilityEditor.mode === 'private'}
+                    onChange={() => setVisibilityEditor({ ...visibilityEditor, mode: 'private' })}
+                  />
+                  <span><strong>Private</strong><small>Only the listed keys can decrypt the locator.</small></span>
+                </label>
+              </div>
+
+              <label htmlFor="visibility-recipients">LOCATOR RECIPIENTS</label>
+              <textarea
+                id="visibility-recipients"
+                className="visibility-recipients"
+                rows={5}
+                value={visibilityEditor.recipients}
+                onChange={(event) => setVisibilityEditor({ ...visibilityEditor, recipients: event.target.value })}
+                placeholder="npub1…"
+                disabled={visibilityEditor.mode !== 'private'}
+                spellCheck={false}
+              />
+              <small className="settings-hint">
+                One npub per line, or comma-separated. The operator key is always included.
+                Recipients open ncc://{operatorNpub ? shortNpub(operatorNpub) : '<operator>'}/{visibilityEditor.serviceId}/ in NCC Browser.
+              </small>
+
+              <label className="visibility-check">
+                <input
+                  type="checkbox"
+                  checked={visibilityEditor.includeAdmins}
+                  onChange={(event) => setVisibilityEditor({ ...visibilityEditor, includeAdmins: event.target.checked })}
+                  disabled={visibilityEditor.mode !== 'private'}
+                />
+                Include node admin keys as recipients
+              </label>
+
+              <div className="install-security">
+                <LockKeyhole size={15} />
+                <span>
+                  Private is unlisting, not access control. The service port stays reachable;
+                  use its own login or a firewall when the content itself must be protected.
+                </span>
+              </div>
+
+              {visibilityError && (
+                <p className="invite-error" role="alert"><CircleAlert size={12} /> {visibilityError}</p>
+              )}
+
+              <div className="modal-buttons">
+                <button type="button" className="button-secondary" onClick={closeVisibility} disabled={visibilityBusy}>Cancel</button>
+                <button type="submit" className="button-primary" disabled={visibilityBusy}>
+                  {visibilityBusy ? <span className="button-spinner" /> : <LockKeyhole size={14} />}
+                  {visibilityBusy ? 'Publishing…' : 'Save and republish'}
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       )}

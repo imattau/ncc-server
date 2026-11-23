@@ -1,0 +1,190 @@
+diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
+--- a/src/routes/panel-services.js	2026-11-23 12:07:06.675999454 +1100
++++ b/src/routes/panel-services.js	2026-11-23 12:06:49.838916110 +1100
+@@ -20,8 +20,10 @@
+ import https from 'node:https';
+ import net from 'node:net';
+ 
++import { nip19 } from 'nostr-tools';
++
+ import { authorizePanelRequest } from '../panel-auth.js';
+-import { addLog, getConfig, getLogs, getServices } from '../db.js';
++import { addLog, getAdmins, getConfig, getLogs, getServices, updateService } from '../db.js';
+ import { runPublishCycle } from '../app.js';
+ 
+ const AGENT_URL = (process.env.NCC_NODE_AGENT_URL || 'http://127.0.0.1:3010').replace(/\/+$/, '');
+@@ -31,6 +33,7 @@
+ const PROBE_TIMEOUT_MS = 3500;
+ const AGENT_TIMEOUT_MS = 5000;
+ const MAX_LOG_LINES = 500;
++const HEX_PUBKEY = /^[0-9a-f]{64}$/i;
+ 
+ /**
+  * Compose services that back each standard NCC service. Custom services store
+@@ -94,6 +97,56 @@
+     || null;
+ }
+ 
++function parsePubkey(value) {
++  if (typeof value !== 'string') return null;
++  const trimmed = value.trim();
++  if (HEX_PUBKEY.test(trimmed)) return trimmed.toLowerCase();
++  if (!trimmed.toLowerCase().startsWith('npub1')) return null;
++  try {
++    const decoded = nip19.decode(trimmed.toLowerCase());
++    return decoded.type === 'npub' ? decoded.data.toLowerCase() : null;
++  } catch {
++    return null;
++  }
++}
++
++function recipientNpub(value) {
++  if (typeof value !== 'string' || !HEX_PUBKEY.test(value)) return null;
++  try {
++    return nip19.npubEncode(value.toLowerCase());
++  } catch {
++    return null;
++  }
++}
++
++function serviceVisibility(service) {
++  const config = service.config && typeof service.config === 'object' ? service.config : {};
++  const mode = config.service_mode === 'private' ? 'private' : 'public';
++  const recipients = Array.isArray(config.ncc05_recipients)
++    ? config.ncc05_recipients
++      .map(parsePubkey)
++      .filter((value) => value !== null)
++    : [];
++  return {
++    mode,
++    recipients: [...new Set(recipients)],
++    npubs: [...new Set(recipients)].map(recipientNpub).filter(Boolean),
++  };
++}
++
++function defaultRecipients(explicit, includeAdmins) {
++  const adminKeys = getAdmins()
++    .map((admin) => parsePubkey(admin.pubkey))
++    .filter((value) => value !== null);
++  const recipients = includeAdmins
++    ? [...explicit]
++    : explicit.filter((value) => !adminKeys.includes(value));
++  const operator = parsePubkey(process.env.NCC_OPERATOR_PUBKEY || '');
++  if (operator) recipients.push(operator);
++  if (includeAdmins) recipients.push(...adminKeys);
++  return [...new Set(recipients)];
++}
++
+ function probe(target, timeoutMs = PROBE_TIMEOUT_MS) {
+   return new Promise((resolve) => {
+     let settled = false;
+@@ -675,12 +728,15 @@
+           verified: service.config.npack.verified === true,
+         }
+         : null;
++      const visibility = serviceVisibility(service);
+ 
+       return {
+         serviceId: service.service_id,
+         name: service.name,
+         recordId: service.id,
+         status: service.status || 'active',
++        visibility: visibility.mode,
++        recipients: visibility.npubs,
+         composeServices: compose,
+         probe: probeResult,
+         container: containers.length
+@@ -751,6 +807,93 @@
+     return { serviceId: service.service_id, node, container };
+   });
+ 
++  server.put('/ncc-api/services/:id/visibility', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const service = findService(request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++    if (service.type === 'sidecar') {
++      return reply.code(409).send({ error: 'The management service has no published locator' });
++    }
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    const mode = body.mode === 'private' ? 'private' : body.mode === 'public' ? 'public' : null;
++    if (!mode) {
++      return reply.code(400).send({ error: 'mode must be public or private' });
++    }
++
++    const supplied = body.recipients === undefined ? [] : body.recipients;
++    if (!Array.isArray(supplied)) {
++      return reply.code(400).send({ error: 'recipients must be an array of npub or hex keys' });
++    }
++    const explicit = [];
++    for (const value of supplied) {
++      const pubkey = parsePubkey(value);
++      if (!pubkey) {
++        return reply.code(400).send({
++          error: `Not a valid npub or 64-character hex public key: ${String(value).slice(0, 80)}`,
++        });
++      }
++      explicit.push(pubkey);
++    }
++
++    const includeAdmins = body.includeAdmins !== false;
++    const recipients = defaultRecipients(explicit, includeAdmins);
++    if (mode === 'private' && recipients.length === 0) {
++      return reply.code(400).send({ error: 'A private service needs at least one recipient' });
++    }
++
++    const config = {
++      ...(service.config && typeof service.config === 'object' ? service.config : {}),
++      service_mode: mode,
++      ncc05_recipients: recipients,
++    };
++    updateService(service.id, { config });
++
++    const npubs = recipients.map(recipientNpub).filter(Boolean);
++    let published = false;
++    try {
++      const updated = findService(request.params.id) || service;
++      await runPublishCycle(updated, { forcePublish: true });
++      published = true;
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'The publish cycle failed';
++      addLog('error', `Visibility saved but republish failed for ${service.name}`, {
++        serviceId: service.id,
++        serviceMode: mode,
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      return reply.code(502).send({
++        success: false,
++        saved: true,
++        published: false,
++        serviceId: service.service_id,
++        mode,
++        recipients: npubs,
++        error: message,
++      });
++    }
++
++    addLog('info', `Set ${service.name} to ${mode} service from the NCC admin panel`, {
++      serviceId: service.id,
++      serviceMode: mode,
++      recipients: npubs.length,
++      changedBy: caller.pubkey,
++    });
++
++    return {
++      success: true,
++      saved: true,
++      published,
++      serviceId: service.service_id,
++      mode,
++      recipients: npubs,
++      publishedAt: Date.now(),
++    };
++  });
++
+   server.post('/ncc-api/services/:id/republish', async (request, reply) => {
+     const caller = authorizePanelRequest(request, reply);
+     if (!caller) return;

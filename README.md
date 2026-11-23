@@ -33,8 +33,14 @@ should not be reachable.
 The admin panel is published as an NCC service on port 8448 and its root
 opens `/admin`. Sign in with the node operator key or an admin key; the Admins
 section adds and removes admin keys, Settings edits the published identity,
-relays and cadence, and Installed shows health, logs, republish and container
-restart controls. Every change is a NIP-98-signed request to the sidecar.
+relays and cadence, and Installed shows health, logs, republish, container
+restart and per-service **Access** controls. Every change is a NIP-98-signed
+request to the sidecar.
+Services publish public locators by default. `make service-private SERVICE=…`
+(or the panel's Access dialog) encrypts a service's locator to the operator,
+admins and any extra recipient keys; see
+[private services](docs/private-services.md). Private is unlisting, not access
+control.
 The **Apps** page starts with the node's own images, which can be pulled and
 recreated from the panel when their tag moved, then lists service packages
 published with [npack](docs/npack-services.md), a Nostr-native index for

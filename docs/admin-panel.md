@@ -39,6 +39,9 @@ signature from the connected key (see below). The panel asks the sidecar to
 republish a record, restart a container or pull and recreate one of the
 bundle's images; the sidecar forwards container work to the node-agent and
 never touches Docker itself, and package installation stays a host command.
+**Installed → Access** changes a service between a public locator and an
+encrypted locator for the operator, admins and any added npubs; see
+[private services](private-services.md).
 Host CPU load, memory and disk are read from the node-agent and shown in the
 sidebar and on the overview; anything the agent cannot measure is shown as
 `unknown` rather than invented.
@@ -80,6 +83,10 @@ verifies nothing itself: the sidecar checks each request.
   `Authorization: Bearer <progress-token>` returned by the start call (no
   NIP-98; the token is the authorization)
 - `POST /ncc-api/services/<id>/republish` — force one service through a publish cycle
+- `PUT /ncc-api/services/<id>/visibility` with `{"mode": "private",
+  "recipients": ["npub1…"], "includeAdmins": true}` — publish a plaintext
+  locator or encrypt it to the operator, admins and listed keys; forces a
+  republish. See [private services](private-services.md)
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
 - `GET /ncc-api/catalogue/service?event=<id>` — verify and unpack one release

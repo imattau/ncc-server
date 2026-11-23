@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package test-node-agent
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package service-list service-private service-public test-node-agent
 
 install:
 	sudo ./scripts/install.sh
@@ -133,14 +133,29 @@ bundle-health:
 
 service-add:
 	@test -n "$(PACKAGE)" || (echo 'Usage: sudo make service-add PACKAGE=/path/to/service-package' >&2; exit 2)
-	sudo ./scripts/add-compose-service.py "$(PACKAGE)"
+	sudo ./scripts/add-compose-service.py "$(PACKAGE)" $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
+
+# Change which keys may resolve a service's encrypted locator. A private
+# service publishes its NCC-02 anchor without an endpoint and its NCC-05
+# locator NIP-44-encrypted to each recipient. The operator key is always a
+# recipient; node admins are added unless NO_ADMINS=1.
+service-list:
+	sudo python3 ./scripts/service_visibility.py list
+
+service-private:
+	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-private SERVICE=search [RECIPIENTS="npub1...,npub1..."] [NO_ADMINS=1]' >&2; exit 2)
+	sudo python3 ./scripts/service_visibility.py set --service "$(SERVICE)" --mode private $(if $(RECIPIENTS),--recipients "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
+
+service-public:
+	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-public SERVICE=search' >&2; exit 2)
+	sudo python3 ./scripts/service_visibility.py set --service "$(SERVICE)" --mode public
 
 # Install a signed npack service package (REF=npub/name[@version]) or a local
 # .npk descriptor (NPK=/path/file.npk). Pass YES=1 to skip the publisher
 # confirmation prompt.
 service-install:
 	@test -n "$(REF)$(NPK)" || (echo 'Usage: sudo make service-install REF=<publisher>/<name>[@version]  OR  NPK=/path/file.npk' >&2; exit 2)
-	sudo ./scripts/add-compose-service.py $(if $(REF),--ref "$(REF)",--npk "$(NPK)") $(if $(YES),--yes)
+	sudo ./scripts/add-compose-service.py $(if $(REF),--ref "$(REF)",--npk "$(NPK)") $(if $(YES),--yes) $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
 
 # Build and publish an NCC service descriptor with npack. Requires the npack
 # CLI and a publisher key; see docs/npack-services.md.

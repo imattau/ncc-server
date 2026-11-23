@@ -10,6 +10,7 @@ import sys
 import urllib.request
 
 import tor_control
+import service_visibility
 from tor_settings import (
     RELAY_LOCAL_PORT,
     enable_service_tor,
@@ -25,6 +26,15 @@ RELAYS = [
     'wss://relay.primal.net/',
     'wss://relay.ditto.pub/',
 ]
+
+# Filled from .env in main(); keeping it module-level lets every provisioned
+# service pass through the same visibility merge without threading two more
+# arguments through each ensure_service call.
+VISIBILITY_POLICY = {
+    'private_services': set(),
+    'recipients': [],
+    'operator': None,
+}
 
 
 def request(path, method='GET', data=None, timeout=60):
@@ -71,8 +81,46 @@ def service_config(host, port, protocol, *, self_signed, pin=None,
     return config
 
 
+def visible_config(config, existing, service_id):
+    """Keep a service's visibility across a re-provision.
+
+    Provisioning owns endpoints, ports, certificates and Tor settings, but not
+    whether a service is public or who may resolve it. Without this merge a
+    `make bundle-provision-services` would silently republish a private service.
+    """
+    updated = dict(config)
+    old = (existing or {}).get('config') or {}
+    if old.get('service_mode') in ('public', 'private'):
+        updated['service_mode'] = old['service_mode']
+    old_recipients = service_visibility.recipients_for(old)
+    if old_recipients:
+        updated['ncc05_recipients'] = old_recipients
+
+    policy = VISIBILITY_POLICY
+    if service_id in policy['private_services']:
+        updated['service_mode'] = 'private'
+        updated['ncc05_recipients'] = service_visibility.resolve_recipients(
+            list(old_recipients) + list(policy['recipients']),
+            operator=policy['operator'],
+            include_admins=False,
+        )
+
+    if updated.get('service_mode') == 'private':
+        updated['ncc05_recipients'] = service_visibility.resolve_recipients(
+            updated.get('ncc05_recipients') or [],
+            operator=policy['operator'],
+            include_admins=False,
+        )
+        if not updated['ncc05_recipients']:
+            raise RuntimeError(
+                f'{service_id} is private but has no recipient; '
+                'set NCC_PRIVATE_RECIPIENTS or the operator key')
+    return updated
+
+
 def ensure_service(services, identity, *, service_id, name, config, service_type='custom'):
     current = next((item for item in services if item.get('service_id') == service_id), None)
+    config = visible_config(config, current, service_id)
     if current:
         result = request(f'/api/service/{current["id"]}', 'PUT', {
             'name': name,
@@ -150,6 +198,14 @@ def main():
     public_ip = env.get('PUBLIC_IPV4')
     if not public_ip:
         raise RuntimeError('set PUBLIC_IPV4 in .env')
+    VISIBILITY_POLICY['private_services'] = set(
+        service_visibility.split_values([env.get('NCC_PRIVATE_SERVICES', '')]))
+    VISIBILITY_POLICY['recipients'] = service_visibility.normalize_recipients(
+        [env.get('NCC_PRIVATE_RECIPIENTS', '')])
+    VISIBILITY_POLICY['operator'] = (
+        identity.get('pubkey')
+        or service_visibility.operator_pubkey(env)
+    )
     http_port = int(env.get('CONTENT_PORT', '8080'))
     https_port = int(env.get('CONTENT_TLS_PORT', '8443'))
     relay_port = int(env.get('RELAY_TLS_PORT', '8444'))

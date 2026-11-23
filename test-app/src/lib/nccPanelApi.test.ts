@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   cadenceProblem,
+  loadPanelServices,
   readImageProgress,
   readNodeImages,
   readPanelPrunePlan,
@@ -12,6 +13,7 @@ import {
   readUpgradeHelper,
   relayInputToUrl,
   resolvePanelApiBase,
+  savePanelServiceVisibility,
   type PanelCadence,
 } from './nccPanelApi';
 
@@ -444,5 +446,89 @@ describe('readUpgradeHelper', () => {
       error: 'not installed',
     });
     expect(readUpgradeHelper(null).error).toBe('The host upgrade helper is not available');
+  });
+});
+
+describe('private service visibility', () => {
+  const signer = {
+    signEvent: async (event: {
+      kind: number;
+      created_at: number;
+      tags: string[][];
+      content: string;
+    }) => ({
+      ...event,
+      id: 'a'.repeat(64),
+      pubkey: 'b'.repeat(64),
+      sig: 'c'.repeat(128),
+    }),
+  };
+
+  const response = (payload: unknown, status = 200) => ({
+    ok: status < 400,
+    status,
+    headers: { get: () => 'application/json' },
+    json: async () => payload,
+  });
+
+  it('reads visibility and recipients from the service list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({
+      agent: { available: true, error: null },
+      services: [{
+        serviceId: 'search',
+        name: 'ncc-search',
+        recordId: 7,
+        status: 'active',
+        visibility: 'private',
+        recipients: ['npub1recipient'],
+        composeServices: ['search'],
+        probe: { url: null, ok: null, status: null, latencyMs: null, error: null },
+        container: null,
+        publication: { relays: [], lastPublishedAt: null, intervalMinutes: null, onionAddress: null, ncc02Id: null, ncc05Id: null },
+        package: null,
+        restartable: false,
+        health: 'healthy',
+      }],
+    })));
+
+    const health = await loadPanelServices('https://node.example:8448/ncc-api', signer);
+    vi.unstubAllGlobals();
+
+    expect(health.services[0].visibility).toBe('private');
+    expect(health.services[0].recipients).toEqual(['npub1recipient']);
+  });
+
+  it('sends the mode, recipients and admin choice when saving', async () => {
+    const fetchMock = vi.fn(async () => response({
+      success: true,
+      saved: true,
+      published: true,
+      serviceId: 'search',
+      mode: 'private',
+      recipients: ['npub1recipient'],
+      publishedAt: 10,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const saved = await savePanelServiceVisibility(
+      'https://node.example:8448/ncc-api',
+      signer,
+      'search',
+      'private',
+      ['npub1recipient'],
+      true,
+    );
+    vi.unstubAllGlobals();
+
+    expect(saved.mode).toBe('private');
+    expect(saved.recipients).toEqual(['npub1recipient']);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/ncc-api/services/search/visibility');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(String(init.body))).toEqual({
+      mode: 'private',
+      recipients: ['npub1recipient'],
+      includeAdmins: true,
+    });
   });
 });

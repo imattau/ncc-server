@@ -35,6 +35,7 @@ import urllib.parse
 import urllib.request
 
 import tor_control
+import service_visibility
 from ncc_service_spec import (
     DescriptorError,
     render_compose,
@@ -327,7 +328,7 @@ def stage_files(source, target):
         (target / 'README.md').write_text(source['readme'])
 
 
-def install(source):
+def install(source, *, private=False, recipients=(), include_admins=True):
     spec = source['spec']
     service_id = spec['service_id']
     name = spec['name']
@@ -436,6 +437,34 @@ def install(source):
             config['npack'] = source['provenance']
 
         existing = api('/api/services')
+        current = next((item for item in existing
+                        if item.get('service_id') == service_id), None)
+        old_config = (current or {}).get('config') or {}
+        if old_config.get('service_mode') in ('public', 'private'):
+            config['service_mode'] = old_config['service_mode']
+        old_recipients = service_visibility.recipients_for(old_config)
+        if old_recipients:
+            config['ncc05_recipients'] = old_recipients
+
+        env_private = set(service_visibility.split_values(
+            [env_values.get('NCC_PRIVATE_SERVICES', '')]))
+        env_recipients = service_visibility.normalize_recipients(
+            [env_values.get('NCC_PRIVATE_RECIPIENTS', '')])
+        force_private = private or service_id in env_private
+        operator = identity.get('pubkey') or service_visibility.operator_pubkey(env_values)
+        if force_private:
+            admins = service_visibility.admin_pubkeys() if include_admins else []
+            config['service_mode'] = 'private'
+            config['ncc05_recipients'] = service_visibility.resolve_recipients(
+                list(old_recipients) + list(env_recipients) + list(recipients),
+                operator=operator,
+                admins=admins,
+                include_admins=include_admins,
+            )
+            if not config['ncc05_recipients']:
+                fail('private mode needs at least one recipient; '
+                     'pass --recipient npub1... or configure the operator key')
+
         tor_password = tor_control.configure(
             PROJECT,
             pathlib.Path(env_values.get('TOR_CONFIG_FILE', '/etc/tor/torrc')),
@@ -500,11 +529,19 @@ def main():
     parser.add_argument('--npk', help='local .npk descriptor file')
     parser.add_argument('--yes', action='store_true',
                         help='skip the publisher confirmation prompt')
+    parser.add_argument('--private', action='store_true',
+                        help='publish an encrypted locator instead of a public one')
+    parser.add_argument('--recipient', action='append', default=[],
+                        help='npub that may decrypt a private locator; repeatable')
+    parser.add_argument('--no-admins', action='store_true',
+                        help='do not add node admin keys to a private locator')
     args = parser.parse_args()
 
     sources = [bool(args.package), bool(args.ref), bool(args.npk)]
     if sum(sources) != 1:
         parser.error('pass exactly one of PACKAGE, --ref, or --npk')
+    if args.recipient and not args.private:
+        parser.error('--recipient requires --private')
     if os.geteuid() != 0:
         fail('run this command as root on the NCC-Server host')
 
@@ -519,7 +556,9 @@ def main():
         if not args.yes:
             confirm(source)
 
-    install(source)
+    recipients = service_visibility.normalize_recipients(args.recipient)
+    install(source, private=args.private, recipients=recipients,
+            include_admins=not args.no_admins)
 
 
 if __name__ == '__main__':

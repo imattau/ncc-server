@@ -519,6 +519,8 @@ export interface PanelServiceStatus {
   name: string;
   recordId: number;
   status: string;
+  visibility: 'public' | 'private';
+  recipients: string[];
   composeServices: string[];
   probe: PanelServiceProbe;
   container: PanelServiceContainer | null;
@@ -649,6 +651,10 @@ function readServiceStatus(value: unknown): PanelServiceStatus | null {
     name: typeof record.name === 'string' ? record.name : record.serviceId,
     recordId: numberOrNull(record.recordId) ?? 0,
     status: typeof record.status === 'string' ? record.status : 'active',
+    visibility: record.visibility === 'private' ? 'private' : 'public',
+    recipients: Array.isArray(record.recipients)
+      ? record.recipients.filter((value): value is string => typeof value === 'string')
+      : [],
     composeServices: Array.isArray(record.composeServices)
       ? record.composeServices.filter((name): name is string => typeof name === 'string')
       : [],
@@ -739,6 +745,42 @@ export async function loadPanelServiceLogs(
 ): Promise<PanelServiceLogs> {
   const path = `/services/${encodeURIComponent(serviceId)}/logs?limit=200`;
   return readServiceLogs(await requestJson(base, signer, 'GET', path, undefined, signal));
+}
+
+export interface PanelServiceVisibility {
+  mode: 'public' | 'private';
+  recipients: string[];
+  publishedAt: number;
+}
+
+/** Publish a service's locator publicly or encrypt it to a recipient set. */
+export async function savePanelServiceVisibility(
+  base: string,
+  signer: PanelSigner,
+  serviceId: string,
+  mode: 'public' | 'private',
+  recipients: string[],
+  includeAdmins: boolean,
+  signal?: AbortSignal,
+): Promise<PanelServiceVisibility> {
+  const payload = await requestJson(
+    base, signer, 'PUT',
+    `/services/${encodeURIComponent(serviceId)}/visibility`,
+    { mode, recipients, includeAdmins },
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || typeof record.serviceId !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the visibility change');
+  }
+
+  return {
+    mode: record.mode === 'private' ? 'private' : 'public',
+    recipients: Array.isArray(record.recipients)
+      ? record.recipients.filter((value): value is string => typeof value === 'string')
+      : [],
+    publishedAt: numberOrNull(record.publishedAt) ?? Date.now(),
+  };
 }
 
 /** Force one service through a publish cycle. */

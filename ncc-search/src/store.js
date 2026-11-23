@@ -913,6 +913,11 @@ export function openStore(dbPath, opts = {}) {
     return { prunedRows };
   }
 
+  function removeService(pubkey, itemId) {
+    deleteFtsStmt.run(pubkey, itemId);
+    return deleteServiceStmt.run(pubkey, itemId).changes;
+  }
+
   // A readonly store only ever serves reads -- exporting the write helpers
   // would just move a SQLITE_READONLY failure further from its cause.
   if (readonly) {
@@ -927,6 +932,7 @@ export function openStore(dbPath, opts = {}) {
     attachNip05,
     search,
     getService,
+    removeService,
     listNip65AuthorsToCheck,
     saveNip65RelayList,
     markNip65AuthorChecked,

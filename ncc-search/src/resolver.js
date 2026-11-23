@@ -57,6 +57,7 @@ export class AnchoredResolver {
       anchorError: null,
       attestationCount: 0,
       isRevoked: false,
+      isPrivate: false,
       locatorPresent: false,
       locatorError: null,
       endpoint: null,
@@ -71,6 +72,7 @@ export class AnchoredResolver {
       result.anchored = true;
       result.attestationCount = anchor.attestationCount;
       result.isRevoked = anchor.isRevoked;
+      result.isPrivate = anchor.isPrivate === true;
       result.anchorEndpoint = anchor.endpoint || null;
       result.anchorFingerprint = anchor.fingerprint || null;
     } catch (err) {
@@ -126,6 +128,7 @@ export class AnchoredResolver {
  * @property {string|null} anchorError
  * @property {number} attestationCount
  * @property {boolean} isRevoked
+ * @property {boolean} isPrivate - anchor opted out of public locator discovery
  * @property {boolean} locatorPresent - whether a usable NCC-05 locator was found
  * @property {string|null} locatorError
  * @property {string|null} endpoint - the endpoint to actually fetch, or null if unresolvable

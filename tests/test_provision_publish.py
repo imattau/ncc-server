@@ -52,5 +52,55 @@ class ForcePublishTests(unittest.TestCase):
                 PROVISION.force_publish({'id': 2, 'service_id': 'web'}, all_services=True)
 
 
+class VisibilityTests(unittest.TestCase):
+    def setUp(self):
+        self.previous = dict(PROVISION.VISIBILITY_POLICY)
+        PROVISION.VISIBILITY_POLICY.update({
+            'private_services': set(),
+            'recipients': [],
+            'operator': '11' * 32,
+        })
+
+    def tearDown(self):
+        PROVISION.VISIBILITY_POLICY.clear()
+        PROVISION.VISIBILITY_POLICY.update(self.previous)
+
+    def test_reprovision_keeps_an_existing_private_mode(self):
+        existing = {
+            'service_id': 'search',
+            'config': {
+                'service_mode': 'private',
+                'ncc05_recipients': ['22' * 32],
+            },
+        }
+        config = PROVISION.visible_config(
+            {'service_mode': 'public', 'ncc05_recipients': [], 'port': 8447},
+            existing,
+            'search',
+        )
+        self.assertEqual(config['service_mode'], 'private')
+        self.assertEqual(config['ncc05_recipients'], ['22' * 32, '11' * 32])
+        self.assertEqual(config['port'], 8447)
+
+    def test_env_private_forces_a_new_service_private(self):
+        PROVISION.VISIBILITY_POLICY['private_services'] = {'npanel'}
+        config = PROVISION.visible_config(
+            {'service_mode': 'public', 'ncc05_recipients': []}, None, 'npanel')
+        self.assertEqual(config['service_mode'], 'private')
+        self.assertEqual(config['ncc05_recipients'], ['11' * 32])
+
+    def test_env_private_adds_configured_recipients(self):
+        PROVISION.VISIBILITY_POLICY['private_services'] = {'admin'}
+        PROVISION.VISIBILITY_POLICY['recipients'] = ['33' * 32]
+        config = PROVISION.visible_config(
+            {'service_mode': 'public', 'ncc05_recipients': []}, None, 'admin')
+        self.assertEqual(config['ncc05_recipients'], ['33' * 32, '11' * 32])
+
+    def test_public_stays_public(self):
+        config = PROVISION.visible_config(
+            {'service_mode': 'public', 'ncc05_recipients': []}, None, 'web')
+        self.assertEqual(config['service_mode'], 'public')
+
+
 if __name__ == '__main__':
     unittest.main()

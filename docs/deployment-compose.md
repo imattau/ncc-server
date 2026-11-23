@@ -366,7 +366,9 @@ configured images, and `make bundle-up` pulls before starting the stack.
 
 When a release adds a new sidecar service record (such as the `admin` panel),
 run `sudo make bundle-provision-services` once after upgrading to create and
-publish it; the script is idempotent for the existing records.
+publish it; the script is idempotent for the existing records and preserves a
+service's public/private visibility and recipient list. Use
+[private services](private-services.md) for encrypted locators.
 
 Releases that add per-service onion endpoints require one extra step on an
 existing install. Deploy the release, recreate `caddy` so its loopback onion

@@ -22,7 +22,7 @@ const CONFIG_PATH = '/ncc-config.json';
 const CONNECT_TIMEOUT_MS = 6000;
 const QUERY_TIMEOUT_MS = 8000;
 
-export type ServiceStatus = 'published' | 'expired' | 'anchor-only' | 'locator-only';
+export type ServiceStatus = 'published' | 'expired' | 'anchor-only' | 'locator-only' | 'private';
 
 export interface PanelConfig {
   npub: string | null;
@@ -43,6 +43,7 @@ export interface PanelService {
   id: string;
   endpoint: string | null;
   pin: string | null;
+  private: boolean;
   anchorCreatedAt: number | null;
   anchorExpiresAt: number | null;
   locatorCreatedAt: number | null;
@@ -193,9 +194,11 @@ interface LocatorDetails {
   ttl: number | null;
   updatedAt: number | null;
   expiresAt: number | null;
+  private: boolean;
 }
 
 function readLocator(event: NostrEvent): LocatorDetails {
+  const isPrivate = tagValue(event, 'private') === 'true';
   const content = parseObject(event.content);
   const endpoints: { url: string; k: string | null }[] = [];
 
@@ -215,6 +218,7 @@ function readLocator(event: NostrEvent): LocatorDetails {
     ttl: content ? numberValue(content.ttl) : null,
     updatedAt: content ? numberValue(content.updated_at) : null,
     expiresAt: expiration && /^\d+$/.test(expiration) ? Number(expiration) : null,
+    private: isPrivate,
   };
 }
 
@@ -251,17 +255,22 @@ export function buildPanelSnapshot(events: NostrEvent[], relayReports: RelayRepo
     const details = locator ? readLocator(locator) : null;
     const anchorEndpoint = anchor ? tagValue(anchor, 'u') : null;
     const anchorExpiration = anchor ? tagValue(anchor, 'exp') : null;
+    const isPrivate = Boolean(
+      details?.private || (anchor && tagValue(anchor, 'private') === 'true'),
+    );
 
-    const endpoint = anchorEndpoint ?? details?.endpoints[0]?.url ?? null;
+    const endpoint = isPrivate ? null : (anchorEndpoint ?? details?.endpoints[0]?.url ?? null);
     const pin = (anchor ? tagValue(anchor, 'k') : null) ?? details?.endpoints[0]?.k ?? null;
 
     let status: ServiceStatus;
-    if (!anchor) {
+    if (details && details.expiresAt !== null && details.expiresAt <= now) {
+      status = 'expired';
+    } else if (isPrivate) {
+      status = 'private';
+    } else if (!anchor) {
       status = 'locator-only';
     } else if (!locator) {
       status = 'anchor-only';
-    } else if (details && details.expiresAt !== null && details.expiresAt <= now) {
-      status = 'expired';
     } else {
       status = 'published';
     }
@@ -270,6 +279,7 @@ export function buildPanelSnapshot(events: NostrEvent[], relayReports: RelayRepo
       id,
       endpoint,
       pin,
+      private: isPrivate,
       anchorCreatedAt: anchor?.created_at ?? null,
       anchorExpiresAt: anchorExpiration && /^\d+$/.test(anchorExpiration) ? Number(anchorExpiration) : null,
       locatorCreatedAt: locator?.created_at ?? null,
