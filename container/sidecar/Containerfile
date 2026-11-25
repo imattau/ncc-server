@@ -2,7 +2,7 @@ ARG NODE_IMAGE=node:24.12.0-bookworm-slim
 
 FROM ${NODE_IMAGE} AS build
 ARG SIDECAR_REPO=https://github.com/imattau/nostr-community-conventions.git
-ARG SIDECAR_REV=d67fa15b40a3461588c96da56710bec6fd670b5b
+ARG SIDECAR_REV=17b0439cc1335ad22a082d3e90d1863dc10208b8
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git patch python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 RUN git clone --filter=blob:none --no-checkout "$SIDECAR_REPO" /src \
