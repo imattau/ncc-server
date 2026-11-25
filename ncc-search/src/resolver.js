@@ -97,7 +97,9 @@ export class AnchoredResolver {
         result.ttlSeconds = payload.ttl ?? null;
         const [best] = selectEndpoints(payload.endpoints);
         result.endpoint = best.url;
-        result.fingerprint = best.k || null;
+        // NCC-02: a service record's own `k` keeps applying to a privately or
+        // separately resolved endpoint. The locator's `k` only fills the gap.
+        result.fingerprint = result.anchorFingerprint || best.k || null;
         result.family = best.family || null;
       }
     } catch (err) {
@@ -132,7 +134,7 @@ export class AnchoredResolver {
  * @property {boolean} locatorPresent - whether a usable NCC-05 locator was found
  * @property {string|null} locatorError
  * @property {string|null} endpoint - the endpoint to actually fetch, or null if unresolvable
- * @property {string|null} fingerprint - expected transport-key fingerprint (`k`) for pin checks
+ * @property {string|null} fingerprint - expected transport-key fingerprint (`k`) for pin checks: the NCC-02 record's, else the locator's
  * @property {string|null} family
  * @property {boolean} usedFallback - true if `endpoint` came from NCC-02 `u`, not NCC-05
  * @property {number|null} ttlSeconds - NCC-05 payload TTL, used to schedule re-crawl
