@@ -140,6 +140,18 @@ mode, visibility and recipients. Dedicated keys live in `sidecar.db`; keep an
 encrypted backup. Re-provisioning and operator-identity migration preserve
 services marked `service_identity: "dedicated"`.
 
+## Interaction with the welcome page
+
+The welcome page (`test-app`) drops a service's card once it is private,
+instead of linking a visitor to a locator they cannot decrypt. It reads an
+unauthenticated `GET /ncc-api/public/visibility` on the admin listener
+(`patches/ncc-sidecar-public-visibility.patch`), which returns only each
+service's ID and `public`/`private` mode — no recipients, endpoint or health.
+This is unlisting the card, not closing a leak: the NCC-02 anchor still
+publishes that the service exists either way, and a request to the sidecar
+or health endpoint failing open shows every card, same as before this
+existed.
+
 ## Interaction with search
 
 `ncc-search` deliberately does not decrypt locators and does not index private

@@ -1,0 +1,24 @@
+diff --git a/src/routes/panel-services.js b/src/routes/panel-services.js
+--- a/src/routes/panel-services.js
++++ b/src/routes/panel-services.js
+@@ -834,6 +834,20 @@
+     return { agent: { available: agent.available, error: agent.error }, services: payload };
+   });
+ 
++  // Unauthenticated on purpose: the welcome page needs to know which service
++  // cards to show before anyone has signed in, but a private service's
++  // existence is already public at the relay layer (its NCC-02 anchor still
++  // publishes), so naming it here and nothing more discloses nothing new.
++  // Recipients, health, npub and every other panel field stay behind
++  // authorizePanelRequest above.
++  server.get('/ncc-api/public/visibility', async () => {
++    const services = getServices().filter((service) => service.type !== 'sidecar' && service.status !== 'disabled');
++    const payload = services
++      .map((service) => ({ serviceId: service.service_id, visibility: serviceVisibility(service).mode }))
++      .sort((left, right) => left.serviceId.localeCompare(right.serviceId));
++    return { services: payload };
++  });
++
+   server.get('/ncc-api/services/:id/logs', async (request, reply) => {
+     if (!authorizePanelRequest(request, reply)) return;
+ 

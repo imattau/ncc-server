@@ -3,6 +3,7 @@ import { useSeoMeta } from '@unhead/react';
 import { ArrowDownRight, ArrowUpRight, Globe2, LockKeyhole, Radio, Search, Server, ShieldCheck, Waves } from 'lucide-react';
 
 import { nccServiceAddress, npubFromConfigRecord, npubFromLocation } from '@/lib/nccAddress';
+import { fetchPublicServiceVisibility } from '@/lib/nccPanelApi';
 
 const services = [
   {
@@ -75,6 +76,7 @@ const serviceHref = (id: string, rootNpub: string | null) => {
 const Index = () => {
   const [rootNpub, setRootNpub] = useState<string | null>(null);
   const [identityState, setIdentityState] = useState<'loading' | 'ready' | 'missing'>('loading');
+  const [privateServiceIds, setPrivateServiceIds] = useState<Set<string>>(new Set());
 
   useSeoMeta({
     title: 'NCC Server — A home on the open web',
@@ -101,9 +103,18 @@ const Index = () => {
         const contentType = response.headers.get('content-type') ?? '';
         if (!contentType.includes('json')) throw new Error('NCC server config unavailable');
         const config: unknown = await response.json();
-        return config && typeof config === 'object' && !Array.isArray(config)
-          ? npubFromConfigRecord(config as Record<string, unknown>)
-          : null;
+        if (!config || typeof config !== 'object' || Array.isArray(config)) return null;
+        const record = config as Record<string, unknown>;
+
+        const panelApi = typeof record.panelApi === 'string' ? record.panelApi : null;
+        fetchPublicServiceVisibility(panelApi, controller.signal).then((entries) => {
+          if (controller.signal.aborted) return;
+          setPrivateServiceIds(new Set(
+            entries.filter((entry) => entry.visibility === 'private').map((entry) => entry.serviceId),
+          ));
+        });
+
+        return npubFromConfigRecord(record);
       })
       .then((npub) => applyIdentity(npub ?? npubFromLocation()))
       .catch(() => applyIdentity(npubFromLocation()));
@@ -164,7 +175,7 @@ const Index = () => {
           </div>
 
           <div className="service-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {services.map(({ id, number, name, type, description, icon: Icon, theme, optional, restricted }) => (
+            {services.filter(({ id }) => !privateServiceIds.has(id)).map(({ id, number, name, type, description, icon: Icon, theme, optional, restricted }) => (
               <a
                 key={id}
                 href={serviceHref(id, rootNpub)}
