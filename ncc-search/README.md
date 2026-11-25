@@ -80,8 +80,10 @@ fetch -> extract page content -> index that content. See
 ## Pinned resolver contract (source: `imattau/nostr-community-conventions`)
 
 - **`30059`** — NCC-02 Service Record (identity/trust anchor). Tags: `d`
-  (service id), `u` (endpoint, optional), `k` (transport-key fingerprint),
-  `exp`.
+  (service id), `u` (endpoint, optional), `k` (transport-key fingerprint,
+  optional when there is no `u`), `exp`. A record's `k` also applies to an
+  endpoint found through the locator; the locator endpoint's `k` is used only
+  when the record has none.
 - **`30060`** — NCC-02 Certificate Attestation (optional third-party trust).
 - **`30061`** — NCC-02 Revocation. Overrides expiry; a revoked anchor is never
   resolved further.
