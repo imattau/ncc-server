@@ -128,6 +128,48 @@ export function resolvePanelApiBase(panelApi: string | null | undefined): string
   return null;
 }
 
+export interface PublicServiceVisibility {
+  serviceId: string;
+  visibility: 'public' | 'private';
+}
+
+/**
+ * Which installed services are public vs. private, with nothing else.
+ *
+ * Unauthenticated on purpose (see patches/ncc-sidecar-public-visibility.patch):
+ * the welcome page needs this before anyone has signed in, to skip the card
+ * for a private service instead of linking to a locator it cannot decrypt.
+ * Failures are swallowed to an empty list so the page falls back to showing
+ * every card, the same as before this existed.
+ */
+export async function fetchPublicServiceVisibility(
+  panelApi: string | null | undefined,
+  signal?: AbortSignal,
+): Promise<PublicServiceVisibility[]> {
+  const base = resolvePanelApiBase(panelApi);
+  if (!base) return [];
+
+  try {
+    const response = await fetch(`${base}/public/visibility`, { cache: 'no-store', signal });
+    if (!response.ok) return [];
+
+    const body: unknown = await response.json();
+    const services = body && typeof body === 'object'
+      ? (body as Record<string, unknown>).services
+      : null;
+    if (!Array.isArray(services)) return [];
+
+    return services.filter((item): item is PublicServiceVisibility => {
+      if (!item || typeof item !== 'object') return false;
+      const record = item as Record<string, unknown>;
+      return typeof record.serviceId === 'string'
+        && (record.visibility === 'public' || record.visibility === 'private');
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** Turn what an operator typed into a relay URL, or null when it is invalid. */
 export function relayInputToUrl(value: string): string | null {
   let candidate = value.trim();
