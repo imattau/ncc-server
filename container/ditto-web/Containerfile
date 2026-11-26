@@ -25,7 +25,18 @@ RUN node /tmp/ncc-fetch-compat.mjs /src/src/components/AppProvider.tsx \
 COPY ncc-sync-timeout.mjs /tmp/ncc-sync-timeout.mjs
 RUN node /tmp/ncc-sync-timeout.mjs /src/src/hooks/useInitialSync.ts \
     && rm /tmp/ncc-sync-timeout.mjs
+COPY ncc-profile-link.ts /src/src/lib/nccProfileLink.ts
+COPY ncc-profile-link.test.ts /src/src/lib/nccProfileLink.test.ts
+COPY ncc-profile-links.mjs /tmp/ncc-profile-links.mjs
+RUN node /tmp/ncc-profile-links.mjs \
+      /src/src/components/ExternalIdentityLinks.tsx \
+      /src/src/pages/ProfilePage.tsx \
+      /src/src/pages/ProfileSettings.tsx \
+      /src/src/components/EditProfileForm.tsx \
+      /src/src/components/ProfileCard.tsx \
+    && rm /tmp/ncc-profile-links.mjs
 RUN npm ci --no-audit --no-fund \
+    && npx vitest run src/lib/nccProfileLink.test.ts --reporter=dot \
     && npm run build
 
 FROM nginx:1.29-alpine

@@ -48,6 +48,24 @@ Check `https://<DITTO_WEB_HOST>:8446/` in a browser and resolve
 and `k` pin with the project's locator verification tools. The current VM test
 was also loaded in NCC Browser; its Ditto home screen rendered successfully.
 
+## Profile website links
+
+The profile `website` field accepts the usual `https://` address, plus the two
+address families NCC Browser understands:
+
+- `ncc://<npub>/<service>` — an NCC service identity, resolved by NCC Browser
+  through its signed locator. `ncc://<npub>` means the default `addr` service.
+- `nsite://<npub>[/<site>][/path]` — a NIP-5A static site. Ditto's host form,
+  `nsite://<npub>`, `nsite://<base36-pubkey><site>`, and
+  `nsite://v<base36-snapshot-id>`, is also accepted.
+
+Inside NCC Browser the original `ncc://` / `nsite://` address is used, so the
+browser opens the service or site natively with any path intact. In an ordinary
+web page, Ditto opens a linked nsite in its own viewer at the site root; an
+`ncc://` link needs NCC Browser to resolve it. Bare hostnames are still
+normalised to `https://` as before. Malformed or unsupported schemes are not
+rendered as links.
+
 ## Scope
 
 This verifies the fork's browser build, Caddy routing, and NCC locator. The
