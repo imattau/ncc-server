@@ -26,6 +26,11 @@ on:
         description: Image tag, for example 0.2.9 or sidecar-2026-11-16
         type: string
         required: true
+      publish:
+        description: Push the built images to GHCR. Uncheck for a build-only dry run.
+        type: boolean
+        required: true
+        default: true
 
 permissions:
   contents: read
@@ -145,7 +150,10 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           platforms: ${{ matrix.platforms || 'linux/amd64,linux/arm64' }}
-          push: true
+          # Tag pushes always publish. A manual run can be a build-only dry
+          # run by clearing the publish checkbox; the release job is already
+          # skipped for workflow_dispatch.
+          push: ${{ github.event_name == 'push' || inputs.publish }}
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:${{ steps.version.outputs.tag }}
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:latest
