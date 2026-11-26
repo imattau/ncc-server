@@ -20,6 +20,7 @@ COPY patches/ncc-sidecar-panel-metrics.patch /tmp/ncc-sidecar-panel-metrics.patc
 COPY patches/ncc-sidecar-npanel-sync.patch /tmp/ncc-sidecar-npanel-sync.patch
 COPY patches/ncc-sidecar-panel-images.patch /tmp/ncc-sidecar-panel-images.patch
 COPY patches/ncc-sidecar-panel-upgrade.patch /tmp/ncc-sidecar-panel-upgrade.patch
+COPY patches/ncc-sidecar-public-visibility.patch /tmp/ncc-sidecar-public-visibility.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -64,6 +65,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && if [ ! -f src/routes/panel-upgrade.js ]; then \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-upgrade.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-upgrade.patch; \
+     fi \
+  && if ! grep -q 'ncc-api/public/visibility' src/routes/panel-services.js; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-public-visibility.patch \
+       && patch -p1 < /tmp/ncc-sidecar-public-visibility.patch; \
      fi \
   && npm ci \
   && npm --prefix ui ci \
