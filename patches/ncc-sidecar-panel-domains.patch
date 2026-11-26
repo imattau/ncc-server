@@ -1,0 +1,330 @@
+--- a/src/routes/panel-services.js
++++ b/src/routes/panel-services.js
+@@ -23,9 +23,10 @@
+ import { nip19 } from 'nostr-tools';
+
+ import { authorizePanelRequest } from '../panel-auth.js';
+-import { addLog, getAdmins, getConfig, getLogs, getServices, updateService } from '../db.js';
++import { addLog, getAdmins, getConfig, getLogs, getServices, setConfig, updateService } from '../db.js';
+ import { runPublishCycle } from '../app.js';
+ import { rotateServiceIdentity, serviceNpub } from '../service-identity.js';
++import { normalizePublicDomain } from '../../caddy-sites.mjs';
+
+ const AGENT_URL = (process.env.NCC_NODE_AGENT_URL || 'http://127.0.0.1:3010').replace(/\/+$/, '');
+ const AGENT_TOKEN = process.env.NCC_NODE_AGENT_TOKEN || '';
+@@ -33,8 +34,12 @@
+ const COMPOSE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+ const PROBE_TIMEOUT_MS = 3500;
+ const AGENT_TIMEOUT_MS = 5000;
++const DOMAIN_AGENT_TIMEOUT_MS = 30000;
+ const MAX_LOG_LINES = 500;
+ const HEX_PUBKEY = /^[0-9a-f]{64}$/i;
++const PUBLIC_IPV4 = String(process.env.PUBLIC_IPV4 || '').trim();
++const PUBLIC_DOMAINS_KEY = 'public_domains';
++const MAX_PUBLIC_DOMAINS = 64;
+
+ /**
+  * Compose services that back each standard NCC service. Custom services store
+@@ -691,6 +696,154 @@
+   };
+ }
+
++function operatorPubkeyHex() {
++  const configured = String(process.env.NCC_OPERATOR_PUBKEY || '').trim().toLowerCase();
++  return HEX_PUBKEY.test(configured) ? configured : null;
++}
++
++function loopbackHttpTarget(value) {
++  if (typeof value !== 'string' || !value) return null;
++  try {
++    const url = new URL(value);
++    if (url.protocol !== 'http:') return null;
++    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') return null;
++    const port = Number(url.port || 80);
++    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
++    return `127.0.0.1:${port}`;
++  } catch {
++    return null;
++  }
++}
++
++/**
++ * The Caddy target for an optional public domain.
++ *
++ * These are standard-HTTPS front doors only. Nothing here reads or changes
++ * `endpoints`, `ncc02ExpectedKey`, locator payloads or publication state.
++ */
++function domainSupport(service) {
++  if (service.type === 'sidecar') {
++    return { target: null, reason: 'The sidecar is not a browser-facing service.' };
++  }
++
++  switch (service.service_id) {
++    case 'web':
++    case 'addr':
++      return operatorPubkeyHex()
++        ? { target: { kind: 'static', body: 'small' }, reason: null }
++        : { target: null, reason: 'NCC_OPERATOR_PUBKEY is not set, so the welcome page cannot be configured.' };
++    case 'admin':
++      return operatorPubkeyHex()
++        ? { target: { kind: 'admin', body: 'small' }, reason: null }
++        : { target: null, reason: 'NCC_OPERATOR_PUBKEY is not set, so the admin panel cannot be configured.' };
++    case 'relay':
++      return {
++        target: { kind: 'proxy', dial: '127.0.0.1:13131', body: 'small', realIp: true },
++        reason: null,
++      };
++    case 'npanel':
++      return {
++        target: null,
++        reason: 'npanel routes its dashboard and NIP-98 origin by one dashboard_host. A public domain here would break its existing address; configure npanel itself instead.',
++      };
++    case 'ditto':
++      return PUBLIC_IPV4
++        ? {
++          target: { kind: 'proxy', dial: '127.0.0.1:3210', host: PUBLIC_IPV4, body: 'app' },
++          reason: null,
++        }
++        : { target: null, reason: 'PUBLIC_IPV4 is not set, so the backend Host header cannot be preserved.' };
++    case 'search':
++      return PUBLIC_IPV4
++        ? {
++          target: {
++            kind: 'search',
++            ui: '127.0.0.1:3220',
++            api: '127.0.0.1:3230',
++            host: PUBLIC_IPV4,
++            body: 'small',
++          },
++          reason: null,
++        }
++        : { target: null, reason: 'PUBLIC_IPV4 is not set, so the backend Host header cannot be preserved.' };
++    default: {
++      const config = service.config || {};
++      const dial = loopbackHttpTarget(config.health_url) || loopbackHttpTarget(config.probe_url);
++      return dial
++        ? { target: { kind: 'proxy', dial, body: 'app' }, reason: null }
++        : { target: null, reason: 'This service has no loopback HTTP health/probe URL, so its backend port is unknown.' };
++    }
++  }
++}
++
++function readPublicDomains() {
++  const appConfig = getConfig('app_config') || {};
++  const stored = appConfig[PUBLIC_DOMAINS_KEY];
++  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
++
++  const domains = {};
++  for (const [serviceId, value] of Object.entries(stored)) {
++    if (!COMPOSE_NAME.test(serviceId) || typeof value !== 'string') continue;
++    const domain = normalizePublicDomain(value);
++    if (domain) domains[serviceId] = domain;
++  }
++  return domains;
++}
++
++function buildPublicSites(domains) {
++  const sites = [];
++  for (const service of getServices()) {
++    if (service.type === 'sidecar') continue;
++    if ((service.status || 'active') !== 'active') continue;
++    const domain = domains[service.service_id];
++    if (!domain) continue;
++    const support = domainSupport(service);
++    if (!support.target) continue;
++    sites.push({ serviceId: service.service_id, domain, target: support.target });
++  }
++  return sites;
++}
++
++function applyPublicDomains(domains) {
++  return agentRequest('/v1/caddy/sites', {
++    method: 'POST',
++    body: {
++      operatorPubkey: operatorPubkeyHex(),
++      sites: buildPublicSites(domains),
++    },
++    timeoutMs: DOMAIN_AGENT_TIMEOUT_MS,
++  });
++}
++
++let publicDomainsReconciling = false;
++let lastPublicDomainError = null;
++
++/**
++ * Reapply the generated Caddy fragment. This keeps a deleted file, a service
++ * removal or a sidecar restart from leaving stale public hostnames behind.
++ */
++async function reconcilePublicDomains() {
++  if (publicDomainsReconciling) return null;
++  publicDomainsReconciling = true;
++  try {
++    const result = await applyPublicDomains(readPublicDomains());
++    if (lastPublicDomainError) {
++      addLog('info', 'Public domain reconciliation recovered', { error: lastPublicDomainError });
++      lastPublicDomainError = null;
++    }
++    return result;
++  } catch (error) {
++    const message = error instanceof Error ? error.message : 'Caddy public-domain reconciliation failed';
++    if (message !== lastPublicDomainError) {
++      lastPublicDomainError = message;
++      addLog('error', 'Public domain reconciliation failed', { error: message });
++    }
++    return null;
++  } finally {
++    publicDomainsReconciling = false;
++  }
++}
++
+ export default async function panelServicesRoutes(server) {
+   server.get('/ncc-api/services', async (request, reply) => {
+     if (!authorizePanelRequest(request, reply)) return;
+@@ -712,6 +865,7 @@
+     }
+
+     const probes = await Promise.all(services.map((service) => probe(targets.get(service.service_id))));
++    const publicDomains = readPublicDomains();
+
+     const payload = services.map((service, index) => {
+       const compose = composeServices(service);
+@@ -731,6 +885,7 @@
+         : null;
+       const visibility = serviceVisibility(service);
+       const dedicated = service.config?.service_identity === 'dedicated';
++      const domain = domainSupport(service);
+
+       return {
+         serviceId: service.service_id,
+@@ -741,6 +896,9 @@
+         identity: dedicated ? 'dedicated' : 'shared',
+         visibility: visibility.mode,
+         recipients: visibility.npubs,
++        domain: publicDomains[service.service_id] || null,
++        domainSupported: Boolean(domain.target),
++        domainUnsupportedReason: domain.target ? null : domain.reason,
+         composeServices: compose,
+         probe: probeResult,
+         container: containers.length
+@@ -761,7 +919,11 @@
+     });
+
+     payload.sort((left, right) => left.serviceId.localeCompare(right.serviceId));
+-    return { agent: { available: agent.available, error: agent.error }, services: payload };
++    return {
++      agent: { available: agent.available, error: agent.error },
++      publicIpv4: PUBLIC_IPV4 || null,
++      services: payload,
++    };
+   });
+
+   // Unauthenticated on purpose: the welcome page needs to know which service
+@@ -1369,4 +1531,108 @@
+       return reply.code(status).send({ error: message });
+     }
+   });
++
++  /**
++   * Optional standard-HTTPS front door for one service.
++   *
++   * Deliberately separate from NCC service configuration: this writes only
++   * app_config.public_domains and the generated Caddy fragment. It never
++   * republishes records or touches endpoints or certificate pins.
++   */
++  server.put('/ncc-api/services/:id/domain', async (request, reply) => {
++    const caller = authorizePanelRequest(request, reply);
++    if (!caller) return;
++
++    const service = findService(request.params.id);
++    if (!service) return reply.code(404).send({ error: 'Service not found' });
++    if (service.type === 'sidecar') {
++      return reply.code(409).send({ error: 'The sidecar is not a browser-facing service' });
++    }
++    if ((service.status || 'active') !== 'active') {
++      return reply.code(409).send({ error: 'Only active services can have a public domain' });
++    }
++
++    const body = request.body && typeof request.body === 'object' ? request.body : {};
++    const raw = typeof body.domain === 'string' ? body.domain : '';
++    let domain = null;
++    if (raw.trim()) {
++      domain = normalizePublicDomain(raw);
++      if (!domain) {
++        return reply.code(400).send({
++          error: 'Enter a public domain name such as ditto.example.com, without https:// or a path.',
++        });
++      }
++      const support = domainSupport(service);
++      if (!support.target) {
++        return reply.code(409).send({ error: support.reason || 'This service cannot use a public domain' });
++      }
++    }
++
++    const domains = readPublicDomains();
++    const known = new Set(getServices().map((entry) => entry.service_id));
++    for (const serviceId of Object.keys(domains)) {
++      if (!known.has(serviceId)) delete domains[serviceId];
++    }
++
++    if (domain) {
++      const conflict = Object.entries(domains)
++        .find(([serviceId, value]) => serviceId !== service.service_id && value === domain);
++      if (conflict) {
++        return reply.code(409).send({
++          error: `${domain} is already assigned to ${conflict[0]}.`,
++        });
++      }
++      domains[service.service_id] = domain;
++    } else {
++      delete domains[service.service_id];
++    }
++
++    if (Object.keys(domains).length > MAX_PUBLIC_DOMAINS) {
++      return reply.code(400).send({ error: `Use at most ${MAX_PUBLIC_DOMAINS} public domains` });
++    }
++
++    if (!AGENT_TOKEN) {
++      return reply.code(503).send({ error: 'Host control agent is not configured' });
++    }
++
++    try {
++      await applyPublicDomains(domains);
++    } catch (error) {
++      const message = error instanceof Error ? error.message : 'Caddy did not accept the domain';
++      addLog('error', `Public domain update failed for ${service.name} from the NCC admin panel`, {
++        serviceId: service.id,
++        domain,
++        error: message,
++        changedBy: caller.pubkey,
++      });
++      return reply.code(503).send({ error: message });
++    }
++
++    const appConfig = getConfig('app_config') || {};
++    appConfig[PUBLIC_DOMAINS_KEY] = domains;
++    setConfig('app_config', appConfig);
++
++    addLog('info', domain
++      ? `Public domain set for ${service.name} from the NCC admin panel`
++      : `Public domain removed for ${service.name} from the NCC admin panel`, {
++      serviceId: service.id,
++      domain,
++      changedBy: caller.pubkey,
++    });
++
++    return {
++      success: true,
++      serviceId: service.service_id,
++      domain,
++      url: domain ? `https://${domain}/` : null,
++      applied: true,
++    };
++  });
++
++  // Best effort: the file survives normal restarts, but a restore or a deleted
++  // generated file should not leave the panel and Caddy disagreeing.
++  if (AGENT_TOKEN) {
++    setTimeout(() => { void reconcilePublicDomains(); }, 10_000).unref?.();
++    setInterval(() => { void reconcilePublicDomains(); }, 5 * 60_000).unref?.();
++  }
+ }

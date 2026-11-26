@@ -281,3 +281,6 @@
 .visibility-check{display:flex;align-items:center;gap:7px;margin-top:13px;font-size:10px;color:var(--muted-2)}
 .visibility-check input{accent-color:var(--accent-strong)}
 .visibility-modal .install-security{margin-top:13px}
+
+.service-domain{display:flex;align-items:center;gap:4px;color:var(--accent-text)!important;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.service-domain svg{flex:none}

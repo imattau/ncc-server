@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useNostrLogin } from '@nostrify/react/login';
 import {
   Activity, ArrowDownToLine, ArrowUpCircle, ArrowUpRight, Check, ChevronDown, CircleAlert,
-  CircleHelp, Copy, Cpu, ExternalLink, Globe2, HardDrive, KeyRound, Layers3,
+  CircleHelp, Copy, Cpu, ExternalLink, Globe, Globe2, HardDrive, KeyRound, Layers3,
   LayoutGrid, LockKeyhole, LogOut, MemoryStick, Menu, Monitor, Moon, MoreHorizontal,
   Plus, Radio, RefreshCw, Rows3, Search,
   Server, Settings2, Shield, ShieldCheck, Smartphone, Sun, TerminalSquare, Trash2,
@@ -60,6 +60,7 @@ import {
   savePanelCadence,
   savePanelIdentity,
   savePanelRelays,
+  savePanelServiceDomain,
   savePanelServiceVisibility,
   setPanelCatalogueTrust,
   startServerUpgrade,
@@ -957,6 +958,16 @@ export default function AdminPanel() {
   } | null>(null);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState('');
+  const [domainEditor, setDomainEditor] = useState<{
+    serviceId: string;
+    name: string;
+    domain: string;
+    isPrivate: boolean;
+    publicIpv4: string | null;
+  } | null>(null);
+  const [domainDraft, setDomainDraft] = useState('');
+  const [domainBusy, setDomainBusy] = useState(false);
+  const [domainError, setDomainError] = useState('');
   const [identityEditor, setIdentityEditor] = useState<{
     serviceId: string;
     name: string;
@@ -2313,6 +2324,48 @@ export default function AdminPanel() {
     }
   };
 
+  const openDomain = (service: PanelService) => {
+    const health = healthById.get(service.id);
+    setDomainEditor({
+      serviceId: service.id,
+      name: serviceMeta(service.id).label,
+      domain: health?.domain ?? '',
+      isPrivate: health?.visibility === 'private' || service.private,
+      publicIpv4: serviceHealth?.publicIpv4 ?? null,
+    });
+    setDomainDraft(health?.domain ?? '');
+    setDomainError('');
+  };
+
+  const closeDomain = () => {
+    if (domainBusy) return;
+    setDomainEditor(null);
+    setDomainDraft('');
+    setDomainError('');
+  };
+
+  const saveDomain = async (value: string) => {
+    if (!domainEditor || !apiBase || !user) return;
+    setDomainBusy(true);
+    setDomainError('');
+    try {
+      const saved = await savePanelServiceDomain(
+        apiBase,
+        user.signer,
+        domainEditor.serviceId,
+        value,
+      );
+      notify(saved.domain ? `Domain saved: ${saved.domain}` : 'Public domain removed');
+      setDomainEditor(null);
+      setDomainDraft('');
+      refreshHealth();
+    } catch (error) {
+      setDomainError(error instanceof Error ? error.message : 'Could not change the public domain');
+    } finally {
+      setDomainBusy(false);
+    }
+  };
+
   const openIdentity = (service: PanelService) => {
     const health = healthById.get(service.id);
     setIdentityEditor({
@@ -3529,6 +3582,17 @@ export default function AdminPanel() {
                           : health.restartable
                             ? `Restart ${health.container?.names.join(', ') || 'the service'}`
                             : 'No restartable container is mapped to this service';
+                    const domainSupported = Boolean(health?.domainSupported);
+                    const canEditDomain = canControl
+                      && Boolean(serviceHealth?.agent.available)
+                      && domainSupported;
+                    const domainTitle = !canControl
+                      ? 'Sign in to change the public domain'
+                      : !serviceHealth?.agent.available
+                        ? 'The node-agent is required to reload Caddy'
+                        : !domainSupported
+                          ? (health?.domainUnsupportedReason || 'This service cannot use a public domain')
+                          : 'Set an optional public HTTPS domain. The ncc:// address does not change.';
 
                     return (
                       <article className="installed-card" key={service.id}>
@@ -3550,6 +3614,11 @@ export default function AdminPanel() {
                                 : service.pin ? `pin ${service.pin.slice(0, 16)}…` : 'No certificate pin published'}
                               {isDedicated ? ` · dedicated ${shortNpub(serviceNpub)}` : ''}
                             </small>
+                            {health?.domain && (
+                              <small className="service-domain" title={`https://${health.domain}/`}>
+                                <Globe size={10} /> {health.domain}
+                              </small>
+                            )}
                           </div>
                         </div>
                         <div className="installed-details">
@@ -3599,6 +3668,13 @@ export default function AdminPanel() {
                             title={canControl ? 'Choose who may decrypt this service locator' : 'Sign in to change service visibility'}
                           >
                             <LockKeyhole size={14} /> Access
+                          </button>
+                          <button
+                            onClick={() => openDomain(service)}
+                            disabled={!canEditDomain || domainBusy}
+                            title={domainTitle}
+                          >
+                            <Globe size={14} /> Domain
                           </button>
                           <button
                             onClick={() => openIdentity(service)}
@@ -4541,6 +4617,91 @@ export default function AdminPanel() {
                 <button type="submit" className="button-primary" disabled={visibilityBusy}>
                   {visibilityBusy ? <span className="button-spinner" /> : <LockKeyhole size={14} />}
                   {visibilityBusy ? 'Publishing…' : 'Save and republish'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {domainEditor && (
+        <div
+          className="modal-scrim"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (!domainBusy && event.target === event.currentTarget) closeDomain();
+          }}
+        >
+          <section className="install-modal visibility-modal" role="dialog" aria-modal="true" aria-labelledby="domain-title">
+            <div className="modal-top">
+              <div className="eyebrow">PUBLIC HTTPS <span>·</span> {domainEditor.name}</div>
+              <button className="icon-quiet" onClick={closeDomain} aria-label="Close public domain" disabled={domainBusy}><X size={19} /></button>
+            </div>
+            <h2 id="domain-title">Public domain</h2>
+            <p className="modal-intro">
+              Optional. Caddy will obtain a public certificate and proxy this domain to the service.
+              Your ncc:// address, service record and certificate pin do not change.
+            </p>
+
+            <form onSubmit={(event) => { event.preventDefault(); void saveDomain(domainDraft); }}>
+              <label htmlFor="service-domain">DOMAIN</label>
+              <input
+                id="service-domain"
+                className="visibility-recipients"
+                value={domainDraft}
+                onChange={(event) => setDomainDraft(event.target.value)}
+                placeholder="ditto.example.com"
+                autoComplete="off"
+                autoCapitalize="none"
+                spellCheck={false}
+                disabled={domainBusy}
+              />
+              <small className="settings-hint">
+                One domain, served at its root. Enter the name only, without https:// or a path.
+              </small>
+
+              <div className="install-security">
+                <Globe size={15} />
+                <span>
+                  Before saving, point an A/AAAA record for this name at
+                  {domainEditor.publicIpv4 ? ` ${domainEditor.publicIpv4}` : ' this server'}
+                  {' '}and allow TCP 80 and 443. Caddy requests the certificate in the background.
+                </span>
+              </div>
+
+              {domainEditor.isPrivate && (
+                <div className="install-security">
+                  <LockKeyhole size={15} />
+                  <span>
+                    This service has a private locator. A public domain makes its content reachable
+                    at this name for anyone who knows it. The locator stays private.
+                  </span>
+                </div>
+              )}
+
+              {domainError && (
+                <p className="invite-error" role="alert"><CircleAlert size={12} /> {domainError}</p>
+              )}
+
+              <div className="modal-buttons">
+                <button type="button" className="button-secondary" onClick={closeDomain} disabled={domainBusy}>Cancel</button>
+                {domainEditor.domain && (
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => void saveDomain('')}
+                    disabled={domainBusy}
+                  >
+                    Remove domain
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="button-primary"
+                  disabled={domainBusy || !domainDraft.trim()}
+                >
+                  {domainBusy ? <span className="button-spinner" /> : <Globe size={14} />}
+                  {domainBusy ? 'Saving…' : 'Save domain'}
                 </button>
               </div>
             </form>

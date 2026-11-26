@@ -15,6 +15,7 @@ import {
   relayInputToUrl,
   resolvePanelApiBase,
   savePanelServiceVisibility,
+  savePanelServiceDomain,
   type PanelCadence,
 } from './nccPanelApi';
 
@@ -475,6 +476,7 @@ describe('private service visibility', () => {
   it('reads visibility and recipients from the service list', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response({
       agent: { available: true, error: null },
+      publicIpv4: '203.0.113.10',
       services: [{
         serviceId: 'search',
         name: 'ncc-search',
@@ -484,6 +486,9 @@ describe('private service visibility', () => {
         identity: 'dedicated',
         visibility: 'private',
         recipients: ['npub1recipient'],
+        domain: 'search.example.com',
+        domainSupported: true,
+        domainUnsupportedReason: null,
         composeServices: ['search'],
         probe: { url: null, ok: null, status: null, latencyMs: null, error: null },
         container: null,
@@ -497,10 +502,13 @@ describe('private service visibility', () => {
     const health = await loadPanelServices('https://node.example:8448/ncc-api', signer);
     vi.unstubAllGlobals();
 
+    expect(health.publicIpv4).toBe('203.0.113.10');
     expect(health.services[0].visibility).toBe('private');
     expect(health.services[0].recipients).toEqual(['npub1recipient']);
     expect(health.services[0].npub).toBe('npub1service');
     expect(health.services[0].identity).toBe('dedicated');
+    expect(health.services[0].domain).toBe('search.example.com');
+    expect(health.services[0].domainSupported).toBe(true);
   });
 
   it('sends the mode, recipients and admin choice when saving', async () => {
@@ -540,6 +548,36 @@ describe('private service visibility', () => {
       includeAdmins: true,
       newIdentity: true,
     });
+  });
+
+  it('sets an optional public domain without touching NCC fields', async () => {
+    const fetchMock = vi.fn(async () => response({
+      success: true,
+      serviceId: 'ditto',
+      domain: 'ditto.example.com',
+      url: 'https://ditto.example.com/',
+      applied: true,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const saved = await savePanelServiceDomain(
+      'https://node.example:8448/ncc-api',
+      signer,
+      'ditto',
+      'ditto.example.com',
+    );
+    vi.unstubAllGlobals();
+
+    expect(saved).toEqual({
+      serviceId: 'ditto',
+      domain: 'ditto.example.com',
+      url: 'https://ditto.example.com/',
+      applied: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/ncc-api/services/ditto/domain');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(String(init.body))).toEqual({ domain: 'ditto.example.com' });
   });
 
   it('requests a new service npub and returns its address', async () => {

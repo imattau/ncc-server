@@ -44,6 +44,8 @@ Forward and allow these TCP ports:
 
 | Port | Destination | Purpose |
 | --- | --- | --- |
+| 80 | VM port 80 | Optional public-domain HTTP challenge and redirect |
+| 443 | VM port 443 | Optional public-domain HTTPS |
 | 8080 | VM port 8080 | Optional HTTP; local target for the web onion |
 | 8443 | VM port 8443 | Pinned HTTPS web content |
 | 8444 | VM port 8444 | Pinned WSS Ditto Relay |
@@ -57,6 +59,11 @@ and API share port 8447 so browser certificate trust covers both. Npanel keeps
 its own HTTPS origin on port 8445: opening its `ncc://` address works too, but
 the port is the direct address the docs, healthcheck and curl checks use.
 
+Ports 80 and 443 are only needed if an operator assigns an optional public
+domain from the admin panel. Caddy uses them for the public certificate and
+for the HTTP-to-HTTPS redirect. The domains are an additional standard-HTTPS
+front door; they do not change any `ncc://` record.
+
 Do not forward ports 3000, 3010, 3200, 3201, 3220, 3230, 8081, 9050, 9051,
 9200, 13131, or the `TOR_*_PORT` loopback listeners (18045-18048 by default).
 The sidecar admin port, node-agent, Npanel backends, ncc-search's own
@@ -69,6 +76,25 @@ and needs no router forward.
 If the server is behind CGNAT or another upstream NAT, router forwards alone
 will not make these ports public. Test from a second network where possible;
 same-LAN or NAT loopback access does not prove internet reachability.
+
+### Optional public domains
+
+An operator can add one public HTTPS domain to a service from the admin
+panel's **Installed → Domain** action. Caddy obtains a public certificate and
+reverse-proxies the domain to the service. The existing IP:port listeners and
+`ncc://` addresses remain unchanged.
+
+This requires:
+
+- an A/AAAA record for the domain pointing at `PUBLIC_IPV4`;
+- TCP 80 and 443 reachable by Caddy;
+- the `node-agent` service running (it writes and reloads the generated Caddy
+  fragment).
+
+The certificate is issued in the background after saving. Check
+`https://<domain>/` and Caddy's logs if issuance does not complete. Do not use
+this on a host where another process owns ports 80/443 or the Caddy
+configuration.
 
 ## 1. Install and initialize the Compose bundle
 

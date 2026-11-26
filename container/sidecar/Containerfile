@@ -21,6 +21,7 @@ COPY patches/ncc-sidecar-npanel-sync.patch /tmp/ncc-sidecar-npanel-sync.patch
 COPY patches/ncc-sidecar-panel-images.patch /tmp/ncc-sidecar-panel-images.patch
 COPY patches/ncc-sidecar-panel-upgrade.patch /tmp/ncc-sidecar-panel-upgrade.patch
 COPY patches/ncc-sidecar-public-visibility.patch /tmp/ncc-sidecar-public-visibility.patch
+COPY patches/ncc-sidecar-panel-domains.patch /tmp/ncc-sidecar-panel-domains.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -70,6 +71,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
        patch --dry-run -p1 < /tmp/ncc-sidecar-public-visibility.patch \
        && patch -p1 < /tmp/ncc-sidecar-public-visibility.patch; \
      fi \
+  && if ! grep -q 'ncc-api/services/:id/domain' src/routes/panel-services.js; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-panel-domains.patch \
+       && patch -p1 < /tmp/ncc-sidecar-panel-domains.patch; \
+     fi \
   && npm ci \
   && npm --prefix ui ci \
   && npm --prefix ui run build \
@@ -97,6 +102,9 @@ COPY --from=build /src/ncc-06/ncc-sidecar/ /app/
 # It uses the same image with a different command and never runs in the
 # sidecar process itself.
 COPY container/sidecar/node-agent.mjs /app/node-agent.mjs
+# Shared with the admin panel patch: validates and renders optional public
+# HTTPS front doors. The sidecar imports it from /app for domain validation.
+COPY container/sidecar/caddy-sites.mjs /app/caddy-sites.mjs
 # Pure validation and status shaping for the node-agent's upgrade control.
 COPY container/sidecar/upgrade-state.mjs /app/upgrade-state.mjs
 # Pure planning for the node-agent's unused-image clean-up.

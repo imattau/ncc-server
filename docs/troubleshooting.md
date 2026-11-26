@@ -169,6 +169,35 @@ state. `Unreachable` with a running container usually means the probe target
 in the service record is wrong; `Degraded` usually means a relay publish
 failed or the record is older than twice the publish interval.
 
+## A public domain does not load
+
+The optional **Installed → Domain** feature is a standard HTTPS front door.
+It does not change `ncc://` records, so if the old address works and the domain
+does not, the problem is DNS, port reachability or certificate issuance.
+
+Check:
+
+~~~sh
+dig +short ditto.example.com
+sudo ss -ltnp | grep -E ':(80|443) '
+sudo docker-compose -p ncc-bundle logs --tail=200 caddy
+sudo docker-compose -p ncc-bundle logs --tail=200 node-agent sidecar
+~~~
+
+- **DNS:** the name must resolve to the node's public address.
+- **Ports:** allow TCP 80 and 443; Caddy needs one of them for ACME.
+- **Another web server:** do not run the bundle where Apache, nginx or another
+  Caddy already owns 80/443.
+- **Node-agent:** saving the domain needs the agent to write
+  `custom-services/caddy/50-ncc-public-domains.caddy` and reload Caddy.
+- **Certificate:** issuance happens in the background after saving. The first
+  HTTPS request can be slow while Caddy completes it.
+- **`npanel`:** its dashboard is excluded because it routes by one
+  `dashboard_host`; configure npanel itself for a panel domain.
+
+The generated file is safe to inspect. Do not edit it by hand; save the domain
+again from the panel to regenerate it.
+
 ## An image update does not change the image
 
 The **Apps** page lists the bundle's own images and asks the node-agent which
