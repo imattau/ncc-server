@@ -8,6 +8,11 @@ replaces the packaged Caddy service's command and serves this site's Caddyfile;
 do not use it on a host where `caddy.service` already serves unrelated sites.
 RHEL/Fedora is not automated in v0.1.
 
+The admin panel's optional **Installed → Domain** feature is available only in
+the Compose bundle, where the node-agent can render and reload the Caddy
+fragment. A native systemd install would need a separate host-side writer and
+reload helper; this guide's Caddyfile does not configure one.
+
 ## Network prerequisites
 
 - Give the host a stable LAN address where possible.

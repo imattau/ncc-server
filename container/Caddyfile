@@ -410,4 +410,8 @@ http://:{$TOR_ADMIN_PORT} {
 # Custom services installed with `make service-add` get dedicated TLS ports
 # and use the bundle's pinned web certificate. Their onion services map
 # directly to the loopback backend port.
+#
+# The admin panel's node-agent also writes 50-ncc-public-domains.caddy here
+# for optional standard-HTTPS front doors. Those are separate from NCC
+# addressing and do not alter any service record, locator or pin.
 import /etc/caddy/custom/*.caddy

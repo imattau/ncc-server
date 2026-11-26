@@ -50,6 +50,10 @@ services:
       NCC_NPACK_SOCKET: /run/npack/npackd.sock
       NCC_NPACK_OFFICIAL_PUBLISHER: "${NCC_NPACK_OFFICIAL_PUBLISHER:-}"
       CONTENT_PORT: "${CONTENT_PORT:-8080}"
+      # Used only by the optional public-domain panel feature: the DNS target
+      # shown to the operator, and the backend Host header for services whose
+      # existing Caddy listener pins it to the public address.
+      PUBLIC_IPV4: "${PUBLIC_IPV4}"
     depends_on:
       - tor
     restart: unless-stopped
@@ -100,10 +104,14 @@ services:
       # mounted read-only and describes the checkout the host is running.
       NCC_UPGRADE_STATE_DIR: /var/lib/ncc-server-upgrade
       NCC_RELEASE_DIR: /var/lib/ncc-server-release
+      # Optional public HTTPS domains from the admin panel. The agent renders
+      # one generated Caddyfile fragment here and reloads Caddy after changes.
+      NCC_CADDY_CONFIG_DIR: /var/lib/ncc-server/caddy
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - "${NCC_UPGRADE_STATE_DIR:-/var/lib/ncc-server-upgrade}:/var/lib/ncc-server-upgrade"
       - "${NCC_RELEASE_DIR:-/var/lib/ncc-server-release}:/var/lib/ncc-server-release:ro"
+      - ./custom-services/caddy:/var/lib/ncc-server/caddy
     restart: unless-stopped
     read_only: true
     cap_drop:

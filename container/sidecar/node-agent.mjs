@@ -3,10 +3,11 @@
  *
  * The sidecar is deliberately hardened and has no Docker access. This small
  * companion process runs with the sidecar image, mounts the Docker socket,
- * and exposes only six operations: read container state, read recent logs,
+ * and exposes only seven operations: read container state, read recent logs,
  * restart a named service, read host resource metrics, pull the image of
- * a bundle service and recreate its container when the digest changed, and
- * remove old image tags the bundle no longer runs.
+ * a bundle service and recreate its container when the digest changed,
+ * remove old image tags the bundle no longer runs, and write/reload the
+ * optional public-domain Caddy fragment.
  * Container operations are limited to this Compose project.
  *
  * It is not a general Docker proxy. Every request names Compose services,
@@ -35,6 +36,7 @@ import {
   upgradeIsRunning,
 } from './upgrade-state.mjs';
 import { parseKeepPrevious, planImagePrune, prunePreview } from './prune-state.mjs';
+import { CADDY_SITES_FILE, renderCaddySites } from './caddy-sites.mjs';
 
 const DOCKER_SOCKET = process.env.NCC_DOCKER_SOCKET || '/var/run/docker.sock';
 // Path of the same socket on the host, used as the bind source when the
@@ -68,6 +70,9 @@ const HELPER_MARKER = path.join(UPGRADE_STATE_DIR, 'helper.json');
 const RELEASE_FILE = path.join(RELEASE_DIR, 'release.json');
 const UPGRADE_REQUEST_MAX_BYTES = 8 * 1024;
 const UPGRADE_STATUS_MAX_BYTES = 128 * 1024;
+const CADDY_CONFIG_DIR = process.env.NCC_CADDY_CONFIG_DIR || '/var/lib/ncc-server/caddy';
+const CADDY_SITES_PATH = path.join(CADDY_CONFIG_DIR, CADDY_SITES_FILE);
+const CADDY_RELOAD_TIMEOUT_MS = 20_000;
 
 /**
  * The images this bundle ships. A caller cannot name an arbitrary image or
@@ -194,6 +199,41 @@ function postJson(path, payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * Run a fixed command in a project container. Only the node-agent uses this,
+ * and only for the Caddy reload below; callers never supply argv.
+ */
+async function dockerExec(containerId, command, timeoutMs = CADDY_RELOAD_TIMEOUT_MS) {
+  const created = await postJson(`/containers/${encodeURIComponent(containerId)}/exec`, {
+    AttachStdout: false,
+    AttachStderr: false,
+    Tty: false,
+    Cmd: command,
+  });
+  const execId = typeof created?.Id === 'string' ? created.Id : null;
+  if (!execId) throw new Error('Docker did not create an exec instance');
+
+  const started = await dockerRequest(`/exec/${encodeURIComponent(execId)}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ Detach: true, Tty: false }),
+    timeoutMs,
+  });
+  if (started.status >= 400) {
+    throw new Error(`Docker returned HTTP ${started.status} while starting the command`);
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await sleep(250);
+    const info = await dockerJson(`/exec/${encodeURIComponent(execId)}/json`);
+    if (info && info.Running === false) {
+      return { exitCode: Number.isInteger(info.ExitCode) ? info.ExitCode : null };
+    }
+  }
+  throw new Error('The command did not finish before the timeout');
 }
 
 // --- host metrics ---------------------------------------------------------
@@ -1524,6 +1564,104 @@ async function handleUpgradeStatus(response) {
   sendJson(response, 200, { project: PROJECT, helper, job });
 }
 
+let caddySitesInFlight = false;
+
+async function reloadCaddy() {
+  const containers = await projectContainers();
+  const caddy = containers.find((container) => container.service === 'caddy');
+  if (!caddy) throw new Error('The Caddy container is not running');
+
+  const result = await dockerExec(caddy.id, [
+    'caddy',
+    'reload',
+    '--config',
+    '/etc/caddy/Caddyfile',
+    '--adapter',
+    'caddyfile',
+  ]);
+  if (result.exitCode !== 0) {
+    throw new Error(`caddy reload exited with code ${result.exitCode ?? 'unknown'}`);
+  }
+}
+
+async function handleCaddySites(request, response) {
+  if (caddySitesInFlight) {
+    sendJson(response, 409, { error: 'A Caddy site update is already in progress' });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readBody(request);
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : 'Invalid request body' });
+    return;
+  }
+
+  let content;
+  try {
+    content = renderCaddySites(body);
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : 'Invalid Caddy sites' });
+    return;
+  }
+
+  caddySitesInFlight = true;
+  try {
+    await fs.promises.mkdir(CADDY_CONFIG_DIR, { recursive: true });
+
+    let previous = null;
+    try {
+      previous = await fs.promises.readFile(CADDY_SITES_PATH, 'utf8');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+
+    if (previous === content) {
+      sendJson(response, 200, {
+        success: true,
+        changed: false,
+        reloaded: false,
+        sites: Array.isArray(body.sites) ? body.sites.length : 0,
+        file: CADDY_SITES_FILE,
+      });
+      return;
+    }
+
+    const temporary = `${CADDY_SITES_PATH}.${process.pid}.${Date.now()}.tmp`;
+    await fs.promises.writeFile(temporary, content, 'utf8');
+    await fs.promises.rename(temporary, CADDY_SITES_PATH);
+
+    try {
+      await reloadCaddy();
+    } catch (error) {
+      // Never leave Caddy pointed at a fragment it refused to load.
+      if (previous === null) await fs.promises.rm(CADDY_SITES_PATH, { force: true });
+      else await fs.promises.writeFile(CADDY_SITES_PATH, previous, 'utf8');
+      try {
+        await reloadCaddy();
+      } catch {
+        // The original error is the useful one; the rollback is best effort.
+      }
+      throw error;
+    }
+
+    sendJson(response, 200, {
+      success: true,
+      changed: true,
+      reloaded: true,
+      sites: Array.isArray(body.sites) ? body.sites.length : 0,
+      file: CADDY_SITES_FILE,
+    });
+  } catch (error) {
+    sendJson(response, 502, {
+      error: error instanceof Error ? error.message : 'Could not update the Caddy sites',
+    });
+  } finally {
+    caddySitesInFlight = false;
+  }
+}
+
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
@@ -1577,6 +1715,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'GET' && url.pathname === '/v1/version') {
       await handleVersion(response);
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/caddy/sites') {
+      await handleCaddySites(request, response);
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/upgrade') {

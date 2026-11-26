@@ -94,6 +94,10 @@ verifies nothing itself: the sidecar checks each request.
 - `POST /ncc-api/services/<id>/identity` with `{"retireOld": true}` — generate
   a new npub for one service, retire the old address and republish it
 - `POST /ncc-api/services/<id>/restart` — restart the mapped Compose container(s)
+- `PUT /ncc-api/services/<id>/domain` with `{"domain": "ditto.example.com"}`
+  — set or remove an optional public HTTPS front door. An empty domain removes
+  it. This only changes Caddy routing; it does not republish NCC records or
+  touch any service endpoint or certificate pin.
 - `GET /ncc-api/catalogue` — signed npack service packages and catalogue status
 - `GET /ncc-api/catalogue/service?event=<id>` — verify and unpack one release
 - `GET /ncc-api/catalogue/icon/<id>` — verified store icon (PNG or SVG)
@@ -247,6 +251,33 @@ agent replies before restarting, so restarting Caddy cannot cut the response
 that is proxied through it. Without the agent, the page still shows probe and
 publication health and node logs; restart, container logs, image updates and
 host metrics are disabled with an explanation.
+
+### Optional public HTTPS domains
+
+Each Installed card can have one optional **Domain** — a normal public HTTPS
+address such as `https://ditto.example.com` — in addition to its `ncc://`
+address. This is a front door only: Caddy terminates TLS and reverse-proxies
+the domain to the service, while the NCC service record, locator, endpoint
+ordering and certificate pin stay exactly as they are. Saving or removing a
+domain never triggers a publish cycle.
+
+The node-agent renders the domains into
+`custom-services/caddy/50-ncc-public-domains.caddy` and reloads Caddy. The
+generated file is gitignored and survives ordinary container restarts. The
+sidecar reapplies it on startup and every five minutes so a deleted file or a
+removed service is reconciled.
+
+Supported services are `web`, `addr`, `admin`, `ditto`, `search`, `relay` and
+custom services with a loopback `health_url`/`probe_url`. `npanel` is
+deliberately excluded: its dashboard and NIP-98 origin are bound to one
+`dashboard_host`, so a second domain would break the existing address unless
+npanel itself is reconfigured.
+
+The operator still has to point the domain's A/AAAA record at `PUBLIC_IPV4`
+and allow TCP 80 and 443. Caddy obtains and renews the certificate
+automatically; issuance runs in the background after the domain is saved.
+A private service can have a domain, but the dialog warns that the domain makes
+the service publicly reachable even though its locator stays private.
 
 ### Node metrics
 

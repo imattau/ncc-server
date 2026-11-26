@@ -52,6 +52,8 @@ needs a router forward. See [admin panel](docs/admin-panel.md) for SSH access.
 
 | Port | Purpose |
 | --- | --- |
+| 80 | Optional public-domain HTTP challenge and redirect |
+| 443 | Optional public-domain HTTPS |
 | 3010 | Local-only node-agent for panel container controls |
 | 8080 | HTTP web content and local target for the web onion |
 | 8081 | Local-only admin panel (SSH tunnel) |

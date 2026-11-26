@@ -565,6 +565,9 @@ export interface PanelServiceStatus {
   identity: 'shared' | 'dedicated';
   visibility: 'public' | 'private';
   recipients: string[];
+  domain: string | null;
+  domainSupported: boolean;
+  domainUnsupportedReason: string | null;
   composeServices: string[];
   probe: PanelServiceProbe;
   container: PanelServiceContainer | null;
@@ -581,6 +584,7 @@ export interface PanelServiceStatus {
 
 export interface PanelServiceHealth {
   agent: { available: boolean; error: string | null };
+  publicIpv4: string | null;
   services: PanelServiceStatus[];
 }
 
@@ -701,6 +705,9 @@ function readServiceStatus(value: unknown): PanelServiceStatus | null {
     recipients: Array.isArray(record.recipients)
       ? record.recipients.filter((value): value is string => typeof value === 'string')
       : [],
+    domain: stringOrNull(record.domain),
+    domainSupported: record.domainSupported === true,
+    domainUnsupportedReason: stringOrNull(record.domainUnsupportedReason),
     composeServices: Array.isArray(record.composeServices)
       ? record.composeServices.filter((name): name is string => typeof name === 'string')
       : [],
@@ -728,6 +735,7 @@ function readServiceHealth(payload: unknown): PanelServiceHealth {
       available: agent.available === true,
       error: stringOrNull(agent.error),
     },
+    publicIpv4: stringOrNull(record.publicIpv4),
     services: record.services
       .map(readServiceStatus)
       .filter((status): status is PanelServiceStatus => status !== null),
@@ -937,6 +945,40 @@ export async function restartPanelService(
     serviceId: record.serviceId,
     accepted: record.accepted === true,
     containers,
+  };
+}
+
+export interface PanelServiceDomain {
+  serviceId: string;
+  domain: string | null;
+  url: string | null;
+  applied: boolean;
+}
+
+/** Set or remove the optional standard-HTTPS domain for one service. */
+export async function savePanelServiceDomain(
+  base: string,
+  signer: PanelSigner,
+  serviceId: string,
+  domain: string,
+  signal?: AbortSignal,
+): Promise<PanelServiceDomain> {
+  const payload = await requestJson(
+    base, signer, 'PUT',
+    `/services/${encodeURIComponent(serviceId)}/domain`,
+    { domain },
+    signal,
+  );
+  const record = objectValue(payload);
+  if (!record || record.success !== true || typeof record.serviceId !== 'string') {
+    throw new PanelApiError(0, 'The node did not confirm the domain change');
+  }
+
+  return {
+    serviceId: record.serviceId,
+    domain: stringOrNull(record.domain),
+    url: stringOrNull(record.url),
+    applied: record.applied === true,
   };
 }
 
