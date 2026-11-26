@@ -1,7 +1,7 @@
 import { nip19 } from 'nostr-tools';
 import { describe, expect, it } from 'vitest';
 
-import { parseProfileWebsite } from '@/lib/nccProfileLink';
+import { isNccBrowserContext, parseProfileWebsite } from '@/lib/nccProfileLink';
 import { NSITE_NAMED_KIND, NSITE_ROOT_KIND, hexToBase36 } from '@/lib/nsiteSubdomain';
 
 const PUBKEY = '11'.repeat(32);
@@ -115,5 +115,31 @@ describe('parseProfileWebsite', () => {
 
   it('rejects an nsite with an unknown host', () => {
     expect(parseProfileWebsite('nsite://example.com')).toBeUndefined();
+  });
+});
+
+describe('isNccBrowserContext', () => {
+  const ANDROID_UA =
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+    'Chrome/131.0.0.0 Mobile Safari/537.36 NostrNavigator/0.47.19';
+  const DESKTOP_UA =
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+    'Chrome/131.0.0.0 Safari/537.36';
+
+  it('detects the desktop ncc protocol', () => {
+    expect(isNccBrowserContext('ncc:', 'abc.ditto', DESKTOP_UA)).toBe(true);
+  });
+
+  it('detects the mobile loopback proxy', () => {
+    expect(isNccBrowserContext('http:', 'npub.ditto.localhost', DESKTOP_UA)).toBe(true);
+  });
+
+  it('detects the mobile user agent over an ordinary https origin', () => {
+    expect(isNccBrowserContext('https:', 'ditto.example.com', ANDROID_UA)).toBe(true);
+  });
+
+  it('ignores ordinary browsers', () => {
+    expect(isNccBrowserContext('https:', 'ditto.example.com', DESKTOP_UA)).toBe(false);
+    expect(isNccBrowserContext('http:', 'localhost', DESKTOP_UA)).toBe(false);
   });
 });

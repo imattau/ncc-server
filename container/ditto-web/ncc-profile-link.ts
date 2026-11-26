@@ -35,6 +35,25 @@ export interface ProfileWebsiteLink {
   nativeNcc?: boolean;
 }
 
+/**
+ * Whether the page is running inside NCC Browser (Nostr Navigator).
+ *
+ * Desktop serves NCC pages with a real `ncc:` protocol. Mobile proxies them
+ * over `http://<pubkey>.<service>.localhost:<port>` and marks its user agent
+ * with `NostrNavigator/<version>`, so the protocol alone is not enough.
+ */
+export function isNccBrowserContext(
+  protocol: string,
+  hostname: string,
+  userAgent: string,
+): boolean {
+  return (
+    protocol === 'ncc:' ||
+    /\bNostrNavigator\/\d/.test(userAgent) ||
+    (protocol === 'http:' && hostname.endsWith('.localhost'))
+  );
+}
+
 /** NIP-5A's `d` tag rule for a named site. Mirrors ncc-browser's parser. */
 const NSITE_SITE_ID = /^[a-z0-9-]{1,13}$/;
 

@@ -53,7 +53,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { ExternalFavicon } from '@/components/ExternalFavicon';
 import { EXTERNAL_IDENTITY_PLATFORM_NAMES, type ExternalIdentity } from '@/lib/externalIdentities';
-import { parseProfileWebsite } from '@/lib/nccProfileLink';
+import { isNccBrowserContext, parseProfileWebsite } from '@/lib/nccProfileLink';
 import { cn } from '@/lib/utils';`,
     'the ExternalIdentityLinks imports',
   ],
@@ -72,9 +72,12 @@ import { cn } from '@/lib/utils';`,
   const navigate = useNavigate();
   const websiteLink = useMemo(() => parseProfileWebsite(website), [website]);
   // NCC Browser handles nsite:// itself, including deep paths; snapshots stay
-  // in Ditto's viewer because ncc-browser cannot parse that nsite form. In an
-  // ordinary https page Ditto opens its own nsite viewer for the site root.
-  const nativeNcc = window.location.protocol === 'ncc:' && websiteLink?.nativeNcc !== false;
+  // in Ditto's viewer because ncc-browser cannot parse that nsite form. Mobile
+  // Nostr Navigator proxies NCC pages over a .localhost origin and marks its
+  // user agent, so the protocol alone is not enough to detect it.
+  const nativeNcc =
+    isNccBrowserContext(window.location.protocol, window.location.hostname, navigator.userAgent) &&
+    websiteLink?.nativeNcc !== false;
 
   if (identities.length === 0 && !websiteLink) return null;`,
     'the ExternalIdentityLinks function header',
