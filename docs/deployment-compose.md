@@ -523,8 +523,12 @@ Installing a service package needs the same release as the sidecar:
 sudo make service-install REF=npub1.../hello@1.0.0
 ~~~
 
-See [npack services](npack-services.md) for the package format and publisher
-workflow.
+Replace, roll back, or remove an installed package with
+`sudo make service-upgrade REF=...`, `sudo make service-rollback SERVICE=hello`
+and `sudo make service-remove SERVICE=hello`. See
+[npack services](npack-services.md) for the package format and publisher
+workflow, and [Build an NCC service](build-a-service.md) for the developer
+walkthrough.
 
 The legacy systemd installer and its TLS/Tor scripts are separate. Do not run
 them against a Compose deployment.

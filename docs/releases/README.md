@@ -12,3 +12,11 @@ docs/releases/v0.2.20.md
 Add it before pushing the tag. Without the file the release uses GitHub's
 generated notes. Keep the notes user-facing: what changed, how to verify it,
 and any upgrade step beyond the normal `make bundle-upgrade REF=<tag>`.
+
+## Release checklist
+
+- Add `docs/releases/<tag>.md`.
+- Bump the workflow refs in `examples/hello-service/.github/workflows/publish.yml`
+  and `docs/build-a-service.md` to the new tag.
+- Check the service templates and example with `make service-check` and the
+  template runtime smoke test.

@@ -1,0 +1,49 @@
+name: Test NCC service tooling
+
+on:
+  push:
+    paths:
+      - 'scripts/**'
+      - 'templates/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'docs/build-a-service.md'
+      - '.github/workflows/build-service-image.yml'
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'templates/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'docs/build-a-service.md'
+      - '.github/workflows/build-service-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python service tooling tests
+        run: |
+          python3 -m pytest -q \
+            tests/test_npack_package.py \
+            tests/test_npack_install.py \
+            tests/test_templates.py \
+            tests/test_scaffold_service.py \
+            tests/test_check_service.py \
+            tests/test_service_lifecycle.py \
+            tests/test_tor_remove_onion.py
+
+      - name: Template runtime smoke test
+        run: ./tests/test_template_runtime.sh
+
+      - name: Example service runtime smoke test
+        run: ./tests/test_example_runtime.sh

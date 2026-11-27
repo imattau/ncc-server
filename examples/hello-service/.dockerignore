@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+.env
+*.log
+README.md
+service.json
+compose.yaml
+icon.svg

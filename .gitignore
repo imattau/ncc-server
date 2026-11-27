@@ -9,5 +9,8 @@ node_modules/
 /container/npanel/npanel
 /container/npanel/npanel.toml
 /custom-services/packages/*/
+/custom-services/packages/.previous/
+/custom-services/packages/.removed/
+/custom-services/packages/.failed/
 /custom-services/caddy/*.caddy
 !/custom-services/caddy/00-custom-services.caddy

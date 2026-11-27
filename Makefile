@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-add service-install service-package service-list service-private service-public service-rekey test-node-agent
+.PHONY: install install-compose-host first-run-identity bundle-provision-services bundle-enable-tor bundle-reconcile-public-ip bundle-add-admin bundle-upgrade bundle-upgrade-dry-run uninstall status logs verify check-nat smoke build-test-app deploy-test-app bundle-deploy-test-app init-test-identity publish-test-locator enable-tls disable-tls enable-tor enable-relay-proxy disable-relay-proxy provision-ditto-relay install-ditto-relay test-ditto-wss stage-npanel bundle-config bundle-build bundle-pull bundle-up bundle-down bundle-logs bundle-health bundle-configure-npanel bundle-configure-ditto-web service-new service-check service-build service-add service-install service-upgrade service-rollback service-remove service-package service-list service-private service-public service-rekey test-services test-node-agent
 
 install:
 	sudo ./scripts/install.sh
@@ -131,9 +131,24 @@ bundle-logs:
 bundle-health:
 	./scripts/check-container-stack.sh
 
+service-new:
+	@test -n "$(NAME)" || (echo 'Usage: make service-new NAME=hello [DIR=./hello] [IMAGE=ghcr.io/acme/hello:latest] [PUBLIC_PORT=8450] [BACKEND_PORT=18080] [CONTAINER_PORT=8080]' >&2; exit 2)
+	python3 ./scripts/scaffold-service.py --name "$(NAME)" $(if $(DISPLAY_NAME),--display-name "$(DISPLAY_NAME)") $(if $(DIR),--dir "$(DIR)") $(if $(IMAGE),--image "$(IMAGE)") $(if $(PUBLIC_PORT),--public-port "$(PUBLIC_PORT)") $(if $(BACKEND_PORT),--backend-port "$(BACKEND_PORT)") $(if $(CONTAINER_PORT),--container-port "$(CONTAINER_PORT)") $(if $(FORCE),--force)
+
+service-check:
+	@test -n "$(PACKAGE)$(NPK)$(REF)" || (echo 'Usage: make service-check PACKAGE=./hello | NPK=./hello.npk | REF=npub.../hello@1.0.0' >&2; exit 2)
+	./scripts/check-service.py $(if $(PACKAGE),--package "$(PACKAGE)") $(if $(NPK),--npk "$(NPK)") $(if $(REF),--ref "$(REF)") $(if $(SIGNED),--signed) $(if $(ONLINE),--online) $(if $(JSON),--json) $(if $(PRINT_COMPOSE),--print-compose)
+
+service-build:
+	@test -n "$(PACKAGE)" -a -n "$(IMAGE)" || (echo 'Usage: make service-build PACKAGE=./hello IMAGE=ghcr.io/acme/hello:dev [PUSH=1]' >&2; exit 2)
+	docker build -t "$(IMAGE)" "$(PACKAGE)"
+	@if [ "$(PUSH)" = "1" ]; then docker push "$(IMAGE)"; fi
+	@echo "Built $(IMAGE). Resolve the digest with:"
+	@echo "  docker buildx imagetools inspect $(IMAGE)"
+
 service-add:
-	@test -n "$(PACKAGE)" || (echo 'Usage: sudo make service-add PACKAGE=/path/to/service-package' >&2; exit 2)
-	sudo ./scripts/add-compose-service.py "$(PACKAGE)" $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
+	@test -n "$(PACKAGE)" || (echo 'Usage: sudo make service-add PACKAGE=/path/to/service-package [UPGRADE=1] [DRY_RUN=1] [PRIVATE=1] [RECIPIENTS="npub1..."] [NO_ADMINS=1]' >&2; exit 2)
+	sudo ./scripts/add-compose-service.py "$(PACKAGE)" $(if $(UPGRADE),--upgrade) $(if $(DRY_RUN),--dry-run) $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
 
 # Change which keys may resolve a service's encrypted locator. A private
 # service publishes its NCC-02 anchor without an endpoint and its NCC-05
@@ -156,18 +171,36 @@ service-rekey:
 	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-rekey SERVICE=search [NO_RETIRE=1]' >&2; exit 2)
 	sudo python3 ./scripts/service_visibility.py rekey --service "$(SERVICE)" $(if $(NO_RETIRE),--no-retire)
 
+# Replace an installed service and keep its previous package for rollback.
+service-upgrade:
+	@test -n "$(PACKAGE)$(REF)$(NPK)" || (echo 'Usage: sudo make service-upgrade PACKAGE=/path/to/service-package  OR  REF=<publisher>/<name>[@version]  OR  NPK=/path/file.npk' >&2; exit 2)
+	sudo ./scripts/add-compose-service.py $(if $(PACKAGE),"$(PACKAGE)",$(if $(REF),--ref "$(REF)",--npk "$(NPK)")) --upgrade $(if $(YES),--yes) $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
+
+service-rollback:
+	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-rollback SERVICE=hello' >&2; exit 2)
+	sudo ./scripts/rollback-compose-service.py "$(SERVICE)"
+
+service-remove:
+	@test -n "$(SERVICE)" || (echo 'Usage: sudo make service-remove SERVICE=hello [PURGE=1] [YES=1]' >&2; exit 2)
+	sudo ./scripts/remove-compose-service.py --service "$(SERVICE)" $(if $(PURGE),--purge) $(if $(YES),--yes)
+
 # Install a signed npack service package (REF=npub/name[@version]) or a local
 # .npk descriptor (NPK=/path/file.npk). Pass YES=1 to skip the publisher
 # confirmation prompt.
 service-install:
-	@test -n "$(REF)$(NPK)" || (echo 'Usage: sudo make service-install REF=<publisher>/<name>[@version]  OR  NPK=/path/file.npk' >&2; exit 2)
-	sudo ./scripts/add-compose-service.py $(if $(REF),--ref "$(REF)",--npk "$(NPK)") $(if $(YES),--yes) $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
+	@test -n "$(REF)$(NPK)" || (echo 'Usage: sudo make service-install REF=<publisher>/<name>[@version]  OR  NPK=/path/file.npk [UPGRADE=1] [DRY_RUN=1] [YES=1]' >&2; exit 2)
+	sudo ./scripts/add-compose-service.py $(if $(REF),--ref "$(REF)",--npk "$(NPK)") $(if $(UPGRADE),--upgrade) $(if $(DRY_RUN),--dry-run) $(if $(YES),--yes) $(if $(PRIVATE),--private) $(if $(RECIPIENTS),--recipient "$(RECIPIENTS)") $(if $(NO_ADMINS),--no-admins)
 
 # Build and publish an NCC service descriptor with npack. Requires the npack
 # CLI and a publisher key; see docs/npack-services.md.
 service-package:
 	@test -n "$(SERVICE_DIR)" -a -n "$(VERSION)" -a -n "$(PUBLISHER)" -a -n "$(OUTPUT)" || (echo 'Usage: make service-package SERVICE_DIR=dir VERSION=1.0.0 PUBLISHER=npub... OUTPUT=name.npk' >&2; exit 2)
 	./scripts/npack-service.py build --service-dir "$(SERVICE_DIR)" --version "$(VERSION)" --publisher "$(PUBLISHER)" --output "$(OUTPUT)" $(if $(IMAGE),--image "$(IMAGE)") $(if $(ARCH),--arch "$(ARCH)") $(if $(REPO),--repo "$(REPO)") $(if $(COMMIT),--commit "$(COMMIT)")
+
+test-services:
+	python3 -m pytest -q tests/test_npack_package.py tests/test_npack_install.py tests/test_templates.py tests/test_scaffold_service.py tests/test_check_service.py tests/test_service_lifecycle.py tests/test_tor_remove_onion.py
+	./tests/test_template_runtime.sh
+	./tests/test_example_runtime.sh
 
 test-node-agent:
 	node --test container/sidecar/test/*.test.mjs

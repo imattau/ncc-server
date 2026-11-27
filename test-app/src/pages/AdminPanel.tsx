@@ -258,6 +258,10 @@ function serviceMeta(id: string): ServiceMeta {
   return SERVICE_META[id] ?? { ...UNKNOWN_SERVICE, label: id, route: id };
 }
 
+function serviceLabel(service: { id: string; name?: string | null }): string {
+  return SERVICE_META[service.id]?.label ?? (service.name || service.id);
+}
+
 const navItems: { label: Section; icon: LucideIcon }[] = [
   { label: 'Overview', icon: Activity },
   { label: 'Apps', icon: Layers3 },
@@ -2964,7 +2968,7 @@ export default function AdminPanel() {
                       return (
                         <div className="service-row" key={service.id}>
                           <IconBox icon={meta.icon} tint={meta.tint} />
-                          <div className="service-name"><strong>{meta.label}</strong><small>{meta.description}</small></div>
+                          <div className="service-name"><strong>{serviceLabel(service)}</strong><small>{meta.description}</small></div>
                           <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
                           <button
                             className="locator-link"
@@ -3486,7 +3490,7 @@ export default function AdminPanel() {
                         <button onClick={() => openRelease(entry)}>Details <ArrowUpRight size={12} /></button>
                       </div>
                       <button className="catalog-install" onClick={() => openRelease(entry)}>
-                        <ArrowDownToLine size={15} /> Review &amp; install
+                        <ArrowDownToLine size={15} /> Review package
                       </button>
                     </article>
                   ))}
@@ -3499,6 +3503,7 @@ export default function AdminPanel() {
                   <strong>Signed by their publisher.</strong> Entries come from npack release events and
                   Blossom artifacts; this node verifies the release signature and artifact hash before
                   installing, then pulls the image from its registry. Catalogue updated {catalogueAge(catalogue)}.
+                  <a href="https://github.com/imattau/ncc-server/blob/main/docs/build-a-service.md" target="_blank" rel="noreferrer"> Build your own service.</a>
                 </span>
               </div>
             </>
@@ -3600,7 +3605,7 @@ export default function AdminPanel() {
                           <IconBox icon={meta.icon} tint={meta.tint} />
                           <div className="service-name">
                             <div className="installed-title">
-                              <strong>{meta.label}</strong>
+                              <strong>{serviceLabel(service)}</strong>
                               <span className={`status-pill ${status.tone}`}><i />{status.label}</span>
                               {isPrivate && (
                                 <span className="status-pill muted" title="The locator is encrypted to its recipients">
@@ -3688,6 +3693,14 @@ export default function AdminPanel() {
                             {newIdentityBusy ? <span className="button-spinner" /> : <KeyRound size={14} />}
                             New npub
                           </button>
+                          {!SERVICE_META[service.id] && (
+                            <button
+                              onClick={() => copy(`sudo make service-remove SERVICE=${service.id}`, 'Remove command')}
+                              title="Copy the host command that removes this custom service"
+                            >
+                              <Trash2 size={14} /> Remove command
+                            </button>
+                          )}
                           {href ? (
                             <a
                               className="external-action"
@@ -4419,7 +4432,7 @@ export default function AdminPanel() {
                 className="text-button"
                 onClick={() => copy(installCommand(selectedRelease), 'Install command')}
               >
-                <Copy size={13} /> Copy
+                <Copy size={13} /> Copy install command
               </button>
             </div>
 

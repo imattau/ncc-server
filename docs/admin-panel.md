@@ -232,6 +232,9 @@ All of them use the same NIP-98 authorization as the settings routes.
 - **Open endpoint** opens the service's canonical `ncc://` address. `web` and
   the legacy `addr` profile open the bare node address; every other service
   opens `ncc://<npub>/<service-id>/`.
+- **Remove command** on a custom service copies
+  `sudo make service-remove SERVICE=<id>` to the clipboard. The panel does not
+  remove services itself.
 
 Standard services map to the bundle's containers: `web`, `addr` and `admin`
 use `caddy`; `relay` uses `relay`; `npanel` uses `npanel`; `ditto` uses
@@ -497,8 +500,8 @@ until an admin presses **Trust publisher** (a NIP-98 `PUT
 /ncc-api/catalogue/trust`). Trusting a publisher trusts its metadata, not its
 container image.
 
-The panel does not install packages itself. It shows the verified install
-command:
+The panel does not install packages itself. The package dialog shows a
+copyable host command:
 
 ```sh
 sudo make service-install REF=<publisher>/<name>@<version>
@@ -507,6 +510,11 @@ sudo make service-install REF=<publisher>/<name>@<version>
 which re-checks the release, artifact hash and descriptor on the node before
 touching Compose. Without the `npack` container the catalogue reports itself
 unavailable; the rest of the panel keeps working.
+
+To build and publish your own service, see
+[Build an NCC service](build-a-service.md). The same page covers the local
+`make service-add` route, `make service-check`, upgrades, rollback, and
+removal.
 
 **Refresh catalogue** asks npackd to query the relays again. A relay query can
 take a while on a slow network, so the node does not hold the panel's request

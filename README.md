@@ -46,6 +46,9 @@ recreated from the panel when their tag moved, then lists service packages
 published with [npack](docs/npack-services.md), a Nostr-native index for
 signed `.npk` descriptors; installing one is `sudo make service-install REF=…`
 and the container image still comes from its registry.
+To run your own application, start with
+[Build an NCC service](docs/build-a-service.md); it includes a working example,
+a scaffold command, local validation, and the upgrade/rollback/remove flow.
 The optional panel Caddy image also serves the panel on loopback port 8081,
 and the node-agent listens on loopback 3010 for container controls; neither
 needs a router forward. See [admin panel](docs/admin-panel.md) for SSH access.

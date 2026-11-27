@@ -9,11 +9,11 @@
   "license": "MIT",
   "support_url": "https://example.com/hello/support",
   "icon": "icon.png",
-  "compose_service": "app",
+  "compose_service": "hello-app",
   "image": "ghcr.io/example/hello@sha256:replace-with-the-image-digest",
   "public_port": 8450,
   "backend_port": 18080,
-  "container_port": 80,
+  "container_port": 8080,
   "probe_path": "/",
   "env": {
     "LOG_LEVEL": "info"

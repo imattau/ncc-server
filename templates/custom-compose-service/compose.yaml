@@ -1,14 +1,16 @@
 services:
-  app:
+  hello-app:
     image: ${CUSTOM_SERVICE_IMAGE}
     ports:
       - "127.0.0.1:${CUSTOM_SERVICE_BACKEND_PORT}:${CUSTOM_SERVICE_CONTAINER_PORT}"
     restart: unless-stopped
     read_only: true
+    user: "101:101"
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    pids_limit: 256
     tmpfs:
       - /tmp
     healthcheck:

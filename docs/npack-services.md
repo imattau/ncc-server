@@ -1,5 +1,9 @@
 # Distributing services with npack
 
+New to building an NCC service? Start with
+[Build an NCC service](build-a-service.md) for the container contract, a
+working example, and CI setup.
+
 [npack](https://github.com/imattau/npack) is a Nostr-native package manager:
 it publishes signed release metadata as `kind:9900` events, stores immutable
 `.npk` artifacts on Blossom-compatible servers, and verifies SHA-256 hashes
@@ -123,7 +127,7 @@ repository, installs the pinned npack release, builds and (when
 ```yaml
 publish-package:
   needs: build-image
-  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.9
+  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.30
   with:
     version: 1.0.0
     publisher: npub1...
@@ -133,7 +137,10 @@ publish-package:
 ```
 
 `templates/ncc-service-npk/` is a working starting point with a `service.json`
-and icon.
+and icon. For a complete build-and-publish workflow, see
+`examples/hello-service/.github/workflows/publish.yml`; it uses
+`.github/workflows/build-service-image.yml` to build and push the image, then
+passes the digest to the packaging workflow.
 
 ## The catalogue daemon
 
@@ -195,6 +202,19 @@ not.
 with its own `compose.yaml`, as described in
 [custom Compose services](custom-compose-services.md).
 
+## Update, roll back, remove
+
+```sh
+sudo make service-upgrade REF=npub1.../hello@1.1.0
+sudo make service-rollback SERVICE=hello
+sudo make service-remove SERVICE=hello
+```
+
+`service-upgrade` keeps the previous package under
+`custom-services/packages/.previous/hello`. `service-remove` keeps named
+volumes unless `PURGE=1` is passed; the last published locator remains on
+relays until its TTL expires.
+
 ## Trust
 
 The publisher key is the identity. The panel shows:
@@ -226,10 +246,12 @@ sandbox described above, but the publisher's code still runs on your host.
   service is not flagged as revoked yet. `make service-install` refuses a
   revoked release because resolution fails.
 - No automatic updates for installed service packages. Re-run
-  `service-install` with a newer version; the staged package keeps its
-  previous release for rollback. The bundle's own images are updated from the
-  panel's **Apps** page instead, because they ship with the node and are not
-  npack packages.
+  `sudo make service-upgrade REF=<publisher>/<name>@<version>` to replace an
+  installed package. The previous package is kept under
+  `custom-services/packages/.previous/<service-id>` and can be restored with
+  `sudo make service-rollback SERVICE=<service-id>`. The bundle's own images
+  are updated from the panel's **Apps** page instead, because they ship with
+  the node and are not npack packages.
 
 These are deliberate limits for the first release and match the existing
 custom-service scope.

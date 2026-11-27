@@ -8,11 +8,19 @@ sudo make service-add PACKAGE=/path/to/your-service
 ```
 
 The package must contain `service.json` and `compose.yaml`. Keep one Compose
-service whose key matches `compose_service`. Its image should be the image
-named by `image`; the template uses the provided environment variables to map
-the loopback-only host `backend_port` to `container_port`. The image is pulled
-before the container starts. You can replace the health check and other
-container settings to match your app, but keep the loopback-only port mapping.
+service whose key matches `compose_service`, and make that key unique across
+all installed packages. Its image should be the image named by `image`; the
+template uses the provided environment variables to map the loopback-only host
+`backend_port` to `container_port`. The image is pulled before the container
+starts. You can replace the health check and other container settings to match
+your app, but keep the loopback-only port mapping.
+
+The template uses the unprivileged nginx image because the generated container
+runs with a read-only root filesystem. The image writes its pid and cache files
+under `/tmp`, which is mounted as tmpfs. If you use another image, make sure
+its writable directories are `/tmp` or are mounted explicitly; otherwise the
+container exits at startup with a read-only filesystem error. Running as
+non-root (`user:`) is strongly recommended.
 
 Choose a unique lower-case `service_id` (letters, digits, and hyphens), a free
 public TLS port, and a free loopback backend port. NCC-Server uses the existing
@@ -36,4 +44,6 @@ sidecar admin API remains local and is never exposed by this package.
 This template is for an operator-authored local package. To distribute the
 service to other nodes, publish it as a signed npack descriptor instead: see
 [docs/npack-services.md](../../docs/npack-services.md) and
-`templates/ncc-service-npk/`.
+`templates/ncc-service-npk/`. For a complete buildable example, see
+[`examples/hello-service`](../../examples/hello-service) and the
+[service quickstart](../../docs/build-a-service.md).

@@ -1,10 +1,10 @@
 {
   "service_id": "hello",
   "name": "Hello Service",
-  "compose_service": "app",
-  "image": "nginx:1.27-alpine",
+  "compose_service": "hello-app",
+  "image": "nginxinc/nginx-unprivileged:1.27-alpine",
   "public_port": 8450,
   "backend_port": 18080,
-  "container_port": 80,
+  "container_port": 8080,
   "probe_path": "/"
 }

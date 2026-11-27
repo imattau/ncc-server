@@ -132,3 +132,38 @@ def configure(project, torrc_path, services):
     if not authenticate(password):
         raise RuntimeError('Tor rejected the new control password')
     return password
+
+
+def _read_control_reply(sock):
+    data = b''
+    while b'\r\n' not in data or not re.search(rb'(?:^|\r\n)(?:250|5\d\d) ', data):
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def remove_onion(password, address, *, host=CONTROL_HOST, port=CONTROL_PORT,
+                 timeout=5):
+    """Best-effort DEL_ONION for a service onion address.
+
+    Returns True when Tor accepted the command. Raises RuntimeError when the
+    control connection or authentication failed.
+    """
+    service_id = str(address or '').strip()
+    if service_id.endswith('.onion'):
+        service_id = service_id[:-len('.onion')]
+    if not service_id:
+        raise RuntimeError('no onion address to remove')
+
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.sendall(f'AUTHENTICATE "{_quote(password)}"\r\n'.encode())
+        reply = _read_control_reply(sock)
+        if not reply.startswith(b'250'):
+            raise RuntimeError(f'Tor rejected the control password: {reply[:120]!r}')
+        sock.sendall(f'DEL_ONION {service_id}\r\n'.encode())
+        reply = _read_control_reply(sock)
+        if not reply.startswith(b'250'):
+            raise RuntimeError(f'Tor rejected DEL_ONION: {reply[:120]!r}')
+    return True

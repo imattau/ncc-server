@@ -1,0 +1,60 @@
+name: Build and publish NCC service
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package Semantic Version, for example 1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Resolve package version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "Not a Semantic Version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    uses: imattau/ncc-server/.github/workflows/build-service-image.yml@v0.2.30
+    with:
+      image: ghcr.io/${{ github.repository }}
+      tag: ${{ needs.prepare.outputs.version }}
+      platforms: linux/amd64,linux/arm64
+
+  package:
+    needs: [prepare, build]
+    uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.30
+    with:
+      service_dir: .
+      version: ${{ needs.prepare.outputs.version }}
+      publisher: ${{ vars.NCC_PUBLISHER }}
+      image: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+      tool_ref: v0.2.30
+    secrets:
+      NOSTR_SECRET_KEY: ${{ secrets.NOSTR_SECRET_KEY }}

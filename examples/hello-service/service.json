@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "service_id": "hello",
+  "name": "Hello Service",
+  "summary": "A small NCC service example",
+  "description": "A zero-dependency Node HTTP service that follows the NCC container contract: non-root, read-only root filesystem, one loopback HTTP port, and a /healthz probe. Replace the server with your own application.",
+  "categories": ["Social"],
+  "homepage": "https://github.com/imattau/ncc-server/tree/main/examples/hello-service",
+  "license": "MIT",
+  "icon": "icon.svg",
+  "compose_service": "hello-app",
+  "image": "ghcr.io/example/hello-service:latest",
+  "public_port": 8450,
+  "backend_port": 18080,
+  "container_port": 8080,
+  "probe_path": "/healthz",
+  "env": {
+    "PORT": "8080",
+    "GREETING": "Hello from NCC"
+  }
+}

@@ -1,5 +1,9 @@
 # Add a custom Compose service
 
+New to running your own app? Start with
+[Build an NCC service](build-a-service.md), which includes a working example,
+a scaffold command, and local validation.
+
 The bundle includes a starter package at
 `templates/custom-compose-service`. Copy it to a working directory, change
 `service.json` and `compose.yaml` for the application, then install it on the
@@ -48,5 +52,45 @@ remains bound to localhost.
 
 This first version is for HTTP services with one Compose service and one
 backend port. Apps that require additional public origins, multiple public
-ports, custom WebSocket handling, Tor endpoints, or special TLS behavior need
-additional Caddy and locator configuration.
+ports, or special TLS behavior need additional Caddy and locator
+configuration. Caddy's reverse proxy passes WebSocket upgrades, so a normal
+WebSocket app does not need a separate configuration, but it still uses the
+same single HTTP port.
+
+## Updating and removing
+
+Validate a package before installing it:
+
+```sh
+make service-check PACKAGE=/path/to/package
+```
+
+Preview the install without changing the node:
+
+```sh
+sudo make service-add PACKAGE=/path/to/package DRY_RUN=1
+```
+
+Replace an installed package:
+
+```sh
+sudo make service-upgrade PACKAGE=/path/to/package
+```
+
+The previous package is kept under
+`custom-services/packages/.previous/<service-id>`. Restore it with:
+
+```sh
+sudo make service-rollback SERVICE=<service-id>
+```
+
+Remove a service:
+
+```sh
+sudo make service-remove SERVICE=<service-id>
+sudo make service-remove SERVICE=<service-id> PURGE=1
+```
+
+The container, Caddy route, sidecar record, and staged package are removed.
+Named volumes are kept unless `PURGE=1` is set. The last published locator
+remains on relays until its TTL expires.

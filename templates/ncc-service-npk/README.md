@@ -50,6 +50,7 @@ package's identity.
 | `backend_port` | Loopback port for the container. Not published. |
 | `container_port` | Port the process listens on inside the container. |
 | `probe_path` | HTTP path used to decide the service is up. |
+| `healthcheck_path` | Optional sidecar health path; defaults to `probe_path`. |
 | `env` | Optional environment variables. |
 | `volumes` | Optional named volumes, mapped to absolute container paths. |
 | `min_bundle_version` | Optional NCC Server version this package expects. Shown in the panel; not enforced yet. |
@@ -69,3 +70,19 @@ sudo make service-install REF=npub1.../hello@1.0.0
 
 The node verifies the release event, the artifact SHA-256, and the descriptor
 before it writes anything.
+
+The image must follow the NCC container contract: non-root, plain HTTP on
+`0.0.0.0:<container_port>`, a read-only root filesystem, and writes only to
+`/tmp` or declared named volumes. See the working
+[`examples/hello-service`](../../examples/hello-service) and the
+[service quickstart](../../docs/build-a-service.md).
+
+Validate a package before installing:
+
+```sh
+make service-check NPK=./hello-1.0.0.npk
+```
+
+Upgrade an installed package with `sudo make service-upgrade REF=...`, roll
+back with `sudo make service-rollback SERVICE=hello`, and remove it with
+`sudo make service-remove SERVICE=hello`.

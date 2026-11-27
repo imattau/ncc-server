@@ -294,8 +294,34 @@ def confirm(source):
         fail('installation cancelled')
 
 
-def stage_files(source, target):
-    """Write the package into custom-services/packages/<id>."""
+def write_staged(source, target):
+    """Write a package into its final directory."""
+    if source['package_dir']:
+        shutil.copytree(source['package_dir'], target, dirs_exist_ok=True)
+        return
+
+    target.mkdir(parents=True, exist_ok=True)
+    (target / 'service.json').write_text(
+        json.dumps(source['spec'], indent=2, sort_keys=True) + '\n')
+    (target / 'compose.yaml').write_text(source['compose'])
+    if source['provenance']:
+        (target / 'npack.json').write_text(
+            json.dumps(source['provenance'], indent=2, sort_keys=True) + '\n')
+    if source.get('readme'):
+        (target / 'README.md').write_text(source['readme'])
+
+
+def previous_package(target):
+    return target.parent / '.previous' / target.name
+
+
+def stage_files(source, target, *, upgrade=False):
+    """Write the package into custom-services/packages/<id>.
+
+    A normal install refuses to replace a different package. An explicit
+    upgrade keeps the previous package so it can be restored by
+    `make service-rollback`.
+    """
     spec = source['spec']
     provenance = source['provenance']
 
@@ -305,30 +331,32 @@ def stage_files(source, target):
             normalized = validate_descriptor(staged, require_digest=False)
         except DescriptorError:
             normalized = None
-        if normalized != spec:
-            fail(f'{target} already contains a different or incomplete service package; '
-                 'inspect it before retrying')
-        if provenance and read_metadata(target / 'npack.json') != provenance:
-            fail(f'{target} was installed from a different package release; '
-                 'remove it before changing versions')
-        return
 
-    if source['package_dir']:
-        shutil.copytree(source['package_dir'], target)
-        return
+        same_spec = normalized == spec
+        same_provenance = not provenance or read_metadata(
+            target / 'npack.json') == provenance
 
-    target.mkdir(parents=True, exist_ok=True)
-    (target / 'service.json').write_text(
-        json.dumps(spec, indent=2, sort_keys=True) + '\n')
-    (target / 'compose.yaml').write_text(source['compose'])
-    if provenance:
-        (target / 'npack.json').write_text(
-            json.dumps(provenance, indent=2, sort_keys=True) + '\n')
-    if source.get('readme'):
-        (target / 'README.md').write_text(source['readme'])
+        if (not same_spec or not same_provenance) and not upgrade:
+            fail(f'{target} already contains a different package; '
+                 'use --upgrade to replace it')
+
+        if upgrade:
+            previous = previous_package(target)
+            previous.parent.mkdir(parents=True, exist_ok=True)
+            if previous.exists():
+                shutil.rmtree(previous)
+            target.rename(previous)
+        else:
+            # Same package: refresh the staged files so edits to a local
+            # compose.yaml or README take effect without a version bump.
+            write_staged(source, target)
+            return
+
+    write_staged(source, target)
 
 
-def install(source, *, private=False, recipients=(), include_admins=True):
+def install(source, *, private=False, recipients=(), include_admins=True,
+            upgrade=False):
     spec = source['spec']
     service_id = spec['service_id']
     name = spec['name']
@@ -338,6 +366,7 @@ def install(source, *, private=False, recipients=(), include_admins=True):
     backend_port = spec['backend_port']
     container_port = spec['container_port']
     probe_path = spec['probe_path']
+    healthcheck_path = spec.get('healthcheck_path') or probe_path
 
     env_values = read_env()
     public_ip = env_values.get('PUBLIC_IPV4', '')
@@ -352,7 +381,13 @@ def install(source, *, private=False, recipients=(), include_admins=True):
     target = PROJECT / 'custom-services' / 'packages' / service_id
     route = PROJECT / 'custom-services' / 'caddy' / f'{service_id}.caddy'
     staged_before = target.exists()
-    if not staged_before:
+    old_spec = read_metadata(target / 'service.json') if staged_before else {}
+    old_compose_service = old_spec.get('compose_service')
+    old_public_port = old_spec.get('public_port')
+    old_backend_port = old_spec.get('backend_port')
+
+    if (not staged_before or old_public_port != public_port
+            or old_backend_port != backend_port):
         reserve_port(public_port, 'public')
         reserve_port(backend_port, 'backend')
 
@@ -365,11 +400,22 @@ def install(source, *, private=False, recipients=(), include_admins=True):
 
     target.parent.mkdir(parents=True, exist_ok=True)
     route.parent.mkdir(parents=True, exist_ok=True)
-    stage_files(source, target)
+    route_before = route.read_text() if route.is_file() else None
+    stage_files(source, target, upgrade=upgrade)
+
+    # A changed service key or port needs the old container gone before the
+    # new one can bind its port. The old fragment is now under .previous.
+    previous = previous_package(target)
+    if upgrade and previous.exists() and old_compose_service and (
+            old_compose_service != compose_service
+            or old_public_port != public_port
+            or old_backend_port != backend_port):
+        run(COMPOSE + ['-f', str(previous / 'compose.yaml'),
+                       'rm', '-s', '-f', old_compose_service])
 
     compose_text = (target / 'compose.yaml').read_text()
     expected_mapping = '127.0.0.1:${CUSTOM_SERVICE_BACKEND_PORT}:${CUSTOM_SERVICE_CONTAINER_PORT}'
-    if source['package_dir'] and not staged_before:
+    if source['package_dir']:
         # Local packages keep their own compose.yaml and env placeholders.
         if expected_mapping not in compose_text:
             fail(f'compose.yaml must bind its backend with {expected_mapping!r}')
@@ -382,20 +428,6 @@ def install(source, *, private=False, recipients=(), include_admins=True):
         for token, value in substitutions.items():
             compose_text = compose_text.replace(token, value)
         (target / 'compose.yaml').write_text(compose_text)
-
-    route_text = f'''# Generated for NCC service {service_id}. Edit via service package tooling.
-:{public_port} {{
-\ttls /opt/ncc-sidecar/certs/2/server.crt /opt/ncc-sidecar/certs/2/server.key
-\theader Access-Control-Allow-Origin "*"
-\theader Referrer-Policy "strict-origin-when-cross-origin"
-\theader X-Content-Type-Options "nosniff"
-\trequest_body {{
-\t\tmax_size 50MB
-\t}}
-\treverse_proxy 127.0.0.1:{backend_port}
-}}
-'''
-    route.write_text(route_text)
 
     custom_compose = target / 'compose.yaml'
     package_compose = COMPOSE + ['-f', str(custom_compose)]
@@ -413,6 +445,20 @@ def install(source, *, private=False, recipients=(), include_admins=True):
         run([str(PROJECT / 'scripts' / 'compose-bundle.sh'), 'up', '-d', compose_service])
         wait_backend(backend_port, probe_path)
 
+        route_text = f'''# Generated for NCC service {service_id}. Edit via service package tooling.
+:{public_port} {{
+\ttls /opt/ncc-sidecar/certs/2/server.crt /opt/ncc-sidecar/certs/2/server.key
+\theader Access-Control-Allow-Origin "*"
+\theader Referrer-Policy "strict-origin-when-cross-origin"
+\theader X-Content-Type-Options "nosniff"
+\trequest_body {{
+\t\tmax_size 50MB
+\t}}
+\treverse_proxy 127.0.0.1:{backend_port}
+}}
+'''
+        route.write_text(route_text)
+
         endpoint = f'https://{public_ip}:{public_port}/'
         config = {
             'refresh_interval_minutes': 360,
@@ -426,7 +472,7 @@ def install(source, *, private=False, recipients=(), include_admins=True):
             'preferred_protocol': 'https',
             'port': public_port,
             'probe_url': f'http://127.0.0.1:{backend_port}{probe_path}',
-            'health_url': f'http://127.0.0.1:{backend_port}{probe_path}',
+            'health_url': f'http://127.0.0.1:{backend_port}{healthcheck_path}',
             'compose_services': [compose_service],
             'ncc05_recipients': [],
             'ncc02ExpectedKey': pin,
@@ -508,6 +554,32 @@ def install(source, *, private=False, recipients=(), include_admins=True):
              '--max-time', '15', '--resolve', f'{public_ip}:{public_port}:127.0.0.1',
              f'https://{public_ip}:{public_port}{probe_path}'])
     except Exception:
+        # A failed upgrade must not leave the old container/route behind.
+        if upgrade and previous.exists():
+            try:
+                failed = target.parent / '.failed' / f'{service_id}-{int(time.time())}'
+                failed.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    target.rename(failed)
+                previous.rename(target)
+                if route_before is None:
+                    route.unlink(missing_ok=True)
+                else:
+                    route.write_text(route_before)
+                if old_compose_service:
+                    run([str(PROJECT / 'scripts' / 'compose-bundle.sh'),
+                         'up', '-d', old_compose_service])
+                run([str(PROJECT / 'scripts' / 'compose-bundle.sh'), 'exec', '-T',
+                     'caddy', 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile',
+                     '--adapter', 'caddyfile'])
+                print(f'Upgrade failed; restored the previous package for {service_id}.',
+                      file=sys.stderr)
+                print(f'Inspect {failed} and rerun with --upgrade when ready.',
+                      file=sys.stderr)
+            except Exception as rollback_error:
+                print(f'Upgrade failed and automatic rollback also failed: {rollback_error}',
+                      file=sys.stderr)
+                print(f'Previous package: {previous}', file=sys.stderr)
         # Keep staged files and the container for inspection if provisioning
         # or publication fails; rerunning with the same package resumes it.
         raise
@@ -525,6 +597,37 @@ def install(source, *, private=False, recipients=(), include_admins=True):
     print(f'Allow and forward TCP {public_port} if external access is intended.')
 
 
+def dry_run(source, *, upgrade=False):
+    spec = source['spec']
+    service_id = spec['service_id']
+    target = PROJECT / 'custom-services' / 'packages' / service_id
+    previous = previous_package(target)
+    compose = source['compose']
+    expected_mapping = '127.0.0.1:${CUSTOM_SERVICE_BACKEND_PORT}:${CUSTOM_SERVICE_CONTAINER_PORT}'
+    if source['package_dir'] and expected_mapping not in compose:
+        fail(f'compose.yaml must bind its backend with {expected_mapping!r}')
+
+    print(f"Would install {spec['name']} ({service_id})")
+    print(f"  image     {spec['image']}")
+    print(f"  ports     public {spec['public_port']}, backend {spec['backend_port']}, container {spec['container_port']}")
+    print(f"  compose   {spec['compose_service']}")
+    print(f"  target    {target}")
+    if target.exists():
+        print(f"  action    {'replace' if upgrade else 'refresh'}")
+        if upgrade:
+            print(f"  previous  {previous}")
+    else:
+        print('  action    create')
+    if source['provenance']:
+        provenance = source['provenance']
+        print(f"  package   {provenance.get('version')} "
+              f"from {provenance.get('npub') or provenance.get('publisher')}")
+        print(f"  verified  {'yes' if provenance.get('verified') else 'no'}")
+    else:
+        print('  package   local operator package (not publisher-signed)')
+    print('No files, containers, Caddy, Tor, or sidecar records were changed.')
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Install a custom NCC service from a package, npack reference or .npk')
@@ -539,6 +642,10 @@ def main():
                         help='npub that may decrypt a private locator; repeatable')
     parser.add_argument('--no-admins', action='store_true',
                         help='do not add node admin keys to a private locator')
+    parser.add_argument('--upgrade', action='store_true',
+                        help='replace an existing package and keep the previous one for rollback')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='validate and print the plan without changing anything')
     args = parser.parse_args()
 
     sources = [bool(args.package), bool(args.ref), bool(args.npk)]
@@ -546,23 +653,27 @@ def main():
         parser.error('pass exactly one of PACKAGE, --ref, or --npk')
     if args.recipient and not args.private:
         parser.error('--recipient requires --private')
-    if os.geteuid() != 0:
+    if not args.dry_run and os.geteuid() != 0:
         fail('run this command as root on the NCC-Server host')
 
     if args.package:
         source = load_local_package(args.package)
     elif args.ref:
         source = load_ref(args.ref)
-        if not args.yes:
+        if not args.yes and not args.dry_run:
             confirm(source)
     else:
         source = load_npk(args.npk)
-        if not args.yes:
+        if not args.yes and not args.dry_run:
             confirm(source)
+
+    if args.dry_run:
+        dry_run(source, upgrade=args.upgrade)
+        return
 
     recipients = service_visibility.normalize_recipients(args.recipient)
     install(source, private=args.private, recipients=recipients,
-            include_admins=not args.no_admins)
+            include_admins=not args.no_admins, upgrade=args.upgrade)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,24 @@
+services:
+  hello-app:
+    image: ${CUSTOM_SERVICE_IMAGE}
+    ports:
+      - "127.0.0.1:${CUSTOM_SERVICE_BACKEND_PORT}:${CUSTOM_SERVICE_CONTAINER_PORT}"
+    environment:
+      PORT: "${CUSTOM_SERVICE_CONTAINER_PORT}"
+      GREETING: "Hello from NCC"
+    restart: unless-stopped
+    read_only: true
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:${CUSTOM_SERVICE_CONTAINER_PORT}${CUSTOM_SERVICE_PROBE_PATH}"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
