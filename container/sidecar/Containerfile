@@ -22,6 +22,7 @@ COPY patches/ncc-sidecar-panel-images.patch /tmp/ncc-sidecar-panel-images.patch
 COPY patches/ncc-sidecar-panel-upgrade.patch /tmp/ncc-sidecar-panel-upgrade.patch
 COPY patches/ncc-sidecar-public-visibility.patch /tmp/ncc-sidecar-public-visibility.patch
 COPY patches/ncc-sidecar-panel-domains.patch /tmp/ncc-sidecar-panel-domains.patch
+COPY patches/ncc-sidecar-profile-publish.patch /tmp/ncc-sidecar-profile-publish.patch
 WORKDIR /src/ncc-06/ncc-sidecar
 RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
   && patch -p1 < /tmp/ncc-sidecar-event-ack.patch \
@@ -75,6 +76,10 @@ RUN patch --dry-run -p1 < /tmp/ncc-sidecar-event-ack.patch \
        patch --dry-run -p1 < /tmp/ncc-sidecar-panel-domains.patch \
        && patch -p1 < /tmp/ncc-sidecar-panel-domains.patch; \
      fi \
+  && if ! grep -q 'shouldPublishProfile' src/app.js; then \
+       patch --dry-run -p1 < /tmp/ncc-sidecar-profile-publish.patch \
+       && patch -p1 < /tmp/ncc-sidecar-profile-publish.patch; \
+     fi \
   && npm ci \
   && npm --prefix ui ci \
   && npm --prefix ui run build \
@@ -111,6 +116,10 @@ COPY container/sidecar/upgrade-state.mjs /app/upgrade-state.mjs
 COPY container/sidecar/prune-state.mjs /app/prune-state.mjs
 # One-shot recreate helper used by the node-agent's image updates.
 COPY container/sidecar/recreate.mjs /app/recreate.mjs
+# Kind 0 change detection shared with the publish-cycle patch. A profile event
+# is published on a real profile change or explicit republish, not on every
+# locator refresh.
+COPY container/sidecar/profile-publish.mjs /app/profile-publish.mjs
 # ncc-06-js imports nostr-tools without declaring it in its own package manifest.
 RUN npm install --prefix /app --no-save --omit=dev nostr-tools@2.19.4
 USER ${SIDECAR_UID}:${SIDECAR_GID}

@@ -177,7 +177,9 @@ the operator identity. The sidecar stores the canonical values in
   `picture`, `nip05`). The panel requires a display name, accepts an optional
   NIP-05 address and an `https://` picture, and preserves profile fields it
   does not edit. The sidecar service itself is skipped: it has no public
-  profile.
+  profile. A kind 0 is replaceable and does not expire, so it is republished
+  only when one of those fields changes, on the first publish, or on an
+  explicit republish -- not on every cadence refresh.
 - **Publication relays** are normalised to `wss://` (or `ws://`), deduplicated,
   limited to 20, and at least one is required. The list is written to
   `app_config.publication_relays` and to every service, because the publish
@@ -189,9 +191,9 @@ the operator identity. The sidecar stores the canonical values in
 
 A save does not run a publish cycle inline (that can block on Tor and endpoint
 probes). It invalidates the relevant hashes and timestamp on each service, so
-the normal 60-second cycle republishes anchors, locators and the profile
-within about a minute. The panel says so instead of claiming the records are
-already updated.
+the normal 60-second cycle republishes the affected anchors and locators --
+and, after an identity save, the profile -- within about a minute. The panel
+says so instead of claiming the records are already updated.
 
 ### Record and relay status
 
@@ -553,8 +555,11 @@ signed URL. The routes come from
 `patches/ncc-sidecar-panel-services.patch`,
 `patches/ncc-sidecar-panel-images.patch` and
 `patches/ncc-sidecar-npack.patch`, applied when the sidecar image is
-built. A sidecar image without the patches answers 401/404, and the panel
-falls back to operator-only access with the Admins, Settings, service controls
+built. The kind 0 publish policy is
+`patches/ncc-sidecar-profile-publish.patch`, together with
+`container/sidecar/profile-publish.mjs`. A sidecar image without the patches
+answers 401/404, and the panel falls back to operator-only access with the
+Admins, Settings, service controls
 and catalogue marked inactive; deploy the matching sidecar and Caddy images to
 enable them.
 

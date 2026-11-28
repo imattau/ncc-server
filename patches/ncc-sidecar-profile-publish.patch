@@ -1,0 +1,34 @@
+--- a/src/app.js
++++ b/src/app.js
+@@ -17,6 +17,7 @@
+   buildEncryptedLocatorEvent, computeInventoryHash, 
+   computePrimaryHash, prepareServiceRecords 
+ } from './services/registry.js';
++import { computeProfileHash, shouldPublishProfile } from '../profile-publish.mjs';
+ 
+ function normalizeRecipientPubkeys(values = []) {
+   const cleaned = new Set();
+@@ -147,7 +148,7 @@
+   });
+ 
+   const locatorHash = computeInventoryHash(filteredInventory, config.profile);
+-  const profileHash = config.profile ? computeInventoryHash([], config.profile) : null;
++  const profileHash = computeProfileHash(config.profile);
+   const primaryEndpointHash = computePrimaryHash(filteredInventory[0]);
+ 
+   // 3. Prepare Records
+@@ -183,7 +184,13 @@
+   if (willPublishNcc05) eventsToPublish.push(ncc05EventTemplate);
+ 
+   let kind0Event = null;
+-  if (config.profile && canPublish && (willPublishNcc02 || willPublishNcc05 || changeState.profileChanged)) {
++  if (shouldPublishProfile({
++    profile: config.profile,
++    canPublish,
++    forcePublish,
++    profileChanged: changeState.profileChanged,
++    isFirstRun: changeState.isFirstRun,
++  })) {
+     kind0Event = {
+       kind: 0, created_at: Math.floor(Date.now() / 1000), tags: [],
+       content: JSON.stringify({
