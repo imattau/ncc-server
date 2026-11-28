@@ -41,7 +41,7 @@ jobs:
 
   build:
     needs: prepare
-    uses: imattau/ncc-server/.github/workflows/build-service-image.yml@v0.2.30
+    uses: imattau/ncc-server/.github/workflows/build-service-image.yml@v0.2.31
     with:
       image: ghcr.io/${{ github.repository }}
       tag: ${{ needs.prepare.outputs.version }}
@@ -49,12 +49,12 @@ jobs:
 
   package:
     needs: [prepare, build]
-    uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.30
+    uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.31
     with:
       service_dir: .
       version: ${{ needs.prepare.outputs.version }}
       publisher: ${{ vars.NCC_PUBLISHER }}
       image: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
-      tool_ref: v0.2.30
+      tool_ref: v0.2.31
     secrets:
       NOSTR_SECRET_KEY: ${{ secrets.NOSTR_SECRET_KEY }}

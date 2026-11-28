@@ -127,7 +127,7 @@ repository, installs the pinned npack release, builds and (when
 ```yaml
 publish-package:
   needs: build-image
-  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.30
+  uses: imattau/ncc-server/.github/workflows/publish-service-package.yml@v0.2.31
   with:
     version: 1.0.0
     publisher: npub1...

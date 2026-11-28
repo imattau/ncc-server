@@ -163,7 +163,7 @@ The image workflow is reusable and can be called directly:
 ```yaml
 jobs:
   build:
-    uses: imattau/ncc-server/.github/workflows/build-service-image.yml@v0.2.30
+    uses: imattau/ncc-server/.github/workflows/build-service-image.yml@v0.2.31
     with:
       image: ghcr.io/acme/hello-service
       tag: 1.0.0
